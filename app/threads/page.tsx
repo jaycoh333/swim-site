@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { CategoryRail } from '@/components/CategoryRail';
 import { CreateThreadPanel } from '@/components/CreateThreadPanel';
@@ -23,6 +23,23 @@ export default function ThreadsPage() {
   const categories = useMemo(() => mockDb.getSeededCategories(), []);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showCompose, setShowCompose] = useState(false);
+
+  // Sync category filter and compose panel from URL params on first render
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const cat = params.get('category');
+    if (cat) setActiveCategory(cat);
+    if (params.get('compose') === 'true') setShowCompose(true);
+  }, []);
+
+  function handleCategorySelect(cat: string | null) {
+    setActiveCategory(cat);
+    const url = new URL(window.location.href);
+    if (cat) url.searchParams.set('category', cat);
+    else url.searchParams.delete('category');
+    url.searchParams.delete('compose');
+    window.history.replaceState(null, '', url.toString());
+  }
 
   const threads = useMemo(() => {
     if (!activeCategory) return allThreads;
@@ -65,7 +82,7 @@ export default function ThreadsPage() {
           <CategoryRail
             categories={ALL_THREAD_CATEGORIES}
             active={activeCategory}
-            onSelect={setActiveCategory}
+            onSelect={handleCategorySelect}
           />
         </div>
 
@@ -82,7 +99,7 @@ export default function ThreadsPage() {
                 </span>
                 {activeCategory && (
                   <button
-                    onClick={() => setActiveCategory(null)}
+                    onClick={() => handleCategorySelect(null)}
                     className="text-[10px] uppercase tracking-[0.18em] text-crt/30 hover:text-crt/60 transition-colors"
                   >
                     [× all]

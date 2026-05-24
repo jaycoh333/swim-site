@@ -86,8 +86,9 @@ export function ThreadView({ threadId }: ThreadViewProps) {
             threads
           </Link>
           <span className="text-crt/18">/</span>
-          <span
-            className="px-1.5 py-0.5 text-[9px]"
+          <Link
+            href={`/threads?category=${encodeURIComponent(thread.category)}`}
+            className="px-1.5 py-0.5 text-[9px] transition-opacity hover:opacity-75"
             style={{
               border: `1px solid color-mix(in srgb, ${categoryColor} 35%, transparent)`,
               color: categoryColor,
@@ -95,7 +96,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
             }}
           >
             {thread.category}
-          </span>
+          </Link>
         </div>
 
         {/* ── Thread shell ─── */}

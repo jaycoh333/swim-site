@@ -2,10 +2,12 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { BootSequence } from '@/components/BootSequence';
+import { CategoryRail } from '@/components/CategoryRail';
 import { ContentCard } from '@/components/ContentCard';
 import { CreateThreadPanel } from '@/components/CreateThreadPanel';
 import { DarkArchivePanel } from '@/components/DarkArchivePanel';
@@ -16,7 +18,6 @@ import { SwimHeader } from '@/components/SwimHeader';
 import { TerminalWindow } from '@/components/TerminalWindow';
 import { mockDb } from '@/lib/mock-db';
 import { CATEGORY_COLORS } from '@/lib/forum-types';
-import { ThreadContent } from '@/lib/forum-types';
 
 // Categories visible in the rail (primary boards)
 const RAIL_CATEGORIES = [
@@ -45,11 +46,11 @@ function useAnimatedCounter(target: number, delay = 0, duration = 2000) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [bootDone, setBootDone] = useState(false);
   const [messageIndex, setMessageIndex] = useState(0);
   const [clock, setClock] = useState('03:33:33');
   const [onlineTick, setOnlineTick] = useState(0);
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
   const allThreads         = useMemo(() => mockDb.getHomepageThreads(), []);
   const hotThreads         = useMemo(() => mockDb.getHotThreads(), []);
@@ -62,11 +63,14 @@ export default function Home() {
   const createDraft   = useMemo(() => mockDb.getCreateThreadDraft(), []);
   const seededCategories = useMemo(() => mockDb.getSeededCategories(), []);
 
-  // Filtered thread list
-  const homepageThreads = useMemo<ThreadContent[]>(() => {
-    if (!activeCategory) return allThreads;
-    return allThreads.filter((t) => t.category === activeCategory);
-  }, [allThreads, activeCategory]);
+  // Clicking a category on the homepage routes to /threads?category=X
+  // so the full filtered listing is the canonical browse-by-category view.
+  function handleSelectCategory(cat: string | null) {
+    if (cat) router.push(`/threads?category=${encodeURIComponent(cat)}`);
+    else router.push('/threads');
+  }
+
+  const homepageThreads = allThreads;
 
   useEffect(() => {
     const rotate = window.setInterval(() => {
@@ -98,7 +102,7 @@ export default function Home() {
   const rotatingRecovery = recoveredEntries[messageIndex % recoveredEntries.length];
   const rotatingEvent    = worldEvents[messageIndex % worldEvents.length];
 
-  const boardLabel = activeCategory ?? 'stories';
+  const boardLabel = 'stories';
 
   return (
     <>
@@ -126,15 +130,21 @@ export default function Home() {
         >
           <section className="forum-shell">
 
-            {/* ── SWIM HEADER — image bg + overlay navigation ── */}
+            {/* ── SWIM HEADER — image bg + masthead only ── */}
             <SwimHeader
               participants={participants}
               clock={clock}
               statusIdx={messageIndex}
-              categories={RAIL_CATEGORIES}
-              activeCategory={activeCategory}
-              onSelectCategory={setActiveCategory}
             />
+
+            {/* ── CATEGORY RAIL — sits below the header art, not on top of it ── */}
+            <div className="border-b border-crt/12">
+              <CategoryRail
+                categories={RAIL_CATEGORIES}
+                active={null}
+                onSelect={handleSelectCategory}
+              />
+            </div>
 
             {/* ── RECOVERED FILES ─────────────────────────── */}
             <div className="border-b border-crt/10 px-2.5 py-3 md:px-4">
@@ -207,14 +217,6 @@ export default function Home() {
                       <span className="text-[13px] uppercase tracking-[0.22em] text-crt">
                         {boardLabel}
                       </span>
-                      {activeCategory && (
-                        <button
-                          onClick={() => setActiveCategory(null)}
-                          className="text-[10px] uppercase tracking-[0.18em] text-crt/30 hover:text-crt/60 transition-colors"
-                        >
-                          [×&nbsp;all]
-                        </button>
-                      )}
                     </div>
                     <Link href="/threads" className="create-thread-cta text-[10px]">
                       [ + post thread ]

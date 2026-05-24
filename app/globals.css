@@ -575,39 +575,71 @@ body::after {
 
 /* ── SWIM HEADER ─────────────────────────────────────────── */
 
+/* Occasional subtle RGB-split glitch on the logo — fires every ~13 s */
+@keyframes swim-logo-glitch {
+  0%, 88%, 100% {
+    transform: none;
+    text-shadow:
+      0 0 2px rgba(134, 212, 110, 0.70),
+      0 0 10px rgba(134, 212, 110, 0.26),
+      0 0 24px rgba(134, 212, 110, 0.09);
+  }
+  90% {
+    transform: translateX(-2px);
+    text-shadow:
+      -2px 0 rgba(255, 48, 80, 0.22),
+       2px 0 rgba(48, 220, 180, 0.18),
+       0 0 10px rgba(134, 212, 110, 0.28);
+  }
+  92% {
+    transform: translateX(2px);
+    text-shadow:
+       2px 0 rgba(255, 48, 80, 0.16),
+      -2px 0 rgba(48, 220, 180, 0.14),
+       0 0 10px rgba(134, 212, 110, 0.24);
+  }
+  94% { transform: none; }
+}
+
 .swim-header {
   position: relative;
   width: 100%;
-  /* Mobile: compact; desktop: taller for full branding impact */
-  height: 220px;
+  height: 160px;
   overflow: hidden;
 }
 
 @media (min-width: 640px) {
-  .swim-header {
-    height: 280px;
-  }
+  .swim-header { height: 240px; }
 }
 
 @media (min-width: 768px) {
-  .swim-header {
-    height: 340px;
-  }
+  .swim-header { height: 290px; }
 }
 
 .swim-header-bg-layer {
   position: absolute;
   inset: 0;
+  overflow: hidden;
 }
 
-/* Dark overlay — keeps text readable over the image */
+/* Soften the image just enough to prevent baked-in text from competing with
+   live HTML — atmospheric art (mushrooms, sigils, giant lettering) remains
+   visible as intended. 1px blur dissolves fine text; large silhouettes survive. */
+.swim-header-bg-layer img {
+  filter: blur(1px) brightness(0.70) saturate(0.82);
+  /* scale(1.02) prevents white edge artifacts from the 1px blur */
+  transform: scale(1.02);
+  transform-origin: center top;
+}
+
 .swim-header-dim {
   position: absolute;
   inset: 0;
-  background: rgba(2, 3, 3, 0.60);
+  /* Moderate overlay: 0.70 image × 0.44 visible = ~31% effective brightness.
+     Large art reads as ghosted atmosphere; live HTML text stays fully bright. */
+  background: rgba(2, 3, 3, 0.56);
 }
 
-/* CRT scanlines over the image */
 .swim-header-scanlines {
   position: absolute;
   inset: 0;
@@ -616,35 +648,28 @@ body::after {
     to bottom,
     transparent 0px,
     transparent 3px,
-    rgba(0, 0, 0, 0.12) 3px,
-    rgba(0, 0, 0, 0.12) 4px
+    rgba(0, 0, 0, 0.10) 3px,
+    rgba(0, 0, 0, 0.10) 4px
   );
 }
 
-/* Edge vignette for depth */
 .swim-header-vignette {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(
-    ellipse at 50% 50%,
-    transparent 30%,
-    rgba(0, 0, 0, 0.68) 100%
-  );
+  background: radial-gradient(ellipse at 50% 50%, transparent 28%, rgba(0, 0, 0, 0.65) 100%);
 }
 
-/* Bottom gradient fades image into the forum shell below */
 .swim-header-bottom-fade {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 56px;
+  height: 48px;
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, rgba(3, 5, 4, 0.97));
 }
 
-/* Content sits above all image layers */
 .swim-header-content {
   position: relative;
   z-index: 10;
@@ -653,89 +678,126 @@ body::after {
   flex-direction: column;
 }
 
-/* Top status bar */
+/* ── Meta bar ── */
+
 .swim-header-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 5px 12px;
-  font-size: 9px;
+  gap: 12px;
+  padding: 5px 14px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
-  color: rgba(134, 212, 110, 0.22);
-  background: rgba(2, 3, 3, 0.50);
-  border-bottom: 1px solid rgba(134, 212, 110, 0.06);
+  letter-spacing: 0.18em;
+  background: rgba(2, 3, 3, 0.58);
+  border-bottom: 1px solid rgba(134, 212, 110, 0.07);
   flex-shrink: 0;
+  line-height: 1;
 }
 
-/* Masthead — logo area fills remaining space */
+.swim-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.swim-meta-label {
+  color: rgba(134, 212, 110, 0.24);
+}
+
+.swim-meta-value {
+  color: rgba(134, 212, 110, 0.55);
+}
+
+.swim-meta-blink {
+  color: rgba(134, 212, 110, 0.14);
+  font-size: 8px;
+}
+
+/* ── Masthead — full area is a clickable "/" link ── */
+
 .swim-header-masthead {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px 16px;
+  padding: 6px 16px;
+  text-decoration: none;
+  color: inherit;
+  /* Pushes category rail to the very bottom */
+  overflow: hidden;
 }
 
+.swim-header-masthead:focus-visible {
+  outline: 1px solid rgba(134, 212, 110, 0.38);
+  outline-offset: -2px;
+}
+
+/* Eyebrow — hidden on mobile, shown sm+ */
 .swim-header-eyebrow {
-  font-size: 9px;
+  margin: 0 0 5px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.52em;
-  color: rgba(134, 212, 110, 0.42);
-  margin-bottom: 6px;
-}
-
-.swim-header-logo-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
+  letter-spacing: 0.46em;
   color: rgba(134, 212, 110, 0.38);
+  display: none;
 }
 
-.swim-header-sigil {
-  display: contents;
+@media (min-width: 640px) {
+  .swim-header-eyebrow { display: block; }
 }
 
 .swim-header-logo {
   margin: 0;
-  font-size: clamp(2.6rem, 11vw, 6.4rem);
+  font-size: clamp(2.4rem, 10vw, 5.6rem);
   line-height: 1;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   color: var(--crt);
-  text-shadow:
-    0 0 2px rgba(134, 212, 110, 0.72),
-    0 0 10px rgba(134, 212, 110, 0.28),
-    0 0 24px rgba(134, 212, 110, 0.10),
-    0 0 48px rgba(134, 212, 110, 0.05);
+  animation: swim-logo-glitch 13s infinite;
 }
 
+/* Subline — hidden on mobile, shown sm+ */
 .swim-header-subline {
-  font-size: 9px;
+  margin: 7px 0 0;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.26em;
-  color: rgba(192, 238, 176, 0.40);
-  margin-top: 8px;
+  letter-spacing: 0.24em;
+  color: rgba(192, 238, 176, 0.36);
+  display: none;
 }
 
-/* Rotating status strip */
+@media (min-width: 640px) {
+  .swim-header-subline { display: block; }
+}
+
+/* ── Status strip — hidden on mobile ── */
+
 .swim-header-status-strip {
-  display: flex;
+  display: none;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  font-size: 9px;
+  justify-content: center;
+  gap: 20px;
+  padding: 5px 16px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: rgba(134, 212, 110, 0.18);
-  background: rgba(2, 3, 3, 0.38);
+  letter-spacing: 0.18em;
+  color: rgba(134, 212, 110, 0.20);
+  background: rgba(2, 3, 3, 0.42);
   border-top: 1px solid rgba(134, 212, 110, 0.05);
   flex-shrink: 0;
 }
 
+@media (min-width: 640px) {
+  .swim-header-status-strip { display: flex; }
+}
+
+.swim-status-clock {
+  color: rgba(134, 212, 110, 0.22);
+  flex-shrink: 0;
+}
+
 .swim-header-status-msg {
-  color: rgba(134, 212, 110, 0.32);
+  color: rgba(134, 212, 110, 0.36);
 }
 
 /* ── CATEGORY PORTAL ─────────────────────────────────────── */

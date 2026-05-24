@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const ACTIONS: { href: string; label: string; glyph: string; post?: boolean }[] = [
-  { href: '/archive', label: 'Archive', glyph: '≡' },
-  { href: '/threads',  label: 'Threads', glyph: '≋' },
-  { href: '/threads',  label: 'Post',    glyph: '+', post: true },
-  { href: '/signal',   label: 'Signal',  glyph: '◎' },
-  { href: '/',         label: 'Ghost',   glyph: '∿' },
+  { href: '/',                      label: 'Home',    glyph: '∷' },
+  { href: '/archive',               label: 'Archive', glyph: '≡' },
+  { href: '/threads',               label: 'Threads', glyph: '≋' },
+  { href: '/threads?compose=true',  label: 'Post',    glyph: '+', post: true },
+  { href: '/signal',                label: 'Signal',  glyph: '◎' },
 ];
 
 export function MobileActionBar() {
@@ -22,7 +22,8 @@ export function MobileActionBar() {
     >
       <div className="mobile-bar-safe grid grid-cols-5">
         {ACTIONS.map(({ href, label, glyph, post }) => {
-          const isActive = !post && pathname === href;
+          // Active when pathname matches, ignoring query string
+          const isActive = !post && pathname === href.split('?')[0];
           return (
             <Link
               key={label}

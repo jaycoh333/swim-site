@@ -14,6 +14,12 @@ const NAV_LINKS = [
   { href: '/signal',      label: 'SIGNAL' },
 ];
 
+// Mobile dropdown includes Home; desktop nav relies on the $SWIM logo pill
+const MOBILE_NAV_LINKS = [
+  { href: '/',            label: 'HOME' },
+  ...NAV_LINKS,
+];
+
 // Rotating status messages — BBS-style
 const STATUS_LINES = [
   'all channels open',
@@ -121,7 +127,7 @@ export function Navigation() {
                 {STATUS_LINES[statusIdx]}
                 <span className="ml-2 blink text-crt/35">█</span>
               </div>
-              {NAV_LINKS.map(({ href, label }) => (
+              {MOBILE_NAV_LINKS.map(({ href, label }) => (
                 <Link
                   key={href}
                   href={href}
