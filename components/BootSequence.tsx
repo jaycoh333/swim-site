@@ -75,7 +75,7 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
           initial={{ opacity: 1 }}
           animate={{ opacity: fading ? 0 : 1 }}
           transition={{ duration: 0.7 }}
-          className="fixed inset-0 z-[99999] flex flex-col items-center overflow-y-auto bg-void pt-16 pb-8 sm:justify-center sm:overflow-hidden sm:pt-0 sm:pb-0"
+          className="fixed inset-0 z-[99999] flex items-center justify-center bg-void"
         >
           {/* Scanlines on boot screen */}
           <div
@@ -87,7 +87,7 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
             }}
           />
 
-          <div className="relative w-full max-w-xl px-8">
+          <div className="relative w-full max-w-xl overflow-y-auto px-6 pt-20 pb-12 max-h-[100dvh] sm:max-h-none sm:overflow-visible sm:px-8 sm:pt-0 sm:pb-0">
             <div className="mb-8 text-center">
               <div className="text-xs tracking-[.3em] text-crt/30 uppercase">
                 ── SWIM NETWORK ──

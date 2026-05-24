@@ -811,19 +811,20 @@ body::after {
     height: 185px;
   }
 
-  /* Less blur + more brightness: large art silhouettes survive, baked text stays soft */
+  /* More brightness on mobile: mushrooms/sigils/lettering need to punch through on a small screen.
+     At phone scale the baked art is compressed and small enough that no blur is needed to suppress it. */
   .swim-header-bg-layer img {
-    filter: blur(0.5px) brightness(0.80) saturate(0.90);
+    filter: blur(0px) brightness(0.90) saturate(0.94);
   }
 
-  /* Lighter overlay so more image shows through on small screens */
+  /* Much lighter overlay — roughly 0.90 × (1 - 0.30) ≈ 63% effective image visibility on mobile */
   .swim-header-dim {
-    background: rgba(2, 3, 3, 0.42);
+    background: rgba(2, 3, 3, 0.30);
   }
 
-  /* Softer vignette — on a narrow phone the ellipse eats too much art */
+  /* Very soft vignette — on a narrow phone a heavy ellipse wipes out the center art */
   .swim-header-vignette {
-    background: radial-gradient(ellipse at 50% 42%, transparent 20%, rgba(0, 0, 0, 0.42) 100%);
+    background: radial-gradient(ellipse at 50% 42%, transparent 22%, rgba(0, 0, 0, 0.30) 100%);
   }
 
   /* Shorter bottom fade so the bottom of the art isn't swallowed */
