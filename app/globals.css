@@ -1221,6 +1221,125 @@ body::after {
   text-shadow: 0 0 5px rgba(134, 212, 110, 0.18);
 }
 
+/* ── HIGHLIGHTED STORY CARDS ─────────────────────────────── */
+
+.story-card {
+  display: block;
+  padding: 14px 16px 14px;
+  background: rgba(4, 7, 5, 0.97);
+  border-left: 2px solid transparent;
+  text-decoration: none;
+  transition: background 0.14s, border-left-color 0.14s;
+  cursor: pointer;
+}
+
+.story-card:hover {
+  background: rgba(7, 12, 8, 0.99);
+  border-left-color: rgba(134, 212, 110, 0.38);
+}
+
+.story-badge {
+  display: inline-block;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  padding: 2px 7px;
+  border: 1px solid;
+  background: transparent;
+  line-height: 1.4;
+}
+
+.story-badge-redacted   { color: #bb6464; border-color: rgba(187, 100, 100, 0.35); }
+.story-badge-recovered  { color: #d7a85c; border-color: rgba(215, 168, 92, 0.38); }
+.story-badge-unverified { color: rgba(134, 212, 110, 0.52); border-color: rgba(134, 212, 110, 0.22); }
+.story-badge-witnessed  { color: var(--crt); border-color: rgba(134, 212, 110, 0.45); }
+.story-badge-leaked     { color: #b083ff; border-color: rgba(176, 131, 255, 0.32); }
+.story-badge-dead       { color: rgba(134, 212, 110, 0.22); border-color: rgba(134, 212, 110, 0.1); }
+.story-badge-archivist  { color: #6da8ff; border-color: rgba(109, 168, 255, 0.32); }
+.story-badge-signal     { color: var(--crt); border-color: rgba(134, 212, 110, 0.5); text-shadow: 0 0 5px rgba(134, 212, 110, 0.15); }
+
+.story-title {
+  font-size: 1.22rem;
+  line-height: 1.26;
+  color: var(--crt);
+  margin: 0 0 8px;
+  font-weight: 400;
+  transition: text-shadow 0.14s;
+}
+
+@media (min-width: 768px) {
+  .story-title {
+    font-size: 1.3rem;
+  }
+}
+
+.story-card:hover .story-title {
+  text-shadow: 0 0 12px rgba(134, 212, 110, 0.14);
+}
+
+.story-excerpt {
+  font-size: 0.94rem;
+  line-height: 1.52;
+  color: rgba(134, 212, 110, 0.42);
+  margin: 0 0 10px;
+}
+
+.story-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: rgba(134, 212, 110, 0.22);
+}
+
+.story-signal {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: rgba(134, 212, 110, 0.28);
+}
+
+/* ── DARK ARCHIVE PANEL ──────────────────────────────────── */
+
+.dark-archive-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  padding: 1px 0;
+}
+
+.dark-archive-id {
+  color: rgba(134, 212, 110, 0.3);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  flex-shrink: 0;
+}
+
+.dark-archive-status {
+  color: rgba(134, 212, 110, 0.18);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+}
+
+.dark-archive-time {
+  color: rgba(134, 212, 110, 0.15);
+  font-size: 9px;
+  margin-left: auto;
+}
+
+.dark-archive-fragment {
+  border-left: 2px solid rgba(134, 212, 110, 0.1);
+  padding-left: 10px;
+}
+
 /* ── SAFE AREA ───────────────────────────────────────────── */
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {

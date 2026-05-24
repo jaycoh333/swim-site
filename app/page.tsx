@@ -8,7 +8,9 @@ import { AmbientGrid } from '@/components/AmbientGrid';
 import { BootSequence } from '@/components/BootSequence';
 import { ContentCard } from '@/components/ContentCard';
 import { CreateThreadPanel } from '@/components/CreateThreadPanel';
+import { DarkArchivePanel } from '@/components/DarkArchivePanel';
 import { GhostPanel } from '@/components/GhostPanel';
+import { HighlightedStories } from '@/components/HighlightedStories';
 import { MobileActionBar } from '@/components/MobileActionBar';
 import { SwimHeader } from '@/components/SwimHeader';
 import { TerminalWindow } from '@/components/TerminalWindow';
@@ -49,8 +51,10 @@ export default function Home() {
   const [onlineTick, setOnlineTick] = useState(0);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
-  const allThreads    = useMemo(() => mockDb.getHomepageThreads(), []);
-  const hotThreads    = useMemo(() => mockDb.getHotThreads(), []);
+  const allThreads         = useMemo(() => mockDb.getHomepageThreads(), []);
+  const hotThreads         = useMemo(() => mockDb.getHotThreads(), []);
+  const highlightedThreads = useMemo(() => mockDb.getHighlightedThreads(), []);
+  const pinnedThreads      = useMemo(() => mockDb.getPinnedThreads(), []);
   const ghost         = useMemo(() => mockDb.getGhostIdentity(), []);
   const recoveredEntries = useMemo(() => mockDb.getRecoveredEntries(), []);
   const worldEvents   = useMemo(() => mockDb.getWorldEvents(), []);
@@ -132,6 +136,11 @@ export default function Home() {
               onSelectCategory={setActiveCategory}
             />
 
+            {/* ── RECOVERED FILES ─────────────────────────── */}
+            <div className="border-b border-crt/10 px-2.5 py-3 md:px-4">
+              <HighlightedStories threads={highlightedThreads} />
+            </div>
+
             {/* ── MAIN GRID ───────────────────────────────── */}
             <div className="grid gap-3 px-2.5 py-3 lg:grid-cols-[minmax(0,1fr)_268px] md:px-4">
 
@@ -155,6 +164,36 @@ export default function Home() {
                     <span className="blink text-crt/35">█</span>
                   </div>
                 </div>
+
+                {/* ── Pinned Files ─── */}
+                {pinnedThreads.length > 0 && (
+                  <div className="panel overflow-hidden">
+                    <div className="flex items-center gap-2 border-b border-crt/10 px-3 py-1.5">
+                      <span className="text-[9px] uppercase tracking-[0.28em] text-crt/35">
+                        ■ pinned files
+                      </span>
+                    </div>
+                    {pinnedThreads.slice(0, 3).map((t) => (
+                      <Link
+                        key={t.id}
+                        href={`/threads/${t.id}`}
+                        className="flex items-start justify-between gap-3 border-b border-crt/8 px-3 py-2.5 last:border-b-0 hover:bg-crt/[0.03] transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <span className="mr-2 text-[9px] uppercase tracking-[0.2em] text-crt/35">
+                            [PINNED]
+                          </span>
+                          <span className="text-[1rem] text-crt/72 leading-snug">
+                            {t.title}
+                          </span>
+                        </div>
+                        <span className="shrink-0 text-[9px] uppercase tracking-[0.18em] text-crt/25 mt-0.5">
+                          {t.lastActivityAt}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
 
                 {/* ── Thread list ─── */}
                 <section className="panel overflow-hidden">
@@ -320,20 +359,8 @@ export default function Home() {
                   </div>
                 </TerminalWindow>
 
-                {/* System notices */}
-                <TerminalWindow title="System Notices" version="night.02" animate={false}>
-                  <div className="space-y-2 text-[0.92rem] leading-tight text-crt/60">
-                    <p className="category-chip-muted px-2 py-1.5" style={{ ['--category' as string]: '#86d46e' }}>
-                      {rotatingEvent.timestamp}&nbsp;/&nbsp;{rotatingEvent.message}
-                    </p>
-                    <p className="category-chip-muted px-2 py-1.5" style={{ ['--category' as string]: '#7aa8ff' }}>
-                      signal instability detected near /ai/ archive mirror
-                    </p>
-                    <p className="category-chip-muted px-2 py-1.5" style={{ ['--category' as string]: '#b8c97a' }}>
-                      thread recovered:&nbsp;{rotatingRecovery.archiveCode}
-                    </p>
-                  </div>
-                </TerminalWindow>
+                {/* Dark Archive */}
+                <DarkArchivePanel />
               </aside>
             </div>
 

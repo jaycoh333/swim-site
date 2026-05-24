@@ -114,6 +114,14 @@ export const mockDb = {
     return REPLY_SEED[threadId] ?? [];
   },
 
+  getHighlightedThreads(): ThreadContent[] {
+    return THREAD_SEED.filter((t) => t.isHighlighted).slice(0, 6);
+  },
+
+  getPinnedThreads(): ThreadContent[] {
+    return THREAD_SEED.filter((t) => t.pinned);
+  },
+
   getRecoveredEntries() {
     return ARCHIVE_ENTRY_SEED.slice(0, 3);
   },

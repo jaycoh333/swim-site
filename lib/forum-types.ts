@@ -129,11 +129,28 @@ export interface ContentBase {
   authorId: string;
 }
 
+export type ArchiveStatus = 'OPEN' | 'REDACTED' | 'RECOVERED' | 'CORRUPTED';
+export type SignalLevel = 'LOW' | 'ACTIVE' | 'UNSTABLE' | 'BURIED';
+export type StoryBadge =
+  | 'REDACTED'
+  | 'RECOVERED'
+  | 'UNVERIFIED'
+  | 'WITNESSED'
+  | 'LEAKED MEMORY'
+  | 'DEAD NODE'
+  | 'ARCHIVIST PICK'
+  | 'SIGNAL ACTIVE';
+
 export interface ThreadContent extends ContentBase {
   type: 'THREAD';
   lastPostPreview: string;
   board: string;
   pinned?: boolean;
+  isHighlighted?: boolean;
+  badge?: StoryBadge;
+  archiveStatus?: ArchiveStatus;
+  signalLevel?: SignalLevel;
+  archiveId?: string;
 }
 
 export interface ArchiveEntryContent extends ContentBase {
