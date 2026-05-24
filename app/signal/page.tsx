@@ -1,38 +1,32 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { AmbientGrid } from '@/components/AmbientGrid';
-import { GlitchText } from '@/components/GlitchText';
-import { SIGNAL_FEED } from '@/lib/sampleContent';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 
-const EXTENDED_FEED = [
-  ...SIGNAL_FEED,
-  { freq: '110.5 MHz', message: 'ENTRY #0x3D7E RECEIVING HIGH ECHO RATE.' },
-  { freq: '88.1 MHz', message: 'ANOMALY DETECTED: DUPLICATE TIMESTAMP IN ARCHIVE.' },
-  { freq: '96.3 MHz', message: 'NEW NODE CONNECTED. LOCATION: UNKNOWN.' },
-  { freq: '101.1 MHz', message: 'SWIM PROTOCOL STABLE. ALL CHANNELS OPEN.' },
-];
+import { AmbientGrid } from '@/components/AmbientGrid';
+import { TerminalWindow } from '@/components/TerminalWindow';
+import { mockDb } from '@/lib/mock-db';
 
 export default function SignalPage() {
-  const [feed, setFeed] = useState(EXTENDED_FEED.slice(0, 6));
+  const signals = mockDb.getSignals();
+  const worldEvents = mockDb.getWorldEvents();
+  const sequence = [...signals, ...signals.slice().reverse()];
+  const [feed, setFeed] = useState(sequence.slice(0, 4));
 
-  // Simulate live feed — stable interval, no tick state needed
   useEffect(() => {
     let cursor = 0;
     const id = setInterval(() => {
-      cursor = (cursor + 1) % EXTENDED_FEED.length;
-      setFeed(prev => [EXTENDED_FEED[cursor], ...prev].slice(0, 12));
-    }, 4500);
+      cursor = (cursor + 1) % sequence.length;
+      setFeed((previous) => [sequence[cursor], ...previous].slice(0, 8));
+    }, 4200);
     return () => clearInterval(id);
-  }, []);
+  }, [sequence]);
 
   return (
     <div className="relative min-h-screen pt-16">
       <AmbientGrid className="pointer-events-none fixed inset-0 opacity-45" />
 
-      <div className="relative z-10 mx-auto max-w-4xl px-4 py-10 md:px-8">
-        {/* Header */}
+      <div className="relative z-10 mx-auto max-w-5xl px-4 py-10 md:px-8">
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -42,102 +36,70 @@ export default function SignalPage() {
           <div className="mb-2 text-xs tracking-[.3em] text-crt/25 uppercase">
             SWIM NETWORK // SIGNAL
           </div>
-          <GlitchText
-            as="h1"
-            intensity="medium"
-            className="crt-text font-terminal text-5xl tracking-wide uppercase"
-          >
-            SIGNAL
-          </GlitchText>
-          <p className="mt-2 text-sm text-crt/40 tracking-widest">
-            Incoming transmissions. Unfiltered. Unverified.
+          <h1 className="crt-text text-5xl tracking-wide uppercase">SIGNAL</h1>
+          <p className="mt-2 text-sm tracking-widest text-crt/40">
+            Incoming transmissions. New nodes. Recovered system notices.
           </p>
         </motion.div>
 
-        {/* Live status */}
         <div className="mb-6 flex items-center gap-4">
-          <div className="flex items-center gap-2 text-xs text-crt/40 tracking-widest">
+          <div className="flex items-center gap-2 text-xs tracking-widest text-crt/40">
             <span className="h-2 w-2 rounded-full bg-crt animate-pulse-glow" />
             <span>SIGNAL LIVE</span>
           </div>
-          <div className="flex-1 h-px bg-crt/10" />
-          <div className="text-xs text-crt/25 tracking-widest">SCANNING ALL FREQUENCIES</div>
+          <div className="h-px flex-1 bg-crt/10" />
+          <div className="text-xs tracking-widest text-crt/25">SCANNING ALL FREQUENCIES</div>
         </div>
 
-        {/* Waveform visualizer */}
-        <div className="mb-8 panel px-6 py-4">
-          <div className="mb-3 text-xs text-crt/30 tracking-widest">WAVEFORM</div>
-          <div className="flex items-end gap-0.5 h-12">
-            {Array.from({ length: 64 }, (_, i) => (
-              <motion.div
-                key={i}
-                animate={{ height: ['20%', `${25 + ((i * 37 + 13) % 75)}%`, '20%'] }}
-                transition={{
-                  duration: 0.8 + (i % 5) * 0.2,
-                  repeat: Infinity,
-                  repeatType: 'reverse',
-                  delay: i * 0.03,
-                  ease: 'easeInOut',
-                }}
-                className="flex-1 bg-crt/40"
-                style={{ boxShadow: '0 0 3px rgba(124,255,91,.2)' }}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Live feed */}
-        <div className="panel overflow-hidden">
-          <div className="border-b border-crt/15 px-4 py-2.5 flex items-center justify-between">
-            <span className="text-xs text-phosphor/65 tracking-widest">// INCOMING FEED</span>
-            <span className="text-xs text-crt/20 tracking-widest">AUTO-REFRESH: 4.5s</span>
-          </div>
-          <div className="p-4 space-y-0 min-h-[380px]">
-            <AnimatePresence>
-              {feed.map((item, i) => (
-                <motion.div
-                  key={`${item.freq}-${i}`}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: Math.max(0.15, 1 - i * 0.08), x: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="flex items-start gap-4 py-2.5 border-b border-crt/8 last:border-0"
-                >
-                  <span
-                    className="shrink-0 text-xs text-crt/35 tracking-widest font-mono pt-0.5"
-                    style={{ minWidth: '86px' }}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="panel overflow-hidden">
+            <div className="flex items-center justify-between border-b border-crt/15 px-4 py-2.5">
+              <span className="text-xs tracking-widest text-phosphor/65">// INCOMING FEED</span>
+              <span className="text-xs tracking-widest text-crt/20">AUTO-REFRESH: 4.2s</span>
+            </div>
+            <div className="space-y-0 p-4 min-h-[380px]">
+              <AnimatePresence>
+                {feed.map((item, index) => (
+                  <motion.div
+                    key={`${item.id}-${index}`}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: Math.max(0.15, 1 - index * 0.08), x: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="flex items-start gap-4 border-b border-crt/8 py-2.5 last:border-0"
                   >
-                    {item.freq}
-                  </span>
-                  <span className="text-sm text-crt/65 leading-relaxed">
-                    &gt; {item.message}
-                  </span>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        </div>
-
-        {/* Frequency tuner */}
-        <div className="mt-6 border border-crt/12 p-5">
-          <div className="mb-3 text-xs text-crt/30 tracking-widest uppercase">
-            TUNE TO FREQUENCY
-          </div>
-          <div className="flex items-center gap-4">
-            <input
-              type="range"
-              min="88"
-              max="108"
-              defaultValue="98"
-              className="flex-1 h-1 bg-crt/10 cursor-pointer"
-              style={{ accentColor: '#7CFF5B' }}
-            />
-            <div className="panel px-3 py-1.5 text-sm text-crt tracking-widest min-w-[90px] text-center">
-              98.6 MHz
+                    <span className="min-w-[86px] shrink-0 pt-0.5 font-mono text-xs tracking-widest text-crt/35">
+                      {item.frequency}
+                    </span>
+                    <span className="text-sm leading-relaxed text-crt/65">&gt; {item.body}</span>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
             </div>
           </div>
-          <p className="mt-3 text-xs text-crt/18 tracking-widest">
-            MANUAL TUNING: COMING IN PHASE 5
-          </p>
+
+          <aside className="space-y-4">
+            <TerminalWindow title="System Notifications" version="watch.04" animate={false}>
+              <div className="space-y-2 text-[1.08rem] leading-tight text-crt/62">
+                {worldEvents.map((event) => (
+                  <div key={event.id} className="border-b border-crt/10 pb-2 last:border-b-0">
+                    <div className="text-crt/36">{event.timestamp}</div>
+                    <div className="text-crt/76">{event.message}</div>
+                  </div>
+                ))}
+              </div>
+            </TerminalWindow>
+
+            <TerminalWindow title="Frequencies" version="tuner.02" animate={false}>
+              <div className="space-y-2 text-[1.05rem] leading-tight text-crt/60">
+                {signals.map((signal) => (
+                  <div key={signal.id} className="flex items-center justify-between border-b border-crt/10 pb-2 last:border-b-0">
+                    <span>{signal.frequency}</span>
+                    <span className="text-crt/38">{signal.source}</span>
+                  </div>
+                ))}
+              </div>
+            </TerminalWindow>
+          </aside>
         </div>
       </div>
     </div>

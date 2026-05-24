@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import { VT323, Share_Tech_Mono, IBM_Plex_Mono } from 'next/font/google';
-import './globals.css';
+import { IBM_Plex_Mono, Share_Tech_Mono, VT323 } from 'next/font/google';
+
 import { Navigation } from '@/components/Navigation';
+import './globals.css';
 
 const vt323 = VT323({
   weight: '400',
@@ -25,7 +26,7 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'SWIM — Someone Who Isn\'t Me',
+  title: 'SWIM - Someone Who Isn\'t Me',
   description: 'An anonymous archive. A hidden network. Someone who isn\'t you was here.',
 };
 
@@ -35,8 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang="en"
       className={`${vt323.variable} ${shareTechMono.variable} ${ibmPlexMono.variable}`}
     >
-      <body className="bg-void text-crt font-mono">
-        {/* Grain noise overlay */}
+      <body className="bg-void font-mono text-crt">
         <div className="noise-overlay" aria-hidden="true" />
         <Navigation />
         <main>{children}</main>
