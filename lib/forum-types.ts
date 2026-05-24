@@ -206,6 +206,18 @@ export interface ForumStats {
   averageSignal: string;
 }
 
+export interface Reply {
+  id: string;
+  threadId: string;
+  postNumber: number;
+  body: string;
+  createdAt: string;
+  authorHandle: string;
+  authorMode: 'anon' | 'ghost';
+  reactions: ReactionSet;
+  replyToId?: string;
+}
+
 export interface CreateThreadDraft {
   title: string;
   body: string;

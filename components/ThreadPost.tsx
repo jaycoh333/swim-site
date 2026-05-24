@@ -1,0 +1,114 @@
+'use client';
+
+import { useState } from 'react';
+import { ReactionSet, Reply, ThreadContent } from '@/lib/forum-types';
+
+type Post = ThreadContent | Reply;
+
+interface ThreadPostProps {
+  post: Post;
+  postNumber: number;
+  isOP?: boolean;
+}
+
+const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: string }> = [
+  { key: 'echo',    glyph: '~', label: 'echo'    },
+  { key: 'dive',    glyph: 'v', label: 'dive'    },
+  { key: 'ripple',  glyph: '*', label: 'ripple'  },
+  { key: 'witness', glyph: '+', label: 'witness' },
+  { key: 'signal',  glyph: '>', label: 'signal'  },
+];
+
+function renderBody(body: string) {
+  return body.split('\n').map((line, i) => {
+    if (line.startsWith('> ') || line === '>') {
+      return (
+        <div key={i} className="greentext-line">
+          {line.startsWith('> ') ? line.slice(2) : ''}
+        </div>
+      );
+    }
+    if (line === '') return <div key={i} className="h-3" />;
+    return (
+      <div key={i} className="post-body-line">
+        {line}
+      </div>
+    );
+  });
+}
+
+function getAuthorMode(post: Post): 'anon' | 'ghost' {
+  if ('authorMode' in post) return post.authorMode;
+  return 'ghost';
+}
+
+export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) {
+  const [reacted, setReacted] = useState<Record<string, boolean>>({});
+  const [counts, setCounts] = useState<ReactionSet>({ ...post.reactions });
+
+  function toggleReaction(key: keyof ReactionSet) {
+    const wasReacted = reacted[key];
+    setReacted((prev) => ({ ...prev, [key]: !wasReacted }));
+    setCounts((prev) => ({
+      ...prev,
+      [key]: wasReacted ? Math.max(0, prev[key] - 1) : prev[key] + 1,
+    }));
+  }
+
+  const mode = getAuthorMode(post);
+  const tags = isOP && 'tags' in post ? post.tags : null;
+  const time = 'createdAt' in post ? post.createdAt : '';
+
+  return (
+    <div className={`thread-post ${isOP ? 'thread-post-op' : ''}`} id={`post-${postNumber}`}>
+      {/* Post header */}
+      <div className="post-header">
+        <span className="post-number">#{postNumber}</span>
+        <span className="post-separator">·</span>
+        <span className={`post-handle ${isOP ? 'post-handle-op' : ''}`}>
+          {post.authorHandle}
+        </span>
+        <span className={`post-identity-badge ${mode === 'ghost' ? 'ghost' : ''}`}>
+          {mode === 'ghost' ? 'GHOST' : 'ANON'}
+        </span>
+        {isOP && <span className="post-op-tag">OP</span>}
+        <span className="post-time">{time}</span>
+      </div>
+
+      {/* Post body */}
+      <div className="post-body">
+        {renderBody(post.body)}
+      </div>
+
+      {/* Tags (OP only) */}
+      {tags && tags.length > 0 && (
+        <div className="post-tags">
+          {tags.map((tag) => (
+            <span key={tag} className="post-tag">{tag}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Reactions */}
+      <div className="post-reactions">
+        {REACTION_DEFS.map(({ key, glyph, label }) => (
+          <button
+            key={key}
+            onClick={() => toggleReaction(key)}
+            className={`reaction-btn ${reacted[key] ? 'reacted' : ''}`}
+            title={`${label}: ${counts[key]}`}
+          >
+            {glyph} {counts[key]} {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Post number anchor link (imageboard style) */}
+      <div className="post-permalink">
+        <a href={`#post-${postNumber}`} className="post-permalink-link">
+          &gt;&gt;{postNumber}
+        </a>
+      </div>
+    </div>
+  );
+}

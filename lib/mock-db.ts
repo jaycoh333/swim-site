@@ -13,6 +13,7 @@ import {
   THREAD_SEED,
   WORLD_EVENT_SEED,
 } from '@/lib/seed-data';
+import { REPLY_SEED } from '@/lib/reply-seed';
 import {
   Category,
   ContentType,
@@ -20,6 +21,8 @@ import {
   ForumContent,
   ForumStats,
   GhostIdentity,
+  Reply,
+  ThreadContent,
   WorldEvent,
 } from '@/lib/forum-types';
 
@@ -101,6 +104,14 @@ export const mockDb = {
 
   getOnlineSnapshot(tick = 0) {
     return ONLINE_COUNTS[tick % ONLINE_COUNTS.length];
+  },
+
+  getThread(id: string): ThreadContent | undefined {
+    return THREAD_SEED.find((t) => t.id === id);
+  },
+
+  getThreadReplies(threadId: string): Reply[] {
+    return REPLY_SEED[threadId] ?? [];
   },
 
   getRecoveredEntries() {
