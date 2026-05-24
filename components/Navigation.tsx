@@ -48,11 +48,15 @@ export function Navigation() {
   return (
     <header className="fixed left-0 right-0 top-0 z-[9990] border-b border-crt/10 bg-[rgba(3,5,4,.97)]">
       {/* ── Main row ─── */}
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-3 py-1.5 md:px-5">
-        {/* Logo */}
+      {/* relative so the logo can be absolute-centered on mobile */}
+      <div className="relative mx-auto flex max-w-7xl items-center justify-between gap-3 px-3 py-1.5 md:px-5">
+        {/* Mobile left spacer — mirrors the hamburger width so the logo centers visually */}
+        <div className="w-[42px] flex-shrink-0 md:hidden" aria-hidden="true" />
+
+        {/* Logo — centered on mobile via absolute, left-aligned on desktop */}
         <Link
           href="/"
-          className="border border-crt/14 px-3 py-1 font-mono text-base tracking-[0.3em] text-crt/82 transition-colors hover:text-crt md:text-lg"
+          className="absolute left-1/2 -translate-x-1/2 border border-crt/14 px-3 py-1 font-mono text-base tracking-[0.3em] text-crt/82 transition-colors hover:text-crt md:static md:translate-x-0 md:text-lg"
         >
           $SWIM
         </Link>

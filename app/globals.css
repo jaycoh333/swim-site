@@ -800,6 +800,43 @@ body::after {
   color: rgba(134, 212, 110, 0.36);
 }
 
+/* ── Mobile-only header overrides ─────────────────────────── */
+/* On phones the atmospheric art was being crushed by the same dim/vignette
+   values tuned for desktop. These overrides restore mushrooms, sigils, and
+   faint giant lettering on small screens while keeping the HTML logo readable. */
+
+@media (max-width: 639px) {
+  /* Slightly taller on mobile — enough breathing room without dominating the fold */
+  .swim-header {
+    height: 185px;
+  }
+
+  /* Less blur + more brightness: large art silhouettes survive, baked text stays soft */
+  .swim-header-bg-layer img {
+    filter: blur(0.5px) brightness(0.80) saturate(0.90);
+  }
+
+  /* Lighter overlay so more image shows through on small screens */
+  .swim-header-dim {
+    background: rgba(2, 3, 3, 0.42);
+  }
+
+  /* Softer vignette — on a narrow phone the ellipse eats too much art */
+  .swim-header-vignette {
+    background: radial-gradient(ellipse at 50% 42%, transparent 20%, rgba(0, 0, 0, 0.42) 100%);
+  }
+
+  /* Shorter bottom fade so the bottom of the art isn't swallowed */
+  .swim-header-bottom-fade {
+    height: 30px;
+  }
+
+  /* A little more vertical padding so the $SWIM logo isn't pressed against the edges */
+  .swim-header-masthead {
+    padding: 10px 16px;
+  }
+}
+
 /* ── CATEGORY PORTAL ─────────────────────────────────────── */
 
 .category-rail {

@@ -75,7 +75,7 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
           initial={{ opacity: 1 }}
           animate={{ opacity: fading ? 0 : 1 }}
           transition={{ duration: 0.7 }}
-          className="fixed inset-0 z-[99999] flex items-center justify-center bg-void"
+          className="fixed inset-0 z-[99999] flex flex-col items-center overflow-y-auto bg-void pt-16 pb-8 sm:justify-center sm:overflow-hidden sm:pt-0 sm:pb-0"
         >
           {/* Scanlines on boot screen */}
           <div
