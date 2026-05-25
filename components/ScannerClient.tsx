@@ -1,11 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { NetworkFooter } from '@/components/NetworkFooter';
 import { ShareBar } from '@/components/ShareBar';
 import { CATEGORY_COLORS } from '@/lib/forum-types';
 import type { DbRecoveredSignal } from '@/lib/supabase/types';
+import type { ScannerStats } from '@/lib/supabase/repository';
 
 const SCANNER_URL = 'https://www.sw1m.me/scanner';
 
@@ -14,6 +17,10 @@ const SCANNER_URL = 'https://www.sw1m.me/scanner';
 //   (server component) and passed here as a prop. Scrapers insert rows into
 //   Supabase with status='pending'. Curators approve at /scanner/queue.
 //   Only status='approved' signals ever reach this component.
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface SignalEntry {
   id: string;
@@ -24,6 +31,85 @@ interface SignalEntry {
   status: 'pending review' | 'approved' | 'archived';
   recovered: string;
 }
+
+type ActivityType = 'recovered' | 'approved' | 'reborn' | 'submitted' | 'archived';
+
+interface ActivityEvent {
+  id:           string;
+  type:         ActivityType;
+  timestamp:    string;
+  category:     string;
+  titlePreview: string;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const ACTIVITY_LABELS: Record<ActivityType, string> = {
+  recovered: 'signal recovered',
+  approved:  'signal approved',
+  reborn:    'thread reborn',
+  submitted: 'public submission',
+  archived:  'signal archived',
+};
+
+const ACTIVITY_COLORS: Record<ActivityType, string> = {
+  recovered: 'rgba(134,212,110,0.55)',
+  approved:  '#86d46e',
+  reborn:    '#d7a85c',
+  submitted: '#6da8ff',
+  archived:  'rgba(109,168,255,0.45)',
+};
+
+// Mock activity — used when no real data is available
+const MOCK_ACTIVITY: ActivityEvent[] = [
+  { id: 'm01', type: 'reborn',    timestamp: '2024-12-01T14:22:00Z', category: 'Lost Media',         titlePreview: "regional children's program denied by production co…" },
+  { id: 'm02', type: 'approved',  timestamp: '2024-11-28T09:15:00Z', category: 'Simulation Theory',  titlePreview: 'four posters confirmed the same visual seam independently' },
+  { id: 'm03', type: 'submitted', timestamp: '2024-11-22T18:44:00Z', category: 'Paranormal',         titlePreview: '' },
+  { id: 'm04', type: 'recovered', timestamp: '2024-11-20T03:11:00Z', category: 'Dreams',             titlePreview: 'recurring tower geometry across 14 unrelated submissions' },
+  { id: 'm05', type: 'approved',  timestamp: '2024-11-14T21:30:00Z', category: 'Hidden History',     titlePreview: 'phpBB urban exploration: identical acoustic anomaly' },
+  { id: 'm06', type: 'reborn',    timestamp: '2024-11-10T07:55:00Z', category: 'Surveillance State', titlePreview: 'IRC log: coordinated service interruptions, no source found' },
+  { id: 'm07', type: 'submitted', timestamp: '2024-10-31T12:00:00Z', category: 'Redacted Files',     titlePreview: '' },
+  { id: 'm08', type: 'recovered', timestamp: '2024-10-28T16:20:00Z', category: 'Paranormal',         titlePreview: 'GeoCities guestbook: 11 visitors, identical low-altitude light' },
+  { id: 'm09', type: 'archived',  timestamp: '2024-10-15T08:30:00Z', category: 'AI',                 titlePreview: 'IRC: early language model outputting coordinates' },
+  { id: 'm10', type: 'recovered', timestamp: '2024-09-03T11:45:00Z', category: 'Simulation Theory',  titlePreview: 'r/Glitch: impossible road confirmed by 22 respondents' },
+];
+
+const MOCK_STATS: ScannerStats = {
+  totalRecovered:    847,
+  pendingReview:     12,
+  threadsReborn:     34,
+  publicSubmissions: 218,
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  'pending review': '#d7a85c',
+  'approved':       '#86d46e',
+  'archived':       '#6da8ff',
+};
+
+const PROCESS_STEPS = [
+  {
+    step: '01',
+    label: 'SCAN',
+    desc: 'Automated monitors detect anomalies across dead and dying internet layers.',
+  },
+  {
+    step: '02',
+    label: 'REVIEW',
+    desc: 'A human curator reads, evaluates, and categorizes each recovered signal.',
+  },
+  {
+    step: '03',
+    label: 'ARCHIVE',
+    desc: 'Approved signals enter the permanent archive under the relevant channel.',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 
 function dbSignalToEntry(sig: DbRecoveredSignal): SignalEntry {
   const color = (CATEGORY_COLORS as Record<string, string>)[sig.category] ?? '#86d46e';
@@ -43,7 +129,68 @@ function buildSignalShareText(sig: SignalEntry): string {
   return `RECOVERED SIGNAL // ${sig.category.toUpperCase()} [${sig.id.toUpperCase()}]\n"${preview}"\n\nSource: ${sig.source}\nswim scanner: ${SCANNER_URL}`;
 }
 
-// Fallback mock data — displayed when no Supabase connection or no approved signals exist.
+function buildActivityEvents(signals: DbRecoveredSignal[]): ActivityEvent[] {
+  const events: ActivityEvent[] = [];
+
+  for (const sig of signals) {
+    const shortTitle = sig.title.length > 68
+      ? sig.title.slice(0, 65) + '…'
+      : sig.title;
+
+    // Primary state event
+    if (sig.published_thread_id) {
+      events.push({
+        id:           `${sig.id}-reborn`,
+        type:         'reborn',
+        timestamp:    sig.approved_at ?? sig.discovered_at,
+        category:     sig.category,
+        titlePreview: shortTitle,
+      });
+    } else {
+      events.push({
+        id:           `${sig.id}-approved`,
+        type:         'approved',
+        timestamp:    sig.approved_at ?? sig.discovered_at,
+        category:     sig.category,
+        titlePreview: shortTitle,
+      });
+    }
+
+    // Recovery event (discovery)
+    events.push({
+      id:           `${sig.id}-recovered`,
+      type:         'recovered',
+      timestamp:    sig.discovered_at,
+      category:     sig.category,
+      titlePreview: shortTitle,
+    });
+  }
+
+  return events
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 15);
+}
+
+function formatRelative(iso: string, now: number): string {
+  const diff = now - new Date(iso).getTime();
+  const mins  = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days  = Math.floor(diff / 86_400_000);
+
+  if (mins < 1)   return 'just now';
+  if (mins < 60)  return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  if (days < 30)  return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}yr ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Mock signal data — fallback when Supabase unavailable
+// ---------------------------------------------------------------------------
+
 const MOCK_SIGNALS: SignalEntry[] = [
   {
     id: 'SIG-0847',
@@ -107,39 +254,155 @@ const MOCK_SIGNALS: SignalEntry[] = [
   },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  'pending review': '#d7a85c',
-  'approved':       '#86d46e',
-  'archived':       '#6da8ff',
-};
+// ---------------------------------------------------------------------------
+// ScannerStatsBlock
+// ---------------------------------------------------------------------------
 
-const PROCESS_STEPS = [
-  {
-    step: '01',
-    label: 'SCAN',
-    desc: 'Automated monitors detect anomalies across dead and dying internet layers.',
-  },
-  {
-    step: '02',
-    label: 'REVIEW',
-    desc: 'A human curator reads, evaluates, and categorizes each recovered signal.',
-  },
-  {
-    step: '03',
-    label: 'ARCHIVE',
-    desc: 'Approved signals enter the permanent archive under the relevant channel.',
-  },
-];
+function ScannerStatsBlock({ stats }: { stats: ScannerStats }) {
+  const items = [
+    { label: 'signals recovered', value: stats.totalRecovered },
+    { label: 'pending review',    value: stats.pendingReview },
+    { label: 'threads reborn',    value: stats.threadsReborn },
+    { label: 'public submissions', value: stats.publicSubmissions },
+  ] as const;
+
+  return (
+    <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.018)] px-6 py-5 md:px-10">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+        {items.map(({ label, value }) => (
+          <div key={label}>
+            <div className="mb-1 text-[11px] uppercase tracking-[0.20em] text-crt/30">
+              {label}
+            </div>
+            <div className="font-mono text-[1.5rem] tracking-[0.04em] text-crt/80 md:text-[1.7rem]">
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ActivityTimeline
+// ---------------------------------------------------------------------------
+
+function ActivityTimeline({
+  events,
+  now,
+}: {
+  events:    ActivityEvent[];
+  now:       number;
+}) {
+  if (events.length === 0) return null;
+
+  return (
+    <div className="border-b border-crt/10 px-6 py-8 md:px-10">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <span
+            className="h-1.5 w-1.5 animate-pulse-glow bg-crt/55"
+            aria-hidden="true"
+          />
+          <span className="text-[11px] uppercase tracking-[0.28em] text-crt/48">
+            activity stream
+          </span>
+        </div>
+        <span className="text-[10px] uppercase tracking-[0.18em] text-crt/22">
+          auto-refresh · 50s
+        </span>
+      </div>
+
+      <div className="space-y-0 divide-y divide-crt/[0.06]">
+        {events.map((evt) => {
+          const color = ACTIVITY_COLORS[evt.type];
+          const label = ACTIVITY_LABELS[evt.type];
+          const relTime = now ? formatRelative(evt.timestamp, now) : '—';
+
+          return (
+            <div key={evt.id} className="flex items-start gap-3 py-3">
+              {/* Color dot */}
+              <div
+                className="mt-[5px] h-[7px] w-[7px] shrink-0"
+                style={{ backgroundColor: color }}
+                aria-hidden="true"
+              />
+
+              <div className="min-w-0 flex-1">
+                {/* Event type + category + timestamp */}
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span
+                    className="text-[12px] uppercase tracking-[0.14em]"
+                    style={{ color }}
+                  >
+                    {label}
+                  </span>
+                  <span className="text-crt/22 text-[11px]">/</span>
+                  <span className="text-[12px] uppercase tracking-[0.10em] text-crt/48">
+                    {evt.category}
+                  </span>
+                  <span
+                    className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-crt/28"
+                    suppressHydrationWarning
+                  >
+                    {relTime}
+                  </span>
+                </div>
+
+                {/* Title preview */}
+                {evt.titlePreview && (
+                  <p className="mt-0.5 truncate text-[12px] leading-snug tracking-[0.02em] text-crt/42">
+                    {evt.titlePreview}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScannerClient
+// ---------------------------------------------------------------------------
 
 export interface ScannerClientProps {
   approvedSignals?: DbRecoveredSignal[];
+  stats?:           ScannerStats;
 }
 
-export function ScannerClient({ approvedSignals }: ScannerClientProps) {
+export function ScannerClient({ approvedSignals, stats }: ScannerClientProps) {
+  const router = useRouter();
+
+  // Client-side "now" for relative timestamps — avoids SSR hydration mismatch.
+  const [now, setNow] = useState<number>(0);
+
+  useEffect(() => {
+    setNow(Date.now());
+    const tickId = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tickId);
+  }, []);
+
+  // Auto-refresh server data every 50 seconds
+  useEffect(() => {
+    const refreshId = setInterval(() => router.refresh(), 50_000);
+    return () => clearInterval(refreshId);
+  }, [router]);
+
   const signals: SignalEntry[] =
     approvedSignals && approvedSignals.length > 0
       ? approvedSignals.map(dbSignalToEntry)
       : MOCK_SIGNALS;
+
+  const activityEvents: ActivityEvent[] =
+    approvedSignals && approvedSignals.length > 0
+      ? buildActivityEvents(approvedSignals)
+      : MOCK_ACTIVITY;
+
+  const displayStats = stats ?? MOCK_STATS;
 
   return (
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
@@ -161,26 +424,11 @@ export function ScannerClient({ approvedSignals }: ScannerClientProps) {
             </p>
           </div>
 
-          {/* ── System status bar ── */}
-          <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.025)] px-6 py-4 md:px-10">
-            <div className="flex flex-wrap gap-x-8 gap-y-2 text-[12px] uppercase tracking-[0.18em]">
-              <span>
-                <span className="text-crt/30">node monitor</span>
-                <span className="mx-2 text-crt/20">//</span>
-                <span className="text-[#86d46e]/68">ACTIVE</span>
-              </span>
-              <span className="text-crt/45">
-                <span className="text-crt/30">signals recovered</span>
-                <span className="mx-2 text-crt/20">//</span>
-                {signals.length > 0 ? signals.length : 847}
-              </span>
-              <span className="text-crt/45">
-                <span className="text-crt/30">last scan</span>
-                <span className="mx-2 text-crt/20">//</span>
-                03:41:17
-              </span>
-            </div>
-          </div>
+          {/* ── Scanner stats ── */}
+          <ScannerStatsBlock stats={displayStats} />
+
+          {/* ── Activity timeline ── */}
+          <ActivityTimeline events={activityEvents} now={now} />
 
           {/* ── About section ── */}
           <div className="border-b border-crt/10 px-6 py-8 md:px-10">

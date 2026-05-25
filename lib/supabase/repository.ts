@@ -625,6 +625,131 @@ export async function publishSignalAsThread(
   return { threadSlug: threadData.slug };
 }
 
+// ---------------------------------------------------------------------------
+// Recovered signals — rebirth as thread (curator-edited publish)
+//
+// Like publishSignalAsThread but uses curator-provided title/body/category/tags
+// rather than auto-generating them from the signal. The curator edits the content
+// in the RebirthPanel before clicking [ rebirth as thread ].
+//
+// HUMAN APPROVAL GATE: identical to publishSignalAsThread.
+// ---------------------------------------------------------------------------
+
+export interface RebirthSignalInput {
+  signalId:  string;
+  title:     string;
+  body:      string;
+  category:  string;
+  tags:      string[];
+}
+
+export async function rebirthSignalAsThread(
+  input: RebirthSignalInput,
+): Promise<{ threadSlug: string } | { error: string }> {
+  if (!hasSupabase) {
+    return { threadSlug: `th-rebirth-${Date.now()}` };
+  }
+
+  const db = getDb()!;
+
+  // 1. Verify signal exists and hasn't already been published
+  const { data: sigData, error: sigErr } = await db
+    .from('recovered_signals')
+    .select('id, published_thread_id')
+    .eq('id', input.signalId)
+    .single();
+
+  if (sigErr || !sigData) {
+    return { error: sigErr?.message ?? 'signal not found' };
+  }
+  if ((sigData as { published_thread_id: string | null }).published_thread_id) {
+    return { error: 'signal already reborn into a thread' };
+  }
+
+  // 2. Create the thread with curator-edited content
+  const slug = `${Date.now()}-${input.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 60)}`;
+  const now = new Date().toISOString();
+
+  const { data: threadData, error: threadErr } = await db
+    .from('threads')
+    .insert({
+      slug,
+      title:            input.title,
+      body:             input.body,
+      category:         input.category,
+      author_handle:    'ARCHIVIST',
+      author_mode:      'ghost' as const,
+      tags:             [...new Set([...input.tags, 'recovered-signal'])],
+      last_activity_at: now,
+    })
+    .select('id, slug')
+    .single();
+
+  if (threadErr || !threadData) {
+    console.error('[repository] rebirthSignalAsThread (thread insert):', threadErr?.message);
+    return { error: threadErr?.message ?? 'thread creation failed' };
+  }
+
+  // 3. Stamp the signal: approved + thread UUID
+  const { error: updateErr } = await db
+    .from('recovered_signals')
+    .update({
+      status:              'approved',
+      approved_at:         now,
+      published_thread_id: threadData.id,
+    })
+    .eq('id', input.signalId);
+
+  if (updateErr) {
+    console.error('[repository] rebirthSignalAsThread (signal update):', updateErr.message);
+  }
+
+  return { threadSlug: threadData.slug };
+}
+
+// ---------------------------------------------------------------------------
+// Scanner stats — public aggregate counts for /scanner activity layer
+// ---------------------------------------------------------------------------
+
+export interface ScannerStats {
+  totalRecovered:    number;
+  pendingReview:     number;
+  threadsReborn:     number;
+  publicSubmissions: number;
+}
+
+export async function getScannerStats(): Promise<ScannerStats> {
+  if (!hasSupabase) {
+    return { totalRecovered: 847, pendingReview: 12, threadsReborn: 34, publicSubmissions: 218 };
+  }
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('recovered_signals')
+    .select('status, published_thread_id, submitted_publicly');
+
+  if (error || !data) {
+    console.error('[repository] getScannerStats:', error?.message);
+    return { totalRecovered: 0, pendingReview: 0, threadsReborn: 0, publicSubmissions: 0 };
+  }
+
+  const rows = data as Array<{
+    status:              string;
+    published_thread_id: string | null;
+    submitted_publicly:  boolean;
+  }>;
+
+  return {
+    totalRecovered:    rows.length,
+    pendingReview:     rows.filter((r) => r.status === 'pending').length,
+    threadsReborn:     rows.filter((r) => Boolean(r.published_thread_id)).length,
+    publicSubmissions: rows.filter((r) => r.submitted_publicly).length,
+  };
+}
+
 // SCRAPER INTEGRATION POINT:
 //   Future automated scrapers call this to submit signals for curator review.
 //   All signals are inserted with status='pending' regardless of the caller.

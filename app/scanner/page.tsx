@@ -1,12 +1,13 @@
 import { ScannerClient } from '@/components/ScannerClient';
-import { getRecoveredSignals } from '@/lib/supabase/repository';
+import { getRecoveredSignals, getScannerStats } from '@/lib/supabase/repository';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ScannerPage() {
-  // Fetch only approved signals for the public page.
-  // Pending / rejected signals are visible only in /scanner/queue (curator only).
-  const approvedSignals = await getRecoveredSignals('approved');
+  const [approvedSignals, stats] = await Promise.all([
+    getRecoveredSignals('approved'),
+    getScannerStats(),
+  ]);
 
-  return <ScannerClient approvedSignals={approvedSignals} />;
+  return <ScannerClient approvedSignals={approvedSignals} stats={stats} />;
 }

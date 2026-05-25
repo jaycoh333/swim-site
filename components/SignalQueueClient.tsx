@@ -1,20 +1,18 @@
 'use client';
 
 /**
- * SignalQueueClient — curator interface for reviewing recovered signals.
+ * SignalQueueClient — curator interface for reviewing and rebirthng recovered signals.
  *
- * Includes:
- *   - Status section tabs + category / source-type / score filters
- *   - Two-step publish (preview thread title+body → confirm)
- *   - Public submission badge on crowd-sourced signals
- *   - Share package preview after publish (Telegram + X copy)
+ * OPERATOR MODE: readability-first layout.
+ * - Sticky filter toolbar (tabs + secondary filters)
+ * - Large text: 17–20px body, 13–15px metadata
+ * - High-contrast typography
+ * - Large tap-target action buttons (min 44px height)
+ * - Terminal case-file card structure
  *
  * HUMAN APPROVAL GATE:
- *   Nothing here publishes automatically. Every status change and every
- *   publish requires an explicit curator click.
- *
- * TELEGRAM / X INTEGRATION POINT:
- *   See docs/social-automation-plan.md — Phase 2/3 will add post buttons.
+ *   Nothing publishes automatically. Every status change and rebirth requires
+ *   an explicit curator action.
  */
 
 import Link from 'next/link';
@@ -22,8 +20,16 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { IntakeFormClient } from '@/components/IntakeFormClient';
-import { updateSignalStatusAction, publishSignalAsThreadAction } from '@/app/actions';
-import { formatTelegramPost, formatXPost, xPostTitleTruncated } from '@/lib/social-formatters';
+import {
+  updateSignalStatusAction,
+  rebirthSignalAsThreadAction,
+} from '@/app/actions';
+import {
+  formatTelegramPost,
+  formatXPost,
+  xPostTitleTruncated,
+} from '@/lib/social-formatters';
+import { CATEGORY_ORDER } from '@/lib/forum-types';
 import type { DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType } from '@/lib/supabase/types';
 
 // ---------------------------------------------------------------------------
@@ -64,8 +70,10 @@ const SOURCE_TYPE_LABELS: Record<SignalSourceType, string> = {
   other:      'Other',
 };
 
+const REBIRTH_SCORE_THRESHOLD = 7;
+
 // ---------------------------------------------------------------------------
-// Utilities
+// Types
 // ---------------------------------------------------------------------------
 
 interface PublishResult {
@@ -74,6 +82,17 @@ interface PublishResult {
   xText:          string;
   titleTruncated: boolean;
 }
+
+interface RebirthPayload {
+  title:    string;
+  body:     string;
+  category: string;
+  tags:     string[];
+}
+
+// ---------------------------------------------------------------------------
+// Utilities (client-side replication of formatSignalBody for preview)
+// ---------------------------------------------------------------------------
 
 function buildPreviewBody(sig: DbRecoveredSignal): string {
   const lines = [
@@ -93,26 +112,26 @@ function buildPreviewBody(sig: DbRecoveredSignal): string {
 }
 
 // ---------------------------------------------------------------------------
-// AnomalyBar
+// AnomalyBar — enlarged for operator readability
 // ---------------------------------------------------------------------------
 
 function AnomalyBar({ score }: { score: number }) {
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex gap-[3px]">
+    <div className="flex items-center gap-2.5">
+      <div className="flex gap-[4px]">
         {Array.from({ length: 10 }, (_, i) => (
           <div
             key={i}
-            className="h-[10px] w-[6px]"
+            className="h-[16px] w-[9px]"
             style={{
               backgroundColor: i < score
                 ? score >= 8 ? '#ff6b6b' : score >= 6 ? '#d7a85c' : '#86d46e'
-                : 'rgba(134,212,110,0.10)',
+                : 'rgba(134,212,110,0.12)',
             }}
           />
         ))}
       </div>
-      <span className="text-[11px] tabular-nums tracking-[0.14em] text-crt/45">
+      <span className="text-[14px] tabular-nums tracking-[0.10em] text-crt/55">
         {score}/10
       </span>
     </div>
@@ -142,7 +161,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="text-[10px] uppercase tracking-[0.16em] text-crt/38 transition-colors hover:text-crt/65"
+      className="text-[12px] uppercase tracking-[0.14em] text-crt/42 transition-colors hover:text-crt/70"
     >
       {copied ? '✓ copied' : '[ copy ]'}
     </button>
@@ -150,58 +169,67 @@ function CopyButton({ text }: { text: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// SharePackagePanel
+// SharePackagePanel — shown after successful rebirth
 // ---------------------------------------------------------------------------
 
 function SharePackagePanel({ result }: { result: PublishResult }) {
   return (
-    <div className="mt-4 border-t border-crt/10 pt-4">
-      <div className="mb-4 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-[0.26em] text-crt/28">
-          share package
-        </span>
+    <div className="mt-5 border-t border-crt/12 pt-5">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <div className="mb-1 text-[12px] uppercase tracking-[0.26em] text-[#d7a85c]/80">
+            ◈ thread reborn
+          </div>
+          <div className="text-[13px] uppercase tracking-[0.16em] text-crt/42">
+            story restored to archive
+          </div>
+        </div>
         <Link
           href={`/threads/${result.threadSlug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/72 transition-colors hover:text-[#86d46e]"
+          className="shrink-0 text-[13px] uppercase tracking-[0.16em] text-[#86d46e]/75 transition-colors hover:text-[#86d46e]"
         >
-          ✓ view thread ↗
+          ✓ view reborn thread ↗
         </Link>
       </div>
 
-      <div className="mb-3">
-        <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-[0.20em] text-crt/28">telegram</span>
+      <div className="mb-4 text-[12px] uppercase tracking-[0.22em] text-crt/32">
+        share package — copy and post manually
+      </div>
+
+      <div className="mb-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[12px] uppercase tracking-[0.18em] text-crt/32">telegram</span>
           <CopyButton text={result.telegramText} />
         </div>
-        <div className="border border-crt/10 bg-[rgba(134,212,110,0.018)] px-3 py-2.5 font-mono text-[11px] leading-relaxed tracking-[0.03em] text-crt/45 whitespace-pre-wrap">
+        <div className="border border-crt/12 bg-[rgba(134,212,110,0.02)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/52 whitespace-pre-wrap">
           {result.telegramText}
         </div>
       </div>
 
       <div>
-        <div className="mb-1.5 flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-[10px] uppercase tracking-[0.20em] text-crt/28">x.com</span>
+            <span className="text-[12px] uppercase tracking-[0.18em] text-crt/32">x.com</span>
             <span
-              className="text-[10px] tabular-nums tracking-[0.12em]"
-              style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.30)' }}
+              className="text-[12px] tabular-nums tracking-[0.10em]"
+              style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.35)' }}
             >
               {result.xText.length}/280
             </span>
             {result.titleTruncated && (
-              <span className="text-[10px] uppercase tracking-[0.12em] text-[#d7a85c]/70">
+              <span className="text-[12px] uppercase tracking-[0.10em] text-[#d7a85c]/75">
                 title truncated
               </span>
             )}
           </div>
           <CopyButton text={result.xText} />
         </div>
-        <div className="border border-crt/10 bg-[rgba(134,212,110,0.018)] px-3 py-2.5 font-mono text-[11px] leading-relaxed tracking-[0.03em] text-crt/45 whitespace-pre-wrap">
+        <div className="border border-crt/12 bg-[rgba(134,212,110,0.02)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/52 whitespace-pre-wrap">
           {result.xText}
         </div>
-        <p className="mt-1.5 text-[10px] uppercase tracking-[0.14em] text-crt/22">
+        <p className="mt-2 text-[12px] uppercase tracking-[0.12em] text-crt/25">
           no api calls made — copy and post manually or wait for phase 2/3
         </p>
       </div>
@@ -210,166 +238,298 @@ function SharePackagePanel({ result }: { result: PublishResult }) {
 }
 
 // ---------------------------------------------------------------------------
-// PublishPreviewPanel — two-step publish confirm
+// RebirthPanel — editable pre-publish editor with live social preview
 // ---------------------------------------------------------------------------
 
-function PublishPreviewPanel({
+function RebirthPanel({
   sig,
-  onConfirm,
+  onRebirth,
   onCancel,
-  isPublishing,
+  isRebirthPending,
 }: {
-  sig:          DbRecoveredSignal;
-  onConfirm:    () => void;
-  onCancel:     () => void;
-  isPublishing: boolean;
+  sig:              DbRecoveredSignal;
+  onRebirth:        (payload: RebirthPayload) => void;
+  onCancel:         () => void;
+  isRebirthPending: boolean;
 }) {
+  const [title,    setTitle]    = useState(sig.title);
+  const [body,     setBody]     = useState(buildPreviewBody(sig));
+  const [category, setCategory] = useState(sig.category);
+  const [tagsStr,  setTagsStr]  = useState(sig.tags.join(', '));
+
+  const parsedTags = tagsStr
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+
+  const previewData = {
+    title,
+    category,
+    summary:      sig.summary,
+    threadSlug:   'preview',
+    sourceName:   sig.source_name,
+    anomalyScore: sig.anomaly_score,
+    tags:         parsedTags,
+  };
+  const telegramPreview = formatTelegramPost(previewData);
+  const xPreview        = formatXPost(previewData);
+  const xCharCount      = xPreview.length;
+  const xTruncated      = xPostTitleTruncated(previewData);
+
+  const inputBase =
+    'w-full border border-crt/20 bg-transparent px-4 py-3 font-mono text-[15px] tracking-[0.03em] text-crt/85 placeholder:text-crt/25 focus:border-crt/42 focus:outline-none transition-colors';
+  const labelBase =
+    'mb-2 block text-[12px] uppercase tracking-[0.18em] text-crt/42';
+
   return (
-    <div className="mt-4 border-t border-[#d7a85c]/20 pt-4">
-      <div className="mb-4 text-[10px] uppercase tracking-[0.24em] text-[#d7a85c]/65">
-        ↯ publish preview — review before sending
+    <div className="mt-6 border-t border-[#d7a85c]/25 pt-6">
+
+      <div className="mb-6">
+        <div className="mb-1.5 flex items-center gap-2.5">
+          <span className="h-2 w-2 bg-[#d7a85c]/70" />
+          <span className="text-[12px] uppercase tracking-[0.28em] text-[#d7a85c]/80">
+            ◈ dead signal prepared
+          </span>
+        </div>
+        <p className="text-[14px] uppercase tracking-[0.14em] text-crt/48">
+          edit title, body, and tags — then rebirth into the archive
+        </p>
       </div>
 
-      {/* Thread title */}
-      <div className="mb-3">
-        <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-crt/28">thread title</div>
-        <div className="border border-crt/14 px-3 py-2.5 text-[13px] leading-snug tracking-[0.03em] text-crt/75">
-          {sig.title}
+      <div className="mb-5">
+        <label className={labelBase}>thread title</label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          maxLength={200}
+          disabled={isRebirthPending}
+          className={inputBase}
+        />
+      </div>
+
+      <div className="mb-5">
+        <label className={labelBase}>
+          thread body
+          <span className="ml-2 text-crt/28">— remove curator note before rebirth</span>
+        </label>
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={14}
+          disabled={isRebirthPending}
+          className={`${inputBase} resize-y`}
+        />
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <div>
+          <label className={labelBase}>category</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            disabled={isRebirthPending}
+            className={`${inputBase} cursor-pointer`}
+          >
+            {CATEGORY_ORDER.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelBase}>
+            tags <span className="text-crt/28">— comma separated</span>
+          </label>
+          <input
+            type="text"
+            value={tagsStr}
+            onChange={(e) => setTagsStr(e.target.value)}
+            maxLength={300}
+            disabled={isRebirthPending}
+            className={inputBase}
+          />
         </div>
       </div>
 
-      {/* Thread body */}
-      <div className="mb-4">
-        <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-crt/28">thread body</div>
-        <div className="border border-crt/12 bg-[rgba(134,212,110,0.015)] px-3 py-3 font-mono text-[11px] leading-relaxed tracking-[0.03em] text-crt/45 whitespace-pre-wrap max-h-48 overflow-y-auto">
-          {buildPreviewBody(sig)}
+      {/* Live social preview */}
+      <div className="mb-6 space-y-4 border-t border-crt/10 pt-5">
+        <div className="text-[12px] uppercase tracking-[0.22em] text-crt/35">
+          social preview — updates as you edit
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-[12px] uppercase tracking-[0.16em] text-crt/30">telegram</div>
+          <div className="max-h-40 overflow-y-auto border border-crt/12 bg-[rgba(134,212,110,0.018)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/48 whitespace-pre-wrap">
+            {telegramPreview}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center gap-3">
+            <span className="text-[12px] uppercase tracking-[0.16em] text-crt/30">x.com</span>
+            <span
+              className="text-[12px] tabular-nums"
+              style={{ color: xCharCount > 260 ? '#d7a85c' : 'rgba(134,212,110,0.32)' }}
+            >
+              {xCharCount}/280
+            </span>
+            {xTruncated && (
+              <span className="text-[12px] uppercase tracking-[0.10em] text-[#d7a85c]/70">
+                title truncated
+              </span>
+            )}
+          </div>
+          <div className="border border-crt/12 bg-[rgba(134,212,110,0.018)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/48 whitespace-pre-wrap">
+            {xPreview}
+          </div>
         </div>
       </div>
 
-      {/* Confirm / cancel */}
-      <div className="flex flex-wrap gap-2">
+      {/* Rebirth / cancel */}
+      <div className="flex flex-wrap gap-3">
         <button
-          onClick={onConfirm}
-          disabled={isPublishing}
-          className="border border-[#86d46e]/35 px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/70 transition-colors hover:border-[#86d46e]/60 hover:text-[#86d46e] disabled:cursor-not-allowed disabled:opacity-30"
+          onClick={() => onRebirth({ title, body, category, tags: parsedTags })}
+          disabled={isRebirthPending || !title.trim() || !body.trim()}
+          className="border border-[#d7a85c]/45 px-6 py-3 text-[13px] uppercase tracking-[0.20em] text-[#d7a85c]/78 transition-colors hover:border-[#d7a85c]/70 hover:text-[#d7a85c] disabled:cursor-not-allowed disabled:opacity-30"
         >
-          {isPublishing ? '↯ publishing...' : '[ confirm & publish ]'}
+          {isRebirthPending ? '↯ rebirthing...' : '[ rebirth as thread ]'}
         </button>
         <button
           onClick={onCancel}
-          disabled={isPublishing}
-          className="border border-crt/15 px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-crt/35 transition-colors hover:border-crt/28 hover:text-crt/55 disabled:cursor-not-allowed disabled:opacity-30"
+          disabled={isRebirthPending}
+          className="border border-crt/15 px-5 py-3 text-[13px] uppercase tracking-[0.16em] text-crt/38 transition-colors hover:border-crt/28 hover:text-crt/60 disabled:cursor-not-allowed disabled:opacity-30"
         >
           [ cancel ]
         </button>
       </div>
-      <p className="mt-2 text-[10px] uppercase tracking-[0.12em] text-crt/20">
-        thread created with author=archivist · curator note placeholder included · edit thread after publish
+      <p className="mt-2.5 text-[12px] uppercase tracking-[0.10em] text-crt/25">
+        thread created with author=archivist · signal marked approved · recovered-signal tag added
       </p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// SignalCard
+// SignalCard — terminal case-file layout, operator readability
 // ---------------------------------------------------------------------------
 
 interface SignalCardProps {
   signal:           DbRecoveredSignal;
   onStatusChange:   (id: string, status: RecoveredSignalStatus) => void;
   statusPending:    boolean;
-  onRequestPublish: (sig: DbRecoveredSignal) => void;
-  onConfirmPublish: (sig: DbRecoveredSignal) => void;
-  onCancelPublish:  () => void;
+  onRequestRebirth: (sig: DbRecoveredSignal) => void;
+  onRebirth:        (sig: DbRecoveredSignal, payload: RebirthPayload) => void;
+  onCancelRebirth:  () => void;
   isPublishing:     boolean;
-  isConfirming:     boolean;
+  isRebirthOpen:    boolean;
   publishedResult:  PublishResult | null;
+  inRebirthQueue:   boolean;
 }
 
 function SignalCard({
   signal: sig,
   onStatusChange,
   statusPending,
-  onRequestPublish,
-  onConfirmPublish,
-  onCancelPublish,
+  onRequestRebirth,
+  onRebirth,
+  onCancelRebirth,
   isPublishing,
-  isConfirming,
+  isRebirthOpen,
   publishedResult,
+  inRebirthQueue,
 }: SignalCardProps) {
   const alreadyPublished = Boolean(sig.published_thread_id) && !publishedResult;
   const busy = statusPending || isPublishing;
 
   return (
     <div
-      className="terminal-card px-5 py-5 md:px-6 md:py-6"
-      style={{ borderLeftColor: `${STATUS_COLORS[sig.status]}44` }}
+      className="terminal-card cursor-default px-6 py-6 md:px-8 md:py-7"
+      style={{
+        borderLeftColor: inRebirthQueue
+          ? 'rgba(215,168,92,0.65)'
+          : `${STATUS_COLORS[sig.status]}55`,
+        borderLeftWidth: '3px',
+      }}
     >
-      {/* ── Header row ── */}
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="font-mono text-[11px] uppercase tracking-[0.20em] text-crt/28">
+      {/* ── HEADER row ── */}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-crt/38">
             {sig.id.slice(0, 13).toUpperCase()}
           </span>
-          <span className="text-crt/18">·</span>
-          <span className="text-[12px] uppercase tracking-[0.16em] text-crt/72">
+          <span className="text-crt/20">·</span>
+          <span className="text-[13px] uppercase tracking-[0.14em] text-crt/78">
             {sig.category}
           </span>
-          <span className="text-crt/18">·</span>
-          <span className="text-[11px] uppercase tracking-[0.12em] text-crt/38">
+          <span className="text-crt/20">·</span>
+          <span className="text-[13px] uppercase tracking-[0.10em] text-crt/48">
             {SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}
           </span>
           {sig.submitted_publicly && (
-            <span className="border border-[#d7a85c]/38 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#d7a85c]/72">
+            <span className="border border-[#6da8ff]/38 px-2 py-0.5 text-[11px] uppercase tracking-[0.12em] text-[#6da8ff]/72">
               ◈ public submission
+            </span>
+          )}
+          {inRebirthQueue && (
+            <span className="border border-[#d7a85c]/45 px-2 py-0.5 text-[11px] uppercase tracking-[0.12em] text-[#d7a85c]/78">
+              ◈ ready for rebirth
             </span>
           )}
         </div>
         <span
-          className="shrink-0 text-[11px] uppercase tracking-[0.18em]"
+          className="shrink-0 text-[13px] uppercase tracking-[0.16em]"
           style={{ color: STATUS_COLORS[sig.status] }}
         >
           ◈ {sig.status}
         </span>
       </div>
 
-      {/* ── Title ── */}
-      <div className="mb-3 text-[1.08rem] font-medium leading-[1.42] tracking-[0.025em] text-crt/90">
+      {/* ── TITLE ── */}
+      <div className="mb-4 text-[1.2rem] font-medium leading-[1.40] tracking-[0.02em] text-crt/92 md:text-[1.3rem]">
         {sig.title}
       </div>
 
-      {/* ── Summary — large and readable ── */}
-      <p className="mb-5 text-[14px] leading-[1.72] tracking-[0.025em] text-crt/65">
+      {/* ── SUMMARY ── */}
+      <p className="mb-6 text-[17px] leading-[1.78] tracking-[0.02em] text-crt/82">
         {sig.summary}
       </p>
 
-      {/* ── Metadata grid ── */}
-      <div className="mb-4 grid grid-cols-2 gap-x-6 gap-y-3 text-[11px] uppercase tracking-[0.14em] sm:grid-cols-4">
+      {/* ── METADATA GRID ── */}
+      <div className="mb-5 grid grid-cols-2 gap-x-8 gap-y-5 border-t border-crt/10 pt-5 text-[13px] uppercase tracking-[0.12em] md:grid-cols-5">
         <div>
-          <div className="mb-1 text-crt/28">anomaly</div>
+          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">anomaly</div>
           <AnomalyBar score={sig.anomaly_score} />
         </div>
         <div>
-          <div className="mb-1 text-crt/28">source</div>
-          <div className="truncate text-crt/55">{sig.source_name}</div>
+          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">category</div>
+          <div className="text-[14px] text-crt/72">{sig.category}</div>
         </div>
         <div>
-          <div className="mb-1 text-crt/28">discovered</div>
-          <div className="text-crt/55">{sig.discovered_at.slice(0, 10)}</div>
+          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">source</div>
+          <div className="truncate text-[14px] text-crt/70">{sig.source_name}</div>
         </div>
         <div>
-          <div className="mb-1 text-crt/28">approved</div>
-          <div className="text-crt/55">{sig.approved_at ? sig.approved_at.slice(0, 10) : '—'}</div>
+          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">discovered</div>
+          <div className="text-[14px] text-crt/70">{sig.discovered_at.slice(0, 10)}</div>
+        </div>
+        <div>
+          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">status</div>
+          <div
+            className="text-[14px] uppercase tracking-[0.10em]"
+            style={{ color: STATUS_COLORS[sig.status] }}
+          >
+            {sig.status}
+          </div>
         </div>
       </div>
 
-      {/* ── Tags ── */}
+      {/* ── TAGS ── */}
       {sig.tags.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-1.5">
+        <div className="mb-5 flex flex-wrap gap-2">
           {sig.tags.map((tag) => (
             <span
               key={tag}
-              className="border border-crt/12 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-crt/38"
+              className="border border-crt/18 px-2.5 py-1 text-[12px] uppercase tracking-[0.12em] text-crt/58"
             >
               {tag}
             </span>
@@ -377,20 +537,20 @@ function SignalCard({
         </div>
       )}
 
-      {/* ── Source URL ── */}
+      {/* ── SOURCE URL ── */}
       {sig.source_url && (
-        <div className="mb-4 font-mono text-[11px] tracking-[0.06em] text-crt/30">
+        <div className="mb-5 font-mono text-[13px] tracking-[0.05em] text-crt/48">
           ↗ {sig.source_url}
         </div>
       )}
 
-      {/* ── Action row ── */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-crt/10 pt-4">
+      {/* ── ACTIONS ── */}
+      <div className="flex flex-wrap items-center gap-3 border-t border-crt/12 pt-5">
         {sig.status !== 'approved' && (
           <button
             onClick={() => onStatusChange(sig.id, 'approved')}
-            disabled={busy || isConfirming}
-            className="border border-[#86d46e]/32 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/68 transition-colors hover:border-[#86d46e]/55 hover:text-[#86d46e] disabled:cursor-not-allowed disabled:opacity-28"
+            disabled={busy || isRebirthOpen}
+            className="border border-[#86d46e]/35 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#86d46e]/72 transition-colors hover:border-[#86d46e]/60 hover:text-[#86d46e] disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
           >
             [ approve ]
           </button>
@@ -398,8 +558,8 @@ function SignalCard({
         {sig.status !== 'archived' && (
           <button
             onClick={() => onStatusChange(sig.id, 'archived')}
-            disabled={busy || isConfirming}
-            className="border border-[#6da8ff]/28 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#6da8ff]/62 transition-colors hover:border-[#6da8ff]/50 hover:text-[#6da8ff] disabled:cursor-not-allowed disabled:opacity-28"
+            disabled={busy || isRebirthOpen}
+            className="border border-[#6da8ff]/30 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#6da8ff]/65 transition-colors hover:border-[#6da8ff]/55 hover:text-[#6da8ff] disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
           >
             [ archive ]
           </button>
@@ -407,42 +567,46 @@ function SignalCard({
         {sig.status !== 'rejected' && (
           <button
             onClick={() => onStatusChange(sig.id, 'rejected')}
-            disabled={busy || isConfirming}
-            className="border border-[#ff6b6b]/22 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#ff6b6b]/52 transition-colors hover:border-[#ff6b6b]/42 hover:text-[#ff6b6b]/82 disabled:cursor-not-allowed disabled:opacity-28"
+            disabled={busy || isRebirthOpen}
+            className="border border-[#ff6b6b]/25 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#ff6b6b]/55 transition-colors hover:border-[#ff6b6b]/45 hover:text-[#ff6b6b]/85 disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
           >
             [ reject ]
           </button>
         )}
 
-        {/* Publish — right-aligned */}
+        {/* Rebirth button — right-aligned */}
         <div className="ml-auto">
           {publishedResult ? null : alreadyPublished ? (
-            <span className="px-1 text-[11px] uppercase tracking-[0.18em] text-crt/22">
-              ◈ published
+            <span className="text-[13px] uppercase tracking-[0.16em] text-crt/25">
+              ◈ already reborn
             </span>
-          ) : isConfirming ? null : (
+          ) : isRebirthOpen ? null : (
             <button
-              onClick={() => onRequestPublish(sig)}
+              onClick={() => onRequestRebirth(sig)}
               disabled={busy}
-              className="border border-crt/22 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-crt/52 transition-colors hover:border-crt/38 hover:text-crt/78 disabled:cursor-not-allowed disabled:opacity-28"
+              className={`border px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] transition-colors disabled:cursor-not-allowed disabled:opacity-25 md:py-3 ${
+                inRebirthQueue
+                  ? 'border-[#d7a85c]/45 text-[#d7a85c]/75 hover:border-[#d7a85c]/70 hover:text-[#d7a85c]'
+                  : 'border-crt/25 text-crt/55 hover:border-crt/40 hover:text-crt/80'
+              }`}
             >
-              [ preview &amp; publish ]
+              [ prepare rebirth ]
             </button>
           )}
         </div>
       </div>
 
-      {/* ── Publish preview — two-step confirm ── */}
-      {isConfirming && !publishedResult && (
-        <PublishPreviewPanel
+      {/* ── Rebirth panel ── */}
+      {isRebirthOpen && !publishedResult && (
+        <RebirthPanel
           sig={sig}
-          onConfirm={() => onConfirmPublish(sig)}
-          onCancel={onCancelPublish}
-          isPublishing={isPublishing}
+          onRebirth={(payload) => onRebirth(sig, payload)}
+          onCancel={onCancelRebirth}
+          isRebirthPending={isPublishing}
         />
       )}
 
-      {/* ── Share package — shown after successful publish ── */}
+      {/* ── Share package — shown after successful rebirth ── */}
       {publishedResult && <SharePackagePanel result={publishedResult} />}
     </div>
   );
@@ -468,26 +632,21 @@ export function SignalQueueClient({
   const router = useRouter();
   const [isStatusPending, startStatusTransition] = useTransition();
 
-  // Tab / filter / sort state
   const [activeTab,        setActiveTab]        = useState<RecoveredSignalStatus | 'all'>('pending');
   const [filterCategory,   setFilterCategory]   = useState('');
   const [filterSourceType, setFilterSourceType] = useState('');
   const [sortScore,        setSortScore]        = useState<'desc' | 'asc' | null>(null);
 
-  // Intake form
   const [showIntake, setShowIntake] = useState(false);
 
-  // Optimistic status overrides
   const [overrides, setOverrides] = useState<Record<string, RecoveredSignalStatus>>({});
 
-  // Publish state
   const [publishingId,     setPublishingId]     = useState<string | null>(null);
-  const [confirmingId,     setConfirmingId]     = useState<string | null>(null);
+  const [rebirthOpenId,    setRebirthOpenId]    = useState<string | null>(null);
   const [publishedResults, setPublishedResults] = useState<Record<string, PublishResult>>({});
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Merge all signals + apply optimistic overrides
   const allSignals = [
     ...initialPending,
     ...initialApproved,
@@ -495,11 +654,9 @@ export function SignalQueueClient({
     ...initialRejected,
   ].map((s) => ({ ...s, status: overrides[s.id] ?? s.status }));
 
-  // Unique values for filter dropdowns
   const uniqueCategories  = [...new Set(allSignals.map((s) => s.category))].sort();
   const uniqueSourceTypes = [...new Set(allSignals.map((s) => s.source_type))].sort() as SignalSourceType[];
 
-  // Counts (after optimistic overrides, before secondary filters)
   const counts: Record<RecoveredSignalStatus | 'all', number> = {
     all:      allSignals.length,
     pending:  allSignals.filter((s) => s.status === 'pending').length,
@@ -508,30 +665,32 @@ export function SignalQueueClient({
     rejected: allSignals.filter((s) => s.status === 'rejected').length,
   };
 
-  // Apply tab filter
   let visibleSignals =
     activeTab === 'all'
       ? allSignals
       : allSignals.filter((s) => s.status === activeTab);
 
-  // Apply secondary filters
   if (filterCategory)   visibleSignals = visibleSignals.filter((s) => s.category === filterCategory);
   if (filterSourceType) visibleSignals = visibleSignals.filter((s) => s.source_type === filterSourceType);
 
-  // Apply sort
   if (sortScore === 'desc') visibleSignals = [...visibleSignals].sort((a, b) => b.anomaly_score - a.anomaly_score);
   if (sortScore === 'asc')  visibleSignals = [...visibleSignals].sort((a, b) => a.anomaly_score - b.anomaly_score);
 
-  // Grouped by status for the "all" section view
   const groupedByStatus: Record<RecoveredSignalStatus, DbRecoveredSignal[]> =
     STATUS_SECTION_ORDER.reduce(
       (acc, s) => { acc[s] = visibleSignals.filter((sig) => sig.status === s); return acc; },
       {} as Record<RecoveredSignalStatus, DbRecoveredSignal[]>,
     );
 
-  const hasActiveFilter = Boolean(filterCategory || filterSourceType || sortScore);
+  const rebirthQueueSignals  = visibleSignals.filter(
+    (s) => s.status === 'pending' && s.anomaly_score >= REBIRTH_SCORE_THRESHOLD,
+  );
+  const rebirthQueueIds      = new Set(rebirthQueueSignals.map((s) => s.id));
+  const regularPendingSignals = visibleSignals.filter(
+    (s) => s.status === 'pending' && !rebirthQueueIds.has(s.id),
+  );
 
-  // ── Helpers ──
+  const hasActiveFilter = Boolean(filterCategory || filterSourceType || sortScore);
 
   function showError(msg: string) {
     setErrorMsg(msg);
@@ -553,35 +712,42 @@ export function SignalQueueClient({
     });
   }
 
-  function handleRequestPublish(sig: DbRecoveredSignal) {
+  function handleRequestRebirth(sig: DbRecoveredSignal) {
     if (publishingId) return;
-    setConfirmingId(sig.id);
+    setRebirthOpenId(sig.id);
   }
 
-  function handleCancelPublish() {
-    setConfirmingId(null);
+  function handleCancelRebirth() {
+    setRebirthOpenId(null);
   }
 
-  async function handleConfirmPublish(sig: DbRecoveredSignal) {
+  async function handleRebirth(sig: DbRecoveredSignal, payload: RebirthPayload) {
     if (publishingId) return;
     setPublishingId(sig.id);
 
     try {
-      const result = await publishSignalAsThreadAction(sig.id);
+      const result = await rebirthSignalAsThreadAction({
+        signalId:  sig.id,
+        title:     payload.title,
+        body:      payload.body,
+        category:  payload.category,
+        tags:      payload.tags,
+      });
+
       if ('error' in result) {
-        showError(`publish failed — ${result.error}`);
-        setConfirmingId(null);
+        showError(`rebirth failed — ${result.error}`);
+        setRebirthOpenId(null);
         return;
       }
 
       const shareData = {
-        title:        sig.title,
-        category:     sig.category,
+        title:        payload.title,
+        category:     payload.category,
         summary:      sig.summary,
         threadSlug:   result.threadSlug,
         sourceName:   sig.source_name,
         anomalyScore: sig.anomaly_score,
-        tags:         sig.tags,
+        tags:         payload.tags,
       };
 
       setPublishedResults((p) => ({
@@ -595,14 +761,13 @@ export function SignalQueueClient({
       }));
 
       setOverrides((o) => ({ ...o, [sig.id]: 'approved' }));
-      setConfirmingId(null);
+      setRebirthOpenId(null);
       router.refresh();
     } finally {
       setPublishingId(null);
     }
   }
 
-  // ── Shared card renderer ──
   function renderCard(sig: DbRecoveredSignal) {
     return (
       <SignalCard
@@ -610,200 +775,242 @@ export function SignalQueueClient({
         signal={sig}
         onStatusChange={handleStatusChange}
         statusPending={isStatusPending}
-        onRequestPublish={handleRequestPublish}
-        onConfirmPublish={handleConfirmPublish}
-        onCancelPublish={handleCancelPublish}
+        onRequestRebirth={handleRequestRebirth}
+        onRebirth={handleRebirth}
+        onCancelRebirth={handleCancelRebirth}
         isPublishing={publishingId === sig.id}
-        isConfirming={confirmingId === sig.id}
+        isRebirthOpen={rebirthOpenId === sig.id}
         publishedResult={publishedResults[sig.id] ?? null}
+        inRebirthQueue={rebirthQueueIds.has(sig.id)}
       />
     );
   }
 
-  // ── Render ──
-
   return (
-    <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-20" />
+    <div className="relative min-h-screen pb-[72px] pt-[80px] md:pb-12 md:pt-[100px]">
+      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.12]" />
 
-      <div className="relative z-10 mx-auto max-w-5xl px-4 py-4 md:px-6 md:py-6">
-        <div className="forum-shell overflow-hidden">
+      <div className="relative z-10 mx-auto max-w-5xl px-4 md:px-6">
 
-          {/* ── Header ── */}
+        {/* ── Header panel — no overflow-hidden so sticky toolbar works ── */}
+        <div className="forum-shell">
+
+          {/* Header */}
           <div className="border-b border-crt/12 px-6 py-7 md:px-10 md:py-9">
-            <div className="mb-1.5 flex items-start justify-between gap-4">
-              <div className="text-[11px] uppercase tracking-[0.30em] text-crt/35">
+            <div className="mb-2 flex items-start justify-between gap-4">
+              <div className="text-[12px] uppercase tracking-[0.26em] text-crt/40">
                 swim · internal · curator access only
               </div>
               <button
                 onClick={() => setShowIntake((v) => !v)}
-                className={`shrink-0 border px-3 py-1.5 text-[10px] uppercase tracking-[0.22em] transition-colors ${
+                className={`shrink-0 border px-4 py-2 text-[12px] uppercase tracking-[0.18em] transition-colors ${
                   showIntake
                     ? 'border-crt/32 text-crt/65 hover:border-crt/18 hover:text-crt/38'
-                    : 'border-crt/20 text-crt/40 hover:border-crt/35 hover:text-crt/62'
+                    : 'border-crt/22 text-crt/45 hover:border-crt/38 hover:text-crt/68'
                 }`}
               >
                 {showIntake ? '[ − close intake ]' : '[ + intake signal ]'}
               </button>
             </div>
-            <h1 className="text-[1.8rem] tracking-[0.10em] text-crt md:text-[2.2rem]">
+            <h1 className="text-[1.9rem] tracking-[0.10em] text-crt md:text-[2.3rem]">
               SIGNAL QUEUE
             </h1>
-            <p className="mt-2 text-[13px] uppercase tracking-[0.14em] text-crt/42">
-              human approval required before any signal becomes public
+            <p className="mt-2 text-[14px] uppercase tracking-[0.12em] text-crt/48">
+              dead signals recovered · curator review required · human approval only
             </p>
           </div>
 
-          {/* ── Manual intake form ── */}
+          {/* Manual intake form */}
           {showIntake && (
             <IntakeFormClient onSuccess={() => setShowIntake(false)} />
           )}
 
-          {/* ── Status counts ── */}
+          {/* Status counts */}
           <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.018)] px-6 py-4 md:px-10">
-            <div className="flex flex-wrap gap-x-8 gap-y-2 text-[12px] uppercase tracking-[0.18em]">
-              <span className="text-crt/45">
-                <span className="text-crt/28">total</span>
-                <span className="mx-2 text-crt/18">//</span>
+            <div className="flex flex-wrap gap-x-8 gap-y-2.5 text-[13px] uppercase tracking-[0.16em]">
+              <span className="text-crt/52">
+                <span className="text-crt/32">total</span>
+                <span className="mx-2 text-crt/20">//</span>
                 {counts.all}
               </span>
               {STATUS_SECTION_ORDER.map((s) => (
-                <span key={s} style={{ color: `${STATUS_COLORS[s]}88` }}>
-                  <span className="text-crt/28">{s}</span>
-                  <span className="mx-2 text-crt/18">//</span>
+                <span key={s} style={{ color: `${STATUS_COLORS[s]}92` }}>
+                  <span className="text-crt/32">{s}</span>
+                  <span className="mx-2 text-crt/20">//</span>
                   {counts[s]}
                 </span>
               ))}
-            </div>
-          </div>
-
-          {/* ── Status filter tabs ── */}
-          <div className="border-b border-crt/10 px-6 py-0 md:px-10">
-            <div className="flex gap-0 overflow-x-auto">
-              {STATUS_TABS.map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setActiveTab(key)}
-                  className={`border-b-2 px-4 py-4 text-[11px] uppercase tracking-[0.22em] transition-colors whitespace-nowrap ${
-                    activeTab === key
-                      ? 'border-crt/55 text-crt/80'
-                      : 'border-transparent text-crt/30 hover:text-crt/55'
-                  }`}
-                >
-                  {label}
-                  {key !== 'all' && (
-                    <span className="ml-1.5 text-crt/28">
-                      {counts[key as RecoveredSignalStatus]}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Secondary filters ── */}
-          <div className="border-b border-crt/8 bg-[rgba(134,212,110,0.012)] px-6 py-3 md:px-10">
-            <div className="flex flex-wrap items-center gap-4">
-
-              {/* Category */}
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-[0.18em] text-crt/28">category</span>
-                <select
-                  value={filterCategory}
-                  onChange={(e) => setFilterCategory(e.target.value)}
-                  className="border border-crt/15 bg-transparent px-2 py-1 font-mono text-[11px] tracking-[0.08em] text-crt/55 focus:border-crt/30 focus:outline-none"
-                >
-                  <option value="">all</option>
-                  {uniqueCategories.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Source type */}
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-[0.18em] text-crt/28">source</span>
-                <select
-                  value={filterSourceType}
-                  onChange={(e) => setFilterSourceType(e.target.value)}
-                  className="border border-crt/15 bg-transparent px-2 py-1 font-mono text-[11px] tracking-[0.08em] text-crt/55 focus:border-crt/30 focus:outline-none"
-                >
-                  <option value="">all</option>
-                  {uniqueSourceTypes.map((t) => (
-                    <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Score sort */}
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-[0.18em] text-crt/28">score</span>
-                <button
-                  onClick={() =>
-                    setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')
-                  }
-                  className={`border px-2 py-1 text-[10px] uppercase tracking-[0.14em] transition-colors ${
-                    sortScore
-                      ? 'border-crt/28 text-crt/60 hover:border-crt/18 hover:text-crt/38'
-                      : 'border-crt/12 text-crt/30 hover:border-crt/22 hover:text-crt/50'
-                  }`}
-                >
-                  {sortScore === 'desc' ? '↓ high first'
-                   : sortScore === 'asc' ? '↑ low first'
-                   : '— default'}
-                </button>
-              </div>
-
-              {/* Clear */}
-              {hasActiveFilter && (
-                <button
-                  onClick={() => { setFilterCategory(''); setFilterSourceType(''); setSortScore(null); }}
-                  className="ml-auto text-[10px] uppercase tracking-[0.18em] text-crt/28 transition-colors hover:text-crt/52"
-                >
-                  × clear filters
-                </button>
-              )}
-
-              {/* Filtered count */}
-              {hasActiveFilter && (
-                <span className="text-[10px] uppercase tracking-[0.14em] text-crt/22">
-                  {visibleSignals.length} shown
+              {counts.pending > 0 && rebirthQueueSignals.length > 0 && (
+                <span style={{ color: 'rgba(215,168,92,0.82)' }}>
+                  <span className="text-crt/32">rebirth ready</span>
+                  <span className="mx-2 text-crt/20">//</span>
+                  {rebirthQueueSignals.length}
                 </span>
               )}
             </div>
           </div>
 
-          {/* ── Error banner ── */}
+          {/* ── Sticky tab + filter toolbar ──
+              overflow is NOT set on forum-shell, so sticky works here. */}
+          <div className="sticky top-[72px] z-20 border-b border-crt/12 bg-[rgba(2,3,3,0.97)] backdrop-blur-sm md:top-[80px]">
+
+            {/* Status filter tabs */}
+            <div className="border-b border-crt/10 px-6 md:px-10">
+              <div className="flex gap-0 overflow-x-auto">
+                {STATUS_TABS.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setActiveTab(key)}
+                    className={`border-b-2 px-5 py-4 text-[12px] uppercase tracking-[0.20em] transition-colors whitespace-nowrap ${
+                      activeTab === key
+                        ? 'border-crt/60 text-crt/85'
+                        : 'border-transparent text-crt/35 hover:text-crt/60'
+                    }`}
+                  >
+                    {label}
+                    {key !== 'all' && (
+                      <span className="ml-2 text-[12px] text-crt/32">
+                        {counts[key as RecoveredSignalStatus]}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Secondary filters */}
+            <div className="px-6 py-3 md:px-10">
+              <div className="flex flex-wrap items-center gap-5">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">category</span>
+                  <select
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
+                    className="border border-crt/18 bg-transparent px-2.5 py-1.5 font-mono text-[13px] tracking-[0.06em] text-crt/62 focus:border-crt/35 focus:outline-none"
+                  >
+                    <option value="">all</option>
+                    {uniqueCategories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">source</span>
+                  <select
+                    value={filterSourceType}
+                    onChange={(e) => setFilterSourceType(e.target.value)}
+                    className="border border-crt/18 bg-transparent px-2.5 py-1.5 font-mono text-[13px] tracking-[0.06em] text-crt/62 focus:border-crt/35 focus:outline-none"
+                  >
+                    <option value="">all</option>
+                    {uniqueSourceTypes.map((t) => (
+                      <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">score</span>
+                  <button
+                    onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
+                    className={`border px-3 py-1.5 text-[12px] uppercase tracking-[0.12em] transition-colors ${
+                      sortScore
+                        ? 'border-crt/32 text-crt/65 hover:border-crt/20 hover:text-crt/42'
+                        : 'border-crt/15 text-crt/35 hover:border-crt/25 hover:text-crt/55'
+                    }`}
+                  >
+                    {sortScore === 'desc' ? '↓ high first' : sortScore === 'asc' ? '↑ low first' : '— default'}
+                  </button>
+                </div>
+
+                {hasActiveFilter && (
+                  <>
+                    <button
+                      onClick={() => { setFilterCategory(''); setFilterSourceType(''); setSortScore(null); }}
+                      className="ml-auto text-[12px] uppercase tracking-[0.16em] text-crt/32 transition-colors hover:text-crt/58"
+                    >
+                      × clear
+                    </button>
+                    <span className="text-[12px] uppercase tracking-[0.12em] text-crt/28">
+                      {visibleSignals.length} shown
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Error banner */}
           {errorMsg && (
-            <div className="border-b border-red-900/40 bg-[rgba(40,10,10,0.6)] px-6 py-3 text-[12px] uppercase tracking-[0.18em] text-red-400/80 md:px-10">
+            <div className="border-b border-red-900/45 bg-[rgba(40,10,10,0.65)] px-6 py-3.5 text-[13px] uppercase tracking-[0.16em] text-red-400/85 md:px-10">
               › {errorMsg}
             </div>
           )}
 
-          {/* ── Signal list ── */}
-          <div className="px-6 py-6 md:px-10 md:py-8">
+          {/* Signal list */}
+          <div className="px-6 py-8 md:px-10 md:py-10">
             {visibleSignals.length === 0 ? (
-              <div className="py-16 text-center text-[13px] uppercase tracking-[0.22em] text-crt/28">
-                {hasActiveFilter ? 'no signals match the current filters' : 'no signals in this state'}
+              <div className="py-20 text-center text-[14px] uppercase tracking-[0.20em] text-crt/32">
+                {hasActiveFilter ? 'no signals match current filters' : 'no signals in this state'}
               </div>
+
+            ) : activeTab === 'pending' ? (
+              <div>
+                {/* Rebirth Queue callout */}
+                {rebirthQueueSignals.length > 0 && (
+                  <div className="mb-10">
+                    <div className="mb-6 border border-[#d7a85c]/22 bg-[rgba(215,168,92,0.045)] px-6 py-5">
+                      <div className="mb-1.5 flex items-center gap-3">
+                        <span className="h-2 w-2 bg-[#d7a85c]/70" aria-hidden="true" />
+                        <span className="text-[13px] uppercase tracking-[0.28em] text-[#d7a85c]/88">
+                          ◈ rebirth queue
+                        </span>
+                      </div>
+                      <p className="text-[14px] uppercase tracking-[0.14em] text-[#d7a85c]/58">
+                        {rebirthQueueSignals.length} dead signal{rebirthQueueSignals.length !== 1 ? 's' : ''} with anomaly score ≥ {REBIRTH_SCORE_THRESHOLD} — ready for archive
+                      </p>
+                    </div>
+                    <div className="terminal-card-grid">
+                      {rebirthQueueSignals.map(renderCard)}
+                    </div>
+                  </div>
+                )}
+
+                {/* Remaining pending */}
+                {regularPendingSignals.length > 0 && (
+                  <div>
+                    {rebirthQueueSignals.length > 0 && (
+                      <div className="mb-6 flex items-center gap-4">
+                        <div className="h-px flex-1 bg-crt/10" />
+                        <span className="shrink-0 text-[12px] uppercase tracking-[0.22em] text-crt/32">
+                          remaining · {regularPendingSignals.length}
+                        </span>
+                        <div className="h-px flex-1 bg-crt/10" />
+                      </div>
+                    )}
+                    <div className="terminal-card-grid">
+                      {regularPendingSignals.map(renderCard)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
             ) : activeTab === 'all' ? (
-              /* Grouped section view */
-              <div className="space-y-10">
+              <div className="space-y-12">
                 {STATUS_SECTION_ORDER.map((status) => {
                   const sigs = groupedByStatus[status];
                   if (sigs.length === 0) return null;
                   return (
                     <div key={status}>
-                      {/* Section header */}
-                      <div className="mb-4 flex items-center gap-4">
-                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
+                      <div className="mb-5 flex items-center gap-4">
+                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}25` }} />
                         <span
-                          className="shrink-0 text-[10px] uppercase tracking-[0.26em]"
-                          style={{ color: `${STATUS_COLORS[status]}80` }}
+                          className="shrink-0 text-[12px] uppercase tracking-[0.24em]"
+                          style={{ color: `${STATUS_COLORS[status]}90` }}
                         >
                           {SECTION_LABELS[status]} · {sigs.length}
                         </span>
-                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
+                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}25` }} />
                       </div>
                       <div className="terminal-card-grid">
                         {sigs.map(renderCard)}
@@ -812,16 +1019,16 @@ export function SignalQueueClient({
                   );
                 })}
               </div>
+
             ) : (
-              /* Flat list for single-status tabs */
               <div className="terminal-card-grid">
                 {visibleSignals.map(renderCard)}
               </div>
             )}
           </div>
 
-          {/* ── Footer ── */}
-          <div className="border-t border-crt/8 px-6 py-5 text-center text-[11px] uppercase tracking-[0.18em] text-crt/22 md:px-10">
+          {/* Footer */}
+          <div className="border-t border-crt/10 px-6 py-5 text-center text-[12px] uppercase tracking-[0.16em] text-crt/28 md:px-10">
             curator queue · service role key required · not accessible to public users
           </div>
 

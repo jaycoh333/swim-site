@@ -16,6 +16,7 @@ import {
   reportContent,
   updateSignalStatus,
   publishSignalAsThread,
+  rebirthSignalAsThread,
   createRecoveredSignal,
   type CreateThreadInput,
   type CreateReplyInput,
@@ -23,6 +24,7 @@ import {
   type ReportContentInput,
   type UpdateSignalStatusInput,
   type CreateRecoveredSignalInput,
+  type RebirthSignalInput,
 } from '@/lib/supabase/repository';
 
 export async function createThreadAction(
@@ -99,6 +101,18 @@ export async function createRecoveredSignalAction(
   input: CreateRecoveredSignalInput,
 ): Promise<{ id: string } | { error: string }> {
   return createRecoveredSignal(input);
+}
+
+// Curator action — rebirth a recovered signal as a SWIM thread using
+// curator-edited title, body, category, and tags from the RebirthPanel.
+// This is the primary path from /scanner/queue; the curator previews
+// and edits all content before clicking [ rebirth as thread ].
+//
+// HUMAN APPROVAL GATE: identical to publishSignalAsThreadAction.
+export async function rebirthSignalAsThreadAction(
+  input: RebirthSignalInput,
+): Promise<{ threadSlug: string } | { error: string }> {
+  return rebirthSignalAsThread(input);
 }
 
 // Curator action — publish a recovered signal as a SWIM thread.
