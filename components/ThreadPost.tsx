@@ -64,6 +64,7 @@ function resolveTargetId(post: Post, isOP: boolean): string {
 export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) {
   const [reacted, setReacted] = useState<Record<string, boolean>>({});
   const [counts, setCounts] = useState<ReactionSet>({ ...post.reactions });
+  const [reactionError, setReactionError] = useState<string | null>(null);
 
   function toggleReaction(key: keyof ReactionSet) {
     const wasReacted = reacted[key];
@@ -79,14 +80,26 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
     if (!wasReacted) {
       const targetType = isOP ? 'thread' : 'reply';
       const targetId   = resolveTargetId(post, isOP);
-      // Fire-and-forget — UI is already updated optimistically
+
       addReactionAction({
         targetType,
         targetId,
         reactionType:    key,
         anonFingerprint: getFingerprint(),
-      }).catch((err) => {
-        console.error('[reaction]', err);
+      }).then((result) => {
+        if ('error' in result) {
+          // Revert the optimistic update and surface the error
+          setReacted((prev) => ({ ...prev, [key]: false }));
+          setCounts((prev) => ({ ...prev, [key]: Math.max(0, prev[key] - 1) }));
+          setReactionError('signal lost — try again');
+          setTimeout(() => setReactionError(null), 3500);
+        }
+      }).catch(() => {
+        // Network failure — revert and inform
+        setReacted((prev) => ({ ...prev, [key]: false }));
+        setCounts((prev) => ({ ...prev, [key]: Math.max(0, prev[key] - 1) }));
+        setReactionError('signal lost — try again');
+        setTimeout(() => setReactionError(null), 3500);
       });
     }
   }
@@ -138,6 +151,13 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
           </button>
         ))}
       </div>
+
+      {/* Reaction error */}
+      {reactionError && (
+        <div className="mt-2 text-[12px] uppercase tracking-[0.16em] text-red-400/65">
+          › {reactionError}
+        </div>
+      )}
 
       {/* Post permalink (imageboard style) */}
       <div className="post-permalink">

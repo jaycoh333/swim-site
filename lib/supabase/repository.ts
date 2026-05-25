@@ -283,16 +283,18 @@ export async function createThread(
     .slice(0, 60)}`;
 
   const db = getDb()!;
+  const now = new Date().toISOString();
   const { data, error } = await db
     .from('threads')
     .insert({
       slug,
-      title:         input.title,
-      body:          input.body,
-      category:      input.category,
-      author_handle: input.authorHandle,
-      author_mode:   input.authorMode,
-      tags:          input.tags ?? [],
+      title:            input.title,
+      body:             input.body,
+      category:         input.category,
+      author_handle:    input.authorHandle,
+      author_mode:      input.authorMode,
+      tags:             input.tags ?? [],
+      last_activity_at: now,
     })
     .select('slug')
     .single();
@@ -328,12 +330,12 @@ export async function createReply(
   const { data, error } = await db
     .from('replies')
     .insert({
-      thread_id:    threadRow.id,
-      body:         input.body,
+      thread_id:     threadRow.id,
+      body:          input.body,
       author_handle: input.authorHandle,
-      author_mode:  input.authorMode,
-      post_number:  postNumber,
-      reply_to_id:  input.replyToId ?? null,
+      author_mode:   input.authorMode,
+      post_number:   postNumber,
+      reply_to_id:   input.replyToId ?? null,
     })
     .select('id')
     .single();
@@ -342,6 +344,22 @@ export async function createReply(
     console.error('[repository] createReply:', error.message);
     return { error: error.message };
   }
+
+  // Bump thread metadata so the thread sorts to top and shows the correct count.
+  const now = new Date().toISOString();
+  const { error: updateErr } = await db
+    .from('threads')
+    .update({
+      reply_count:      (threadRow.reply_count ?? 0) + 1,
+      last_activity_at: now,
+    })
+    .eq('id', threadRow.id);
+
+  if (updateErr) {
+    // Non-fatal — reply was saved; metadata update failed.
+    console.error('[repository] createReply (thread update):', updateErr.message);
+  }
+
   return { id: data.id };
 }
 
