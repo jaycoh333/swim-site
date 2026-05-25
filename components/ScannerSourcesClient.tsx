@@ -6,6 +6,7 @@ import {
   createScannerSourceAction,
   updateScannerSourceAction,
   toggleScannerSourceAction,
+  fetchScannerSourceAction,
 } from '@/app/actions';
 import type { DbScannerSource, ScannerRiskLevel } from '@/lib/supabase/types';
 
@@ -43,6 +44,12 @@ const RISK_BG: Record<ScannerRiskLevel, string> = {
   high:   'rgba(255,107,107,0.08)',
 };
 
+type FetchState =
+  | null
+  | { status: 'pending' }
+  | { status: 'success'; title: string; signalId: string; url: string }
+  | { status: 'error'; message: string };
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -51,10 +58,10 @@ function StatusBar() {
   return (
     <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.012)] px-6 py-3 md:px-10">
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-[10px] uppercase tracking-[0.20em]">
-        <span style={{ color: '#86d46e' }}>◈ registry only</span>
-        <span className="text-crt/35">◈ no fetchers connected</span>
-        <span className="text-crt/35">◈ human approval required at every stage</span>
-        <span className="text-crt/35">◈ enabling a source does not trigger scanning</span>
+        <span style={{ color: '#86d46e' }}>◈ manual fetch only — one page per call</span>
+        <span className="text-crt/35">◈ no automated crawl</span>
+        <span className="text-crt/35">◈ curator review required before any signal goes public</span>
+        <span className="text-crt/35">◈ raw html is never stored</span>
       </div>
     </div>
   );
@@ -302,13 +309,16 @@ interface SourceRowProps {
   source:     DbScannerSource;
   onToggled:  (id: string, enabled: boolean) => void;
   onUpdated:  (updated: DbScannerSource) => void;
+  onFetched:  (id: string, scannedAt: string) => void;
 }
 
-function SourceRow({ source, onToggled, onUpdated }: SourceRowProps) {
+function SourceRow({ source, onToggled, onUpdated, onFetched }: SourceRowProps) {
   const [isEditing, setIsEditing]   = useState(false);
   const [isPending, startTransition] = useTransition();
   const [togglePending, startToggle] = useTransition();
+  const [fetchPending, startFetch]   = useTransition();
   const [editError, setEditError]   = useState<string | null>(null);
+  const [fetchState, setFetchState] = useState<FetchState>(null);
 
   const accentColor = RISK_COLORS[source.risk_level];
 
@@ -359,6 +369,22 @@ function SourceRow({ source, onToggled, onUpdated }: SourceRowProps) {
       setIsEditing(false);
     });
   }
+
+  function handleFetch() {
+    setFetchState({ status: 'pending' });
+    startFetch(async () => {
+      const result = await fetchScannerSourceAction(source.id);
+      if ('error' in result) {
+        setFetchState({ status: 'error', message: result.error });
+        return;
+      }
+      const scannedAt = new Date().toISOString();
+      setFetchState({ status: 'success', title: result.title, signalId: result.signalId, url: result.url });
+      onFetched(source.id, scannedAt);
+    });
+  }
+
+  const canFetch = source.enabled && Boolean(source.base_url);
 
   return (
     <div
@@ -417,6 +443,17 @@ function SourceRow({ source, onToggled, onUpdated }: SourceRowProps) {
               >
                 edit ▸
               </button>
+              {canFetch && (
+                <button
+                  onClick={handleFetch}
+                  disabled={fetchPending || fetchState?.status === 'pending'}
+                  className="border px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] transition-colors disabled:opacity-40"
+                  style={{ borderColor: 'rgba(134,212,110,0.22)', color: 'rgba(134,212,110,0.65)' }}
+                  title="Fetch base URL — one page only, no crawl"
+                >
+                  {fetchPending || fetchState?.status === 'pending' ? '↯ fetching...' : '↯ fetch'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -429,12 +466,68 @@ function SourceRow({ source, onToggled, onUpdated }: SourceRowProps) {
               last scanned:{' '}
               {source.last_scanned_at
                 ? new Date(source.last_scanned_at).toLocaleDateString()
-                : 'never — no fetchers connected'}
+                : 'never'}
             </span>
             {source.attribution_rules && (
               <span className="truncate max-w-[40ch]">attr: {source.attribution_rules.slice(0, 60)}{source.attribution_rules.length > 60 ? '…' : ''}</span>
             )}
           </div>
+
+          {/* Fetch result panel */}
+          {fetchState && fetchState.status !== 'pending' && (
+            <div
+              className="mt-3 border-t border-crt/8 pt-3"
+            >
+              {fetchState.status === 'success' && (
+                <div
+                  className="px-4 py-3 text-[11px]"
+                  style={{ background: 'rgba(134,212,110,0.04)', border: '1px solid rgba(134,212,110,0.12)' }}
+                >
+                  <div className="mb-1 text-[9px] uppercase tracking-[0.22em]" style={{ color: '#86d46e' }}>
+                    ✓ signal queued — pending curator review
+                  </div>
+                  <div className="font-mono text-[11px] tracking-[0.04em] text-crt/70 mb-1 truncate">
+                    {fetchState.title}
+                  </div>
+                  <div className="text-[9px] tracking-[0.06em] text-crt/28 mb-2 truncate">
+                    {fetchState.url}
+                  </div>
+                  <a
+                    href="/scanner/queue"
+                    className="text-[9px] uppercase tracking-[0.18em] transition-colors"
+                    style={{ color: 'rgba(134,212,110,0.55)' }}
+                  >
+                    view in queue →
+                  </a>
+                  <button
+                    onClick={() => setFetchState(null)}
+                    className="ml-4 text-[9px] uppercase tracking-[0.16em] text-crt/25 hover:text-crt/45 transition-colors"
+                  >
+                    dismiss
+                  </button>
+                </div>
+              )}
+              {fetchState.status === 'error' && (
+                <div
+                  className="px-4 py-3 text-[11px]"
+                  style={{ background: 'rgba(255,107,107,0.04)', border: '1px solid rgba(255,107,107,0.12)' }}
+                >
+                  <div className="mb-1 text-[9px] uppercase tracking-[0.22em] text-[#ff6b6b]/70">
+                    ✗ fetch failed
+                  </div>
+                  <div className="font-mono text-[10px] tracking-[0.04em] text-[#ff6b6b]/55">
+                    {fetchState.message}
+                  </div>
+                  <button
+                    onClick={() => setFetchState(null)}
+                    className="mt-2 text-[9px] uppercase tracking-[0.16em] text-crt/25 hover:text-crt/45 transition-colors"
+                  >
+                    dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -488,6 +581,10 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
   function handleUpdated(updated: DbScannerSource) {
     setSources((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     router.refresh();
+  }
+
+  function handleFetched(id: string, scannedAt: string) {
+    setSources((prev) => prev.map((s) => (s.id === id ? { ...s, last_scanned_at: scannedAt } : s)));
   }
 
   function handleAdd(form: SourceFormState) {
@@ -665,6 +762,7 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
                           source={source}
                           onToggled={handleToggled}
                           onUpdated={handleUpdated}
+                          onFetched={handleFetched}
                         />
                       ))}
                     </div>
@@ -677,10 +775,10 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
           {/* ── Footer note ── */}
           <div className="border-t border-crt/8 px-6 py-5 md:px-10">
             <div className="grid gap-1.5 text-[10px] uppercase tracking-[0.16em] text-crt/22 sm:grid-cols-2">
-              <div>◈ registry only — no automated scanning is running</div>
-              <div>◈ enabling a source flags it for future pipeline use only</div>
-              <div>◈ all signal recovery requires curator approval</div>
-              <div>◈ no content is published without human review</div>
+              <div>◈ manual fetch only — one page per click, no crawl</div>
+              <div>◈ raw html is discarded — only title/description/snippet stored</div>
+              <div>◈ all fetched signals enter pending queue for curator review</div>
+              <div>◈ no signal is published without explicit curator approval</div>
             </div>
           </div>
         </div>

@@ -838,6 +838,37 @@ export interface UpdateScannerSourceInput {
   attribution_rules?: string | null;
 }
 
+export async function getScannerSource(id: string): Promise<DbScannerSource | undefined> {
+  if (!hasSupabase) return SCANNER_SOURCES_SEED.find((s) => s.id === id);
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('scanner_sources')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error || !data) {
+    console.error('[repository] getScannerSource:', error?.message);
+    return SCANNER_SOURCES_SEED.find((s) => s.id === id);
+  }
+  return data as DbScannerSource;
+}
+
+export async function updateScannerSourceLastScanned(id: string): Promise<void> {
+  if (!hasSupabase) return;
+
+  const db = getDb()!;
+  const { error } = await db
+    .from('scanner_sources')
+    .update({ last_scanned_at: new Date().toISOString() })
+    .eq('id', id);
+
+  if (error) {
+    console.error('[repository] updateScannerSourceLastScanned:', error.message);
+  }
+}
+
 export async function getScannerSources(): Promise<DbScannerSource[]> {
   if (!hasSupabase) return SCANNER_SOURCES_SEED;
 
