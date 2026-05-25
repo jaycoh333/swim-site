@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed:source-pack": "tsx scripts/seed-source-pack.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.1",
