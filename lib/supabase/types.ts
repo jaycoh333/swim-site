@@ -3,7 +3,10 @@
 // Use these types with createClient<Database>() for full type safety.
 // ---------------------------------------------------------------------------
 
-export type AuthorMode       = 'anon' | 'ghost';
+export type AuthorMode          = 'anon' | 'ghost';
+export type ScannerSourceType   = 'archive' | 'forum' | 'imageboard' | 'bbs' | 'reddit' | 'pastebin' | 'other';
+export type ScannerRiskLevel    = 'low' | 'medium' | 'high';
+export type ScannerRefreshCadence = 'daily' | 'weekly' | 'monthly' | 'manual' | 'disabled';
 export type TargetType       = 'thread' | 'reply';
 export type ReactionType     = 'echo' | 'dive' | 'ripple' | 'witness' | 'signal';
 export type ThreadBadge      = 'REDACTED' | 'RECOVERED' | 'UNVERIFIED' | 'WITNESSED' | 'LEAKED MEMORY' | 'DEAD NODE' | 'ARCHIVIST PICK' | 'SIGNAL ACTIVE';
@@ -147,6 +150,51 @@ export interface DbRecoveredSignal {
 //   -- taken 2024-01-15; original post was deleted by 2024-03-01"
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Scanner source registry — tracks candidate sources for future signal recovery.
+//
+// STATUS: REGISTRY ONLY — no automated fetchers connected.
+// Curators manage this list. All sources start enabled=false.
+//
+// Migration SQL:
+//
+//   CREATE TABLE IF NOT EXISTS scanner_sources (
+//     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+//     name              TEXT        NOT NULL,
+//     source_type       TEXT        NOT NULL DEFAULT 'other',
+//     base_url          TEXT,
+//     description       TEXT,
+//     category_focus    TEXT[]      NOT NULL DEFAULT '{}',
+//     risk_level        TEXT        NOT NULL DEFAULT 'low',
+//     refresh_cadence   TEXT,
+//     attribution_rules TEXT,
+//     enabled           BOOLEAN     NOT NULL DEFAULT false,
+//     last_scanned_at   TIMESTAMPTZ,
+//     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+//   );
+//
+// ---------------------------------------------------------------------------
+
+export interface DbScannerSource {
+  id:                string;
+  name:              string;
+  source_type:       ScannerSourceType;
+  base_url:          string | null;
+  description:       string | null;
+  category_focus:    string[];
+  risk_level:        ScannerRiskLevel;
+  refresh_cadence:   string | null;
+  attribution_rules: string | null;
+  enabled:           boolean;
+  last_scanned_at:   string | null;
+  created_at:        string;
+}
+
+export type DbScannerSourceInsert = Omit<DbScannerSource, 'id' | 'created_at'> & {
+  id?:         string;
+  created_at?: string;
+};
+
 export type DbRecoveredSignalInsert = Omit<DbRecoveredSignal,
   'id' | 'created_at' | 'approved_at' | 'published_thread_id'
 > & {
@@ -259,6 +307,12 @@ export interface Database {
         Row: DbRecoveredSignal;
         Insert: DbRecoveredSignalInsert;
         Update: Partial<DbRecoveredSignalInsert>;
+        Relationships: [];
+      };
+      scanner_sources: {
+        Row: DbScannerSource;
+        Insert: DbScannerSourceInsert;
+        Update: Partial<DbScannerSourceInsert>;
         Relationships: [];
       };
     };

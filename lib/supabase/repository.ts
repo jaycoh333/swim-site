@@ -13,8 +13,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { mockDb } from '@/lib/mock-db';
 import type { Category, ThreadContent, Reply } from '@/lib/forum-types';
-import type { DbThread, DbReply, ReactionType, DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType } from './types';
+import type { DbThread, DbReply, ReactionType, DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType, DbScannerSource, ScannerRiskLevel } from './types';
 import { RECOVERED_SIGNAL_SEED } from '@/lib/recovered-signals-seed';
+import { SCANNER_SOURCES_SEED } from '@/lib/scanner-sources-seed';
 
 // ---------------------------------------------------------------------------
 // Untyped client — the repository casts results to our own DB types explicitly.
@@ -801,6 +802,132 @@ export async function updateCuratorNotes(
 
   if (error) {
     console.error('[repository] updateCuratorNotes:', error.message);
+    return { error: error.message };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Scanner source registry
+//
+// STATUS: REGISTRY ONLY — no automated fetchers connected.
+// These functions manage the list of candidate sources. Enabling a source
+// in this registry does NOT trigger any automated fetch — that is a future phase.
+// ---------------------------------------------------------------------------
+
+export interface CreateScannerSourceInput {
+  name:              string;
+  source_type:       string;
+  base_url?:         string;
+  description?:      string;
+  category_focus?:   string[];
+  risk_level?:       ScannerRiskLevel;
+  refresh_cadence?:  string;
+  attribution_rules?: string;
+}
+
+export interface UpdateScannerSourceInput {
+  id:                string;
+  name?:             string;
+  source_type?:      string;
+  base_url?:         string | null;
+  description?:      string | null;
+  category_focus?:   string[];
+  risk_level?:       ScannerRiskLevel;
+  refresh_cadence?:  string | null;
+  attribution_rules?: string | null;
+}
+
+export async function getScannerSources(): Promise<DbScannerSource[]> {
+  if (!hasSupabase) return SCANNER_SOURCES_SEED;
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('scanner_sources')
+    .select('*')
+    .order('risk_level', { ascending: true })
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('[repository] getScannerSources:', error.message);
+    return SCANNER_SOURCES_SEED;
+  }
+  return (data ?? []) as DbScannerSource[];
+}
+
+export async function createScannerSource(
+  input: CreateScannerSourceInput,
+): Promise<{ id: string } | { error: string }> {
+  if (!hasSupabase) {
+    return { id: `src-local-${Date.now()}` };
+  }
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('scanner_sources')
+    .insert({
+      name:              input.name,
+      source_type:       input.source_type ?? 'other',
+      base_url:          input.base_url ?? null,
+      description:       input.description ?? null,
+      category_focus:    input.category_focus ?? [],
+      risk_level:        input.risk_level ?? 'low',
+      refresh_cadence:   input.refresh_cadence ?? null,
+      attribution_rules: input.attribution_rules ?? null,
+      enabled:           false,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('[repository] createScannerSource:', error.message);
+    return { error: error.message };
+  }
+  return { id: data.id };
+}
+
+export async function updateScannerSource(
+  input: UpdateScannerSourceInput,
+): Promise<{ ok: true } | { error: string }> {
+  if (!hasSupabase) return { ok: true };
+
+  const db = getDb()!;
+  const patch: Record<string, unknown> = {};
+  if (input.name             !== undefined) patch.name              = input.name;
+  if (input.source_type      !== undefined) patch.source_type       = input.source_type;
+  if (input.base_url         !== undefined) patch.base_url          = input.base_url;
+  if (input.description      !== undefined) patch.description       = input.description;
+  if (input.category_focus   !== undefined) patch.category_focus    = input.category_focus;
+  if (input.risk_level       !== undefined) patch.risk_level        = input.risk_level;
+  if (input.refresh_cadence  !== undefined) patch.refresh_cadence   = input.refresh_cadence;
+  if (input.attribution_rules !== undefined) patch.attribution_rules = input.attribution_rules;
+
+  const { error } = await db
+    .from('scanner_sources')
+    .update(patch)
+    .eq('id', input.id);
+
+  if (error) {
+    console.error('[repository] updateScannerSource:', error.message);
+    return { error: error.message };
+  }
+  return { ok: true };
+}
+
+export async function toggleScannerSource(
+  id:      string,
+  enabled: boolean,
+): Promise<{ ok: true } | { error: string }> {
+  if (!hasSupabase) return { ok: true };
+
+  const db = getDb()!;
+  const { error } = await db
+    .from('scanner_sources')
+    .update({ enabled })
+    .eq('id', id);
+
+  if (error) {
+    console.error('[repository] toggleScannerSource:', error.message);
     return { error: error.message };
   }
   return { ok: true };

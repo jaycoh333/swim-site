@@ -19,6 +19,10 @@ import {
   publishSignalAsThread,
   rebirthSignalAsThread,
   createRecoveredSignal,
+  getScannerSources,
+  createScannerSource,
+  updateScannerSource,
+  toggleScannerSource,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
@@ -26,6 +30,8 @@ import {
   type UpdateSignalStatusInput,
   type CreateRecoveredSignalInput,
   type RebirthSignalInput,
+  type CreateScannerSourceInput,
+  type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
 
 export async function createThreadAction(
@@ -113,6 +119,38 @@ export async function createRecoveredSignalAction(
   input: CreateRecoveredSignalInput,
 ): Promise<{ id: string } | { error: string }> {
   return createRecoveredSignal(input);
+}
+
+// ---------------------------------------------------------------------------
+// Scanner source registry — curator-only CRUD.
+//
+// STATUS: REGISTRY ONLY — enabling a source does NOT trigger any automated
+// fetch. These actions manage the registry of candidate sources only.
+// ---------------------------------------------------------------------------
+
+export async function getScannerSourcesAction(): Promise<
+  import('@/lib/supabase/types').DbScannerSource[]
+> {
+  return getScannerSources();
+}
+
+export async function createScannerSourceAction(
+  input: CreateScannerSourceInput,
+): Promise<{ id: string } | { error: string }> {
+  return createScannerSource(input);
+}
+
+export async function updateScannerSourceAction(
+  input: UpdateScannerSourceInput,
+): Promise<{ ok: true } | { error: string }> {
+  return updateScannerSource(input);
+}
+
+export async function toggleScannerSourceAction(
+  id:      string,
+  enabled: boolean,
+): Promise<{ ok: true } | { error: string }> {
+  return toggleScannerSource(id, enabled);
 }
 
 // Curator action — rebirth a recovered signal as a SWIM thread using
