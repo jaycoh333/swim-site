@@ -1,4 +1,13 @@
+import Link from 'next/link';
+
 const CONTRACT = '2E4rR7pRVsvcnsyZcoYZqqDP6dcqMgrYAcnw';
+
+const INTERNAL_LINKS = [
+  { href: '/archive',  label: 'ARCHIVE'  },
+  { href: '/threads',  label: 'THREADS'  },
+  { href: '/scanner',  label: 'SCANNER'  },
+  { href: '/signal',   label: 'SIGNAL'   },
+] as const;
 
 const SIGNAL_CHANNELS = [
   { label: 'SW1M.ME',      href: 'https://www.sw1m.me',          note: 'archive access' },
@@ -11,6 +20,18 @@ export function NetworkFooter() {
   return (
     <div className="network-footer">
       <div className="network-footer-inner">
+
+        {/* Internal navigation */}
+        <div className="network-footer-label">SECTIONS</div>
+        <div className="network-footer-links">
+          {INTERNAL_LINKS.map(({ href, label }) => (
+            <Link key={href} href={href} className="network-footer-link">
+              [ {label} ]
+            </Link>
+          ))}
+        </div>
+
+        <div className="analog-rule my-3" />
 
         {/* Section header */}
         <div className="network-footer-label">SIGNAL CHANNELS</div>

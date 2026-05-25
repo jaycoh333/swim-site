@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { href: '/threads',              label: 'THREADS' },
   { href: '/threads?compose=true', label: 'POST' },
   { href: '/signal',               label: 'SIGNAL' },
+  { href: '/scanner',              label: 'SCANNER' },
 ];
 
 const MOBILE_NAV_LINKS = [
@@ -19,6 +20,7 @@ const MOBILE_NAV_LINKS = [
   { href: '/threads',              label: 'THREADS' },
   { href: '/threads?compose=true', label: 'POST A STORY' },
   { href: '/signal',               label: 'SIGNAL' },
+  { href: '/scanner',              label: 'SCANNER' },
 ];
 
 const STATUS_LINES = [
