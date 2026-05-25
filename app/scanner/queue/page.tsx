@@ -27,8 +27,10 @@ export default async function QueuePage() {
 
   // Fetch all status buckets in parallel.
   // In production these queries use the service role key (bypasses RLS).
-  const [pending, approved, archived, rejected] = await Promise.all([
+  const [pending, reviewing, rebirthReady, approved, archived, rejected] = await Promise.all([
     getRecoveredSignals('pending'),
+    getRecoveredSignals('reviewing'),
+    getRecoveredSignals('rebirth-ready'),
     getRecoveredSignals('approved'),
     getRecoveredSignals('archived'),
     getRecoveredSignals('rejected'),
@@ -37,6 +39,8 @@ export default async function QueuePage() {
   return (
     <SignalQueueClient
       pending={pending}
+      reviewing={reviewing}
+      rebirthReady={rebirthReady}
       approved={approved}
       archived={archived}
       rejected={rejected}

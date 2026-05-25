@@ -18,25 +18,27 @@ const SOURCE_TYPES: { value: SignalSourceType; label: string }[] = [
 ];
 
 interface FormState {
-  title:      string;
-  summary:    string;
-  category:   string;
-  sourceName: string;
-  sourceUrl:  string;
-  sourceType: SignalSourceType;
-  tags:       string;
-  _hp:        string; // honeypot — always stays empty for real users
+  title:          string;
+  summary:        string;
+  category:       string;
+  sourceName:     string;
+  sourceUrl:      string;
+  sourceType:     SignalSourceType;
+  tags:           string;
+  sourceImageUrl: string;
+  _hp:            string; // honeypot — always stays empty for real users
 }
 
 const EMPTY: FormState = {
-  title:      '',
-  summary:    '',
-  category:   'Paranormal',
-  sourceName: '',
-  sourceUrl:  '',
-  sourceType: 'other',
-  tags:       '',
-  _hp:        '',
+  title:          '',
+  summary:        '',
+  category:       'Paranormal',
+  sourceName:     '',
+  sourceUrl:      '',
+  sourceType:     'other',
+  tags:           '',
+  sourceImageUrl: '',
+  _hp:            '',
 };
 
 function validate(f: FormState): string | null {
@@ -83,14 +85,15 @@ export function SubmitSignalClient() {
         .filter(Boolean);
 
       const result = await createPublicSignalAction({
-        title:      form.title.trim(),
-        summary:    form.summary.trim(),
-        category:   form.category,
-        sourceName: form.sourceName.trim(),
-        sourceUrl:  form.sourceUrl.trim() || undefined,
-        sourceType: form.sourceType,
-        tags:       tags.length > 0 ? tags : undefined,
-        _hp:        form._hp,
+        title:          form.title.trim(),
+        summary:        form.summary.trim(),
+        category:       form.category,
+        sourceName:     form.sourceName.trim(),
+        sourceUrl:      form.sourceUrl.trim() || undefined,
+        sourceType:     form.sourceType,
+        tags:           tags.length > 0 ? tags : undefined,
+        sourceImageUrl: form.sourceImageUrl.trim() || undefined,
+        _hp:            form._hp,
       });
 
       if ('error' in result) {
@@ -289,6 +292,26 @@ export function SubmitSignalClient() {
                     className={inputBase}
                   />
                 </div>
+              </div>
+
+              {/* Evidence URL */}
+              <div>
+                <label htmlFor="signal-evidence-url" className={labelBase}>
+                  evidence url{' '}
+                  <span className="text-crt/22">— optional · archived screenshot or capture link</span>
+                </label>
+                <input
+                  id="signal-evidence-url"
+                  type="url"
+                  value={form.sourceImageUrl}
+                  onChange={set('sourceImageUrl')}
+                  placeholder="https://web.archive.org/... or archive.ph/..."
+                  maxLength={500}
+                  className={inputBase}
+                />
+                <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-crt/22">
+                  ◈ submit links only — do not upload or paste copyrighted text
+                </p>
               </div>
 
               {/* Tags */}

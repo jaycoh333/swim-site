@@ -503,16 +503,21 @@ export async function updateSignalStatus(
 }
 
 export interface CreateRecoveredSignalInput {
-  category:           string;
-  title:              string;
-  summary:            string;
-  sourceName:         string;
-  sourceUrl?:         string;
-  sourceType:         SignalSourceType;
-  anomalyScore:       number;
-  tags?:              string[];
-  discoveredAt?:      string;
-  submittedPublicly?: boolean;
+  category:             string;
+  title:                string;
+  summary:              string;
+  sourceName:           string;
+  sourceUrl?:           string;
+  sourceType:           SignalSourceType;
+  anomalyScore:         number;
+  tags?:                string[];
+  discoveredAt?:        string;
+  submittedPublicly?:   boolean;
+  sourceImageUrl?:      string;
+  mediaUrl?:            string;
+  mediaType?:           string;
+  attributionText?:     string;
+  sourceCaptureNotes?:  string;
 }
 
 // ---------------------------------------------------------------------------
@@ -538,8 +543,33 @@ function formatSignalBody(sig: DbRecoveredSignal): string {
     sig.summary,
   ];
 
+  // Source attribution
+  if (sig.attribution_text) {
+    lines.push('', `Attribution: ${sig.attribution_text}`);
+  }
   if (sig.source_url) {
-    lines.push('', `source: ${sig.source_url}`);
+    lines.push(`Source: ${sig.source_url}`);
+  }
+
+  // Evidence links
+  const hasEvidence = sig.source_image_url || sig.media_url;
+  if (hasEvidence) {
+    lines.push('', '> Evidence:');
+    if (sig.source_image_url) {
+      lines.push(`> Screenshot / capture: ${sig.source_image_url}`);
+    }
+    if (sig.media_url) {
+      lines.push(`> Media (${sig.media_type ?? 'file'}): ${sig.media_url}`);
+    }
+  }
+
+  // Capture notes
+  if (sig.source_capture_notes) {
+    lines.push('', `> Capture notes: ${sig.source_capture_notes}`);
+  }
+
+  if (sig.tags && sig.tags.length > 0) {
+    lines.push('', `tags: ${sig.tags.join(' · ')}`);
   }
 
   lines.push(
@@ -750,6 +780,32 @@ export async function getScannerStats(): Promise<ScannerStats> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Recovered signals — curator notes (curator only)
+//
+// curator_notes is a local-only annotation field. It is never shown publicly.
+// Requires the curator_notes TEXT column — see schema migration note in types.ts.
+// ---------------------------------------------------------------------------
+
+export async function updateCuratorNotes(
+  id:    string,
+  notes: string,
+): Promise<{ ok: true } | { error: string }> {
+  if (!hasSupabase) return { ok: true };
+
+  const db = getDb()!;
+  const { error } = await db
+    .from('recovered_signals')
+    .update({ curator_notes: notes })
+    .eq('id', id);
+
+  if (error) {
+    console.error('[repository] updateCuratorNotes:', error.message);
+    return { error: error.message };
+  }
+  return { ok: true };
+}
+
 // SCRAPER INTEGRATION POINT:
 //   Future automated scrapers call this to submit signals for curator review.
 //   All signals are inserted with status='pending' regardless of the caller.
@@ -764,17 +820,22 @@ export async function createRecoveredSignal(
   const { data, error } = await db
     .from('recovered_signals')
     .insert({
-      category:      input.category,
-      title:         input.title,
-      summary:       input.summary,
-      source_name:   input.sourceName,
-      source_url:    input.sourceUrl ?? null,
-      source_type:   input.sourceType,
-      status:             'pending',
-      anomaly_score:      input.anomalyScore,
-      tags:               input.tags ?? [],
-      discovered_at:      input.discoveredAt ?? new Date().toISOString(),
-      submitted_publicly: input.submittedPublicly ?? false,
+      category:             input.category,
+      title:                input.title,
+      summary:              input.summary,
+      source_name:          input.sourceName,
+      source_url:           input.sourceUrl ?? null,
+      source_type:          input.sourceType,
+      status:               'pending',
+      anomaly_score:        input.anomalyScore,
+      tags:                 input.tags ?? [],
+      discovered_at:        input.discoveredAt ?? new Date().toISOString(),
+      submitted_publicly:   input.submittedPublicly ?? false,
+      source_image_url:     input.sourceImageUrl ?? null,
+      media_url:            input.mediaUrl ?? null,
+      media_type:           input.mediaType ?? null,
+      attribution_text:     input.attributionText ?? null,
+      source_capture_notes: input.sourceCaptureNotes ?? null,
     })
     .select('id')
     .single();

@@ -28,26 +28,38 @@ const SOURCE_TYPES: { value: SignalSourceType; label: string }[] = [
   { value: 'other',      label: 'Other'          },
 ];
 
+const MEDIA_TYPES = ['image', 'video', 'document', 'audio', 'screenshot', 'other'] as const;
+
 interface FormState {
-  title:       string;
-  summary:     string;
-  category:    string;
-  sourceName:  string;
-  sourceUrl:   string;
-  sourceType:  SignalSourceType;
-  anomalyScore: string;
-  tags:        string;
+  title:              string;
+  summary:            string;
+  category:           string;
+  sourceName:         string;
+  sourceUrl:          string;
+  sourceType:         SignalSourceType;
+  anomalyScore:       string;
+  tags:               string;
+  sourceImageUrl:     string;
+  mediaUrl:           string;
+  mediaType:          string;
+  attributionText:    string;
+  sourceCaptureNotes: string;
 }
 
 const EMPTY: FormState = {
-  title:        '',
-  summary:      '',
-  category:     'Paranormal',
-  sourceName:   '',
-  sourceUrl:    '',
-  sourceType:   'other',
-  anomalyScore: '5',
-  tags:         '',
+  title:              '',
+  summary:            '',
+  category:           'Paranormal',
+  sourceName:         '',
+  sourceUrl:          '',
+  sourceType:         'other',
+  anomalyScore:       '5',
+  tags:               '',
+  sourceImageUrl:     '',
+  mediaUrl:           '',
+  mediaType:          'image',
+  attributionText:    '',
+  sourceCaptureNotes: '',
 };
 
 interface IntakeFormClientProps {
@@ -92,14 +104,19 @@ export function IntakeFormClient({ onSuccess }: IntakeFormClientProps) {
         .filter(Boolean);
 
       const result = await createRecoveredSignalAction({
-        title:        form.title.trim(),
-        summary:      form.summary.trim(),
-        category:     form.category,
-        sourceName:   form.sourceName.trim(),
-        sourceUrl:    form.sourceUrl.trim() || undefined,
-        sourceType:   form.sourceType,
-        anomalyScore: parseInt(form.anomalyScore, 10),
-        tags:         tags.length > 0 ? tags : undefined,
+        title:              form.title.trim(),
+        summary:            form.summary.trim(),
+        category:           form.category,
+        sourceName:         form.sourceName.trim(),
+        sourceUrl:          form.sourceUrl.trim() || undefined,
+        sourceType:         form.sourceType,
+        anomalyScore:       parseInt(form.anomalyScore, 10),
+        tags:               tags.length > 0 ? tags : undefined,
+        sourceImageUrl:     form.sourceImageUrl.trim() || undefined,
+        mediaUrl:           form.mediaUrl.trim() || undefined,
+        mediaType:          form.mediaUrl.trim() ? form.mediaType : undefined,
+        attributionText:    form.attributionText.trim() || undefined,
+        sourceCaptureNotes: form.sourceCaptureNotes.trim() || undefined,
       });
 
       if ('error' in result) {
@@ -210,6 +227,89 @@ export function IntakeFormClient({ onSuccess }: IntakeFormClientProps) {
             placeholder="https://web.archive.org/..."
             maxLength={500}
             className={inputBase}
+          />
+        </div>
+      </div>
+
+      {/* Evidence section */}
+      <div className="border border-crt/12 bg-[rgba(134,212,110,0.012)] px-4 py-4">
+        <div className="mb-3 text-[10px] uppercase tracking-[0.22em] text-crt/40">
+          evidence / media <span className="ml-2 text-crt/22">— all optional · submit URLs only, no file uploads</span>
+        </div>
+
+        {/* Source image URL + media URL */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={labelBase}>
+              screenshot / capture url <span className="text-crt/22">— optional</span>
+            </label>
+            <input
+              type="url"
+              value={form.sourceImageUrl}
+              onChange={set('sourceImageUrl')}
+              placeholder="https://i.imgur.com/... or web.archive.org/..."
+              maxLength={500}
+              className={inputBase}
+            />
+          </div>
+          <div>
+            <label className={labelBase}>
+              media url <span className="text-crt/22">— optional</span>
+            </label>
+            <input
+              type="url"
+              value={form.mediaUrl}
+              onChange={set('mediaUrl')}
+              placeholder="https://..."
+              maxLength={500}
+              className={inputBase}
+            />
+          </div>
+        </div>
+
+        {/* Media type (only shown when mediaUrl is set) */}
+        {form.mediaUrl.trim() && (
+          <div className="mt-3">
+            <label className={labelBase}>media type</label>
+            <select
+              value={form.mediaType}
+              onChange={set('mediaType')}
+              className={`${inputBase} cursor-pointer`}
+            >
+              {MEDIA_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Attribution */}
+        <div className="mt-3">
+          <label className={labelBase}>
+            attribution <span className="text-crt/22">— credit line for original source</span>
+          </label>
+          <input
+            type="text"
+            value={form.attributionText}
+            onChange={set('attributionText')}
+            placeholder='e.g. "Original post by u/xyz on r/Paranormal, archived Jan 2024"'
+            maxLength={500}
+            className={inputBase}
+          />
+        </div>
+
+        {/* Capture notes */}
+        <div className="mt-3">
+          <label className={labelBase}>
+            capture notes <span className="text-crt/22">— curator-only context on how/when evidence was saved</span>
+          </label>
+          <textarea
+            value={form.sourceCaptureNotes}
+            onChange={set('sourceCaptureNotes')}
+            placeholder="e.g. Wayback snapshot taken 2024-01-15; original post deleted by 2024-03-01"
+            rows={2}
+            maxLength={1000}
+            className={`${inputBase} resize-none`}
           />
         </div>
       </div>

@@ -13,7 +13,7 @@ export type GhostLabel       = 'GHOST' | 'NODE' | 'SIGNAL IDENTITY' | 'ARCHIVE H
 export type ReportReason     = 'spam' | 'illegal_content' | 'doxxing' | 'harassment' | 'off_topic' | 'other';
 export type ReportStatus     = 'pending' | 'reviewed' | 'dismissed';
 export type ModerationAction        = 'hide' | 'pin' | 'unpin' | 'flag' | 'restore' | 'redact';
-export type RecoveredSignalStatus   = 'pending' | 'approved' | 'archived' | 'rejected';
+export type RecoveredSignalStatus   = 'pending' | 'reviewing' | 'rebirth-ready' | 'approved' | 'archived' | 'rejected';
 export type SignalSourceType        = 'reddit' | 'pastebin' | 'wayback' | 'imageboard' | 'irc' | 'forum' | 'other';
 
 // ---------------------------------------------------------------------------
@@ -106,8 +106,46 @@ export interface DbRecoveredSignal {
   discovered_at:        string;
   approved_at:          string | null;
   published_thread_id:  string | null;
-  submitted_publicly?:  boolean;
+  submitted_publicly?:    boolean;
+  curator_notes?:         string | null;
+  source_image_url?:      string | null;
+  media_url?:             string | null;
+  media_type?:            string | null;
+  attribution_text?:      string | null;
+  source_capture_notes?:  string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Schema migration notes
+//
+// The following columns were added after initial schema creation:
+//
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS curator_notes TEXT;
+//
+//   -- Status enum extended to include new workflow stages:
+//   -- (Supabase text columns accept these values; no enum type used.)
+//   -- 'reviewing'     — signal is actively being reviewed by a curator
+//   -- 'rebirth-ready' — curator has cleared it for thread creation
+//   -- (existing: 'pending' | 'approved' | 'archived' | 'rejected')
+//
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS source_image_url TEXT;
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS media_url TEXT;
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS media_type TEXT;
+//   -- media_type is a free-text hint: 'image', 'video', 'document', 'audio', etc.
+//
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS attribution_text TEXT;
+//   -- Human-readable credit line: "Original post by u/XYZ on r/Paranormal (archived)"
+//
+//   ALTER TABLE recovered_signals
+//     ADD COLUMN IF NOT EXISTS source_capture_notes TEXT;
+//   -- Curator notes about how/when evidence was captured, e.g. "Wayback snapshot
+//   -- taken 2024-01-15; original post was deleted by 2024-03-01"
+// ---------------------------------------------------------------------------
 
 export type DbRecoveredSignalInsert = Omit<DbRecoveredSignal,
   'id' | 'created_at' | 'approved_at' | 'published_thread_id'

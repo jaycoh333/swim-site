@@ -15,6 +15,7 @@ import {
   addReaction,
   reportContent,
   updateSignalStatus,
+  updateCuratorNotes,
   publishSignalAsThread,
   rebirthSignalAsThread,
   createRecoveredSignal,
@@ -53,6 +54,16 @@ export async function reportContentAction(
   return reportContent(input);
 }
 
+// Curator action — save local-only notes on a recovered signal.
+// curator_notes is never shown publicly. Requires the curator_notes column
+// (see schema migration note in lib/supabase/types.ts).
+export async function updateCuratorNotesAction(
+  id:    string,
+  notes: string,
+): Promise<{ ok: true } | { error: string }> {
+  return updateCuratorNotes(id, notes);
+}
+
 // Curator action — approve, archive, or reject a recovered signal.
 // Requires service role key (env: SUPABASE_SERVICE_ROLE_KEY).
 // TELEGRAM / X INTEGRATION POINT:
@@ -73,14 +84,15 @@ export async function updateSignalStatusAction(
 // SAFETY GATE: no content is published from this path without a curator
 // approving the signal and then explicitly clicking [ publish to thread ].
 export async function createPublicSignalAction(input: {
-  title:      string;
-  summary:    string;
-  category:   string;
-  sourceName: string;
-  sourceUrl?: string;
-  sourceType: import('@/lib/supabase/types').SignalSourceType;
-  tags?:      string[];
-  _hp:        string;  // honeypot — must be empty string
+  title:           string;
+  summary:         string;
+  category:        string;
+  sourceName:      string;
+  sourceUrl?:      string;
+  sourceType:      import('@/lib/supabase/types').SignalSourceType;
+  tags?:           string[];
+  sourceImageUrl?: string;
+  _hp:             string;  // honeypot — must be empty string
 }): Promise<{ ok: true } | { error: string }> {
   // Honeypot: bots fill this. Return fake success so they think it worked.
   if (input._hp) return { ok: true };

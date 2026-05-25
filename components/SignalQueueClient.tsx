@@ -1,27 +1,24 @@
 'use client';
 
 /**
- * SignalQueueClient — curator console for recovered signal management.
+ * SignalQueueClient — curator review console for /scanner/queue.
  *
- * OPERATOR MODE: admin dashboard layout, readability-first.
- *   - Large admin cards (title 24px, summary 18px, meta 15px, buttons 15px)
- *   - Sticky toolbar: search + status tabs + category/source filters + sort
- *   - Two-column desktop layout: signal cards | queue stats + AI scanner panel
- *   - Filled action buttons: Approve (green) / Archive (blue) / Reject (red) / Rebirth (amber)
- *   - Rebirth panel: large edit form with full-width inputs
- *
- * HUMAN APPROVAL GATE:
- *   Nothing publishes automatically. Every status change and rebirth requires
- *   an explicit curator action.
+ * Admin-only. Readability-first layout.
+ * Nothing publishes without explicit curator action (human approval gate).
  */
 
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useState, useMemo, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { IntakeFormClient } from '@/components/IntakeFormClient';
+import { analyzeRecoveredSignal } from '@/lib/ai-analysis';
+import type { SignalAnalysis } from '@/lib/ai-analysis';
+import { computeDuplicateRisk } from '@/lib/duplicate-detection';
+import type { DuplicateRiskResult, RelatedSignal } from '@/lib/duplicate-detection';
 import {
   updateSignalStatusAction,
+  updateCuratorNotesAction,
   rebirthSignalAsThreadAction,
 } from '@/app/actions';
 import {
@@ -37,61 +34,86 @@ import type { DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType } from 
 // ---------------------------------------------------------------------------
 
 const STATUS_TABS: Array<{ key: RecoveredSignalStatus | 'all'; label: string }> = [
-  { key: 'all',      label: 'All'      },
-  { key: 'pending',  label: 'Pending'  },
-  { key: 'approved', label: 'Approved' },
-  { key: 'archived', label: 'Archived' },
-  { key: 'rejected', label: 'Rejected' },
+  { key: 'all',           label: 'All'           },
+  { key: 'pending',       label: 'Pending'       },
+  { key: 'reviewing',     label: 'Reviewing'     },
+  { key: 'rebirth-ready', label: 'Rebirth Ready' },
+  { key: 'approved',      label: 'Approved'      },
+  { key: 'archived',      label: 'Archived'      },
+  { key: 'rejected',      label: 'Rejected'      },
 ];
 
-const STATUS_SECTION_ORDER: RecoveredSignalStatus[] = ['pending', 'approved', 'archived', 'rejected'];
+const STATUS_SECTION_ORDER: RecoveredSignalStatus[] = [
+  'pending', 'reviewing', 'rebirth-ready', 'approved', 'archived', 'rejected',
+];
 
 const SECTION_LABELS: Record<RecoveredSignalStatus, string> = {
-  pending:  'Pending Review',
-  approved: 'Approved',
-  archived: 'Archived',
-  rejected: 'Rejected',
+  pending:         'Pending',
+  reviewing:       'Reviewing',
+  'rebirth-ready': 'Rebirth Ready',
+  approved:        'Approved',
+  archived:        'Archived',
+  rejected:        'Rejected',
 };
 
 const STATUS_COLORS: Record<RecoveredSignalStatus, string> = {
-  pending:  '#d7a85c',
-  approved: '#86d46e',
-  archived: '#6da8ff',
-  rejected: '#ff6b6b',
+  pending:         '#d7a85c',
+  reviewing:       '#4db8c8',
+  'rebirth-ready': '#c084fc',
+  approved:        '#86d46e',
+  archived:        '#6da8ff',
+  rejected:        '#ff6b6b',
 };
 
 const STATUS_BG: Record<RecoveredSignalStatus, string> = {
-  pending:  'rgba(215,168,92,0.10)',
-  approved: 'rgba(134,212,110,0.08)',
-  archived: 'rgba(109,168,255,0.08)',
-  rejected: 'rgba(255,107,107,0.07)',
+  pending:         'rgba(215,168,92,0.12)',
+  reviewing:       'rgba(77,184,200,0.10)',
+  'rebirth-ready': 'rgba(192,132,252,0.10)',
+  approved:        'rgba(134,212,110,0.10)',
+  archived:        'rgba(109,168,255,0.10)',
+  rejected:        'rgba(255,107,107,0.09)',
 };
 
 const STATUS_BORDER: Record<RecoveredSignalStatus, string> = {
-  pending:  'rgba(215,168,92,0.38)',
-  approved: 'rgba(134,212,110,0.35)',
-  archived: 'rgba(109,168,255,0.32)',
-  rejected: 'rgba(255,107,107,0.28)',
+  pending:         'rgba(215,168,92,0.40)',
+  reviewing:       'rgba(77,184,200,0.45)',
+  'rebirth-ready': 'rgba(192,132,252,0.45)',
+  approved:        'rgba(134,212,110,0.38)',
+  archived:        'rgba(109,168,255,0.35)',
+  rejected:        'rgba(255,107,107,0.30)',
 };
 
 const SOURCE_TYPE_LABELS: Record<SignalSourceType, string> = {
   reddit:     'Reddit',
   forum:      'Forum',
-  pastebin:   'Paste',
-  wayback:    'Wayback',
+  pastebin:   'Pastebin',
+  wayback:    'Wayback Machine',
   imageboard: 'Imageboard',
   irc:        'IRC',
   other:      'Other',
 };
 
-const REBIRTH_SCORE_THRESHOLD = 7;
+const REBIRTH_CHECKLIST: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'title',     label: 'Title is clear and cleaned up' },
+  { id: 'summary',   label: 'Summary is in my own words — not verbatim source text' },
+  { id: 'category',  label: 'Category is correct' },
+  { id: 'source',    label: 'Source name and type are confirmed' },
+  { id: 'duplicate', label: 'Checked for duplicates in the archive' },
+  { id: 'safe',      label: 'No PII, no illegal content, safe to publish' },
+];
+
+const DUPLICATE_RISK_COLORS: Record<DuplicateRiskResult['risk'], string> = {
+  low:    'rgba(134,212,110,0.55)',
+  medium: '#d7a85c',
+  high:   '#ff6b6b',
+};
 
 const AI_SCANNER_ROWS = [
-  { label: 'Mode',        value: 'Manual intake',   dim: false },
+  { label: 'Mode',         value: 'Manual intake',  dim: false },
   { label: 'Intelligence', value: 'Planned',         dim: true  },
-  { label: 'Sources',     value: 'Offline',          dim: true  },
-  { label: 'Approval',    value: 'Human required',   dim: false },
-  { label: 'Auto-post',   value: 'Never',            dim: false },
+  { label: 'Sources',      value: 'Offline',         dim: true  },
+  { label: 'Approval',     value: 'Human required',  dim: false },
+  { label: 'Auto-post',    value: 'Never',           dim: false },
 ];
 
 // ---------------------------------------------------------------------------
@@ -125,10 +147,30 @@ function buildPreviewBody(sig: DbRecoveredSignal): string {
     '',
     sig.summary,
   ];
-  if (sig.source_url) lines.push('', `source: ${sig.source_url}`);
+
+  if (sig.attribution_text) {
+    lines.push('', `Attribution: ${sig.attribution_text}`);
+  }
+  if (sig.source_url) lines.push(`Source: ${sig.source_url}`);
+
+  const hasEvidence = sig.source_image_url || sig.media_url;
+  if (hasEvidence) {
+    lines.push('', '> Evidence:');
+    if (sig.source_image_url) lines.push(`> Screenshot / capture: ${sig.source_image_url}`);
+    if (sig.media_url) lines.push(`> Media (${sig.media_type ?? 'file'}): ${sig.media_url}`);
+  }
+
+  if (sig.source_capture_notes) {
+    lines.push('', `> Capture notes: ${sig.source_capture_notes}`);
+  }
+
+  if (sig.tags.length > 0) {
+    lines.push('', `tags: ${sig.tags.join(' · ')}`);
+  }
+
   lines.push(
     '',
-    '[ curator note: add context about how this signal was found and why it matters — remove this line before the thread goes live ]',
+    '[ curator note: add context about how this signal was found and why it matters — remove this line before publishing ]',
   );
   return lines.join('\n');
 }
@@ -140,17 +182,17 @@ function buildPreviewBody(sig: DbRecoveredSignal): string {
 function AnomalyScore({ score }: { score: number }) {
   const color = score >= 8 ? '#ff6b6b' : score >= 6 ? '#d7a85c' : '#86d46e';
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex gap-[3px]">
+    <div className="flex items-center gap-2.5">
+      <div className="flex gap-[2px]">
         {Array.from({ length: 10 }, (_, i) => (
           <div
             key={i}
-            className="h-[18px] w-[10px]"
-            style={{ backgroundColor: i < score ? color : 'rgba(134,212,110,0.10)' }}
+            className="h-4 w-2.5"
+            style={{ backgroundColor: i < score ? color : 'rgba(134,212,110,0.12)' }}
           />
         ))}
       </div>
-      <span className="text-[15px] font-medium tabular-nums" style={{ color }}>
+      <span className="text-[16px] font-semibold tabular-nums" style={{ color }}>
         {score}/10
       </span>
     </div>
@@ -158,20 +200,23 @@ function AnomalyScore({ score }: { score: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// StatusBadge
+// StatusBadge — "Reborn" when approved + published
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status }: { status: RecoveredSignalStatus }) {
+function StatusBadge({ sig }: { sig: DbRecoveredSignal }) {
+  const isReborn = sig.status === 'approved' && Boolean(sig.published_thread_id);
+
+  const label  = isReborn ? 'Reborn' : SECTION_LABELS[sig.status];
+  const color  = isReborn ? '#c084fc' : STATUS_COLORS[sig.status];
+  const bg     = isReborn ? 'rgba(192,132,252,0.12)' : STATUS_BG[sig.status];
+  const border = isReborn ? 'rgba(192,132,252,0.45)' : STATUS_BORDER[sig.status];
+
   return (
     <span
-      className="px-2.5 py-1 text-[12px] font-medium uppercase tracking-[0.08em]"
-      style={{
-        background: STATUS_BG[status],
-        border:     `1px solid ${STATUS_BORDER[status]}`,
-        color:      STATUS_COLORS[status],
-      }}
+      className="px-3 py-1 text-[13px] font-semibold"
+      style={{ background: bg, border: `1px solid ${border}`, color }}
     >
-      {status}
+      {label}
     </span>
   );
 }
@@ -199,48 +244,241 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="text-[13px] uppercase tracking-[0.10em] text-crt/42 transition-colors hover:text-crt/72"
+      className="text-sm text-crt/45 transition-colors hover:text-crt/72"
     >
-      {copied ? '✓ copied' : '[ copy ]'}
+      {copied ? '✓ Copied' : 'Copy'}
     </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// SharePackagePanel
+// PipelineBar — workflow stage tracker (Task 3)
 // ---------------------------------------------------------------------------
 
-function SharePackagePanel({ result }: { result: PublishResult }) {
+const PIPELINE_STAGES = [
+  { key: 'pending'       as const, label: 'Pending'   },
+  { key: 'reviewing'     as const, label: 'Reviewing' },
+  { key: 'rebirth-ready' as const, label: 'Ready'     },
+  { key: 'reborn'        as const, label: 'Reborn'    },
+];
+
+function PipelineBar({
+  sig,
+  publishedResult,
+}: {
+  sig: DbRecoveredSignal;
+  publishedResult: PublishResult | null;
+}) {
+  const isReborn = publishedResult !== null || (sig.status === 'approved' && Boolean(sig.published_thread_id));
+  const currentKey = isReborn
+    ? 'reborn'
+    : (['pending', 'reviewing', 'rebirth-ready'] as string[]).includes(sig.status)
+    ? sig.status
+    : null;
+
+  if (!currentKey) return null;
+
+  const stageIdx = PIPELINE_STAGES.findIndex((s) => s.key === currentKey);
+
   return (
-    <div className="mt-6 border-t border-crt/12 bg-[rgba(134,212,110,0.018)] px-6 py-6 md:px-8">
+    <div className="flex items-center border-b border-crt/8 bg-[rgba(2,3,3,0.30)] px-5 py-2.5 md:px-6">
+      {PIPELINE_STAGES.map((stage, i) => {
+        const isPast    = i < stageIdx;
+        const isCurrent = i === stageIdx;
+        const dotColor = isCurrent
+          ? stage.key === 'reborn' ? '#c084fc' : STATUS_COLORS[stage.key as RecoveredSignalStatus]
+          : isPast  ? 'rgba(134,212,110,0.50)'
+          : 'rgba(134,212,110,0.14)';
+        const textColor = isCurrent
+          ? stage.key === 'reborn' ? '#c084fc' : STATUS_COLORS[stage.key as RecoveredSignalStatus]
+          : isPast  ? 'rgba(134,212,110,0.38)'
+          : 'rgba(134,212,110,0.20)';
+        return (
+          <div key={stage.key} className="flex items-center">
+            {i > 0 && (
+              <div
+                className="mx-2 h-px w-6 shrink-0 sm:w-10"
+                style={{ background: isPast ? 'rgba(134,212,110,0.28)' : 'rgba(134,212,110,0.08)' }}
+              />
+            )}
+            <div className="flex flex-col items-center gap-0.5">
+              <div
+                className="h-2 w-2 rounded-full"
+                style={{ background: dotColor, boxShadow: isCurrent ? `0 0 6px ${dotColor}` : 'none' }}
+              />
+              <span className="whitespace-nowrap text-[10px] font-semibold" style={{ color: textColor }}>
+                {stage.label}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+      {isReborn && sig.published_thread_id && (
+        <Link
+          href={`/threads/${sig.published_thread_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto text-xs font-medium text-[#c084fc]/65 hover:text-[#c084fc] transition-colors"
+        >
+          ✓ Published · Open ↗
+        </Link>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EvidenceSection — original source + media area (Task 3/4)
+// ---------------------------------------------------------------------------
+
+function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
+  return (
+    <div className="border-t border-crt/12">
+      {/* Section header */}
+      <div className="flex items-center justify-between bg-[rgba(2,3,3,0.35)] px-5 py-2.5 md:px-6">
+        <span className="text-xs font-semibold uppercase tracking-wider text-crt/38">
+          Original Evidence
+        </span>
+        <span className="text-xs text-crt/25">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</span>
+      </div>
+
+      <div className="px-5 py-4 md:px-6">
+        {/* Source metadata card */}
+        <div className="mb-4 flex flex-wrap items-start gap-3">
+          {/* Source name block */}
+          <div className="flex-1 min-w-[160px] border border-crt/14 bg-[rgba(4,7,5,0.55)] px-4 py-3">
+            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-crt/30">Source</p>
+            <p className="text-base font-medium text-crt/85">{sig.source_name}</p>
+            <p className="mt-0.5 text-sm text-crt/45">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</p>
+          </div>
+          {/* Metadata block */}
+          <div className="flex-1 min-w-[140px] border border-crt/14 bg-[rgba(4,7,5,0.55)] px-4 py-3">
+            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-crt/30">Metadata</p>
+            <p className="text-sm text-crt/65">Discovered: {sig.discovered_at.slice(0, 10)}</p>
+            {sig.approved_at && (
+              <p className="text-sm text-crt/50">Approved: {sig.approved_at.slice(0, 10)}</p>
+            )}
+            <p className="mt-0.5 text-xs text-crt/35">
+              {sig.submitted_publicly ? 'Public submission' : 'Curator intake'}
+            </p>
+          </div>
+        </div>
+
+        {/* Source URL card */}
+        {sig.source_url && (
+          <div className="mb-4 flex items-center justify-between gap-3 border border-crt/18 bg-[rgba(134,212,110,0.03)] px-4 py-3">
+            <span className="min-w-0 truncate text-sm text-crt/50 font-mono">{sig.source_url}</span>
+            <a
+              href={sig.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 border border-crt/25 bg-[rgba(134,212,110,0.06)] px-3 py-1.5 text-sm font-medium text-crt/70 transition-colors hover:border-crt/40 hover:text-crt/90"
+            >
+              View Source ↗
+            </a>
+          </div>
+        )}
+
+        {/* Attribution + capture notes */}
+        {(sig.attribution_text || sig.source_capture_notes) && (
+          <div className="mb-4 space-y-2">
+            {sig.attribution_text && (
+              <div className="flex items-start gap-2 border border-crt/14 bg-[rgba(4,7,5,0.45)] px-4 py-2.5">
+                <span className="shrink-0 text-xs font-semibold text-crt/35 pt-0.5">CREDIT</span>
+                <p className="text-sm leading-relaxed text-crt/70">{sig.attribution_text}</p>
+              </div>
+            )}
+            {sig.source_capture_notes && (
+              <div className="flex items-start gap-2 border border-crt/12 bg-[rgba(4,7,5,0.35)] px-4 py-2.5">
+                <span className="shrink-0 text-xs font-semibold text-crt/30 pt-0.5">CAPTURE</span>
+                <p className="text-sm leading-relaxed text-crt/55">{sig.source_capture_notes}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Media / screenshot frame */}
+        {sig.source_image_url ? (
+          <div className="overflow-hidden border-2 border-crt/15">
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/30">Screenshot / Capture</span>
+            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={sig.source_image_url} alt="Source capture" className="max-h-72 w-full object-cover" />
+          </div>
+        ) : sig.media_url ? (
+          <div className="border-2 border-crt/15">
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/30">
+                Attached Media — {sig.media_type ?? 'file'}
+              </span>
+              <a
+                href={sig.media_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#86d46e]/65 hover:text-[#86d46e] transition-colors"
+              >
+                Open ↗
+              </a>
+            </div>
+            <div className="px-4 py-6 text-center text-sm text-crt/40">Media attached — click Open to view</div>
+          </div>
+        ) : (
+          <div className="border-2 border-dashed border-crt/10">
+            <div className="flex items-center bg-[rgba(2,3,3,0.35)] px-3 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/22">Media Frame</span>
+            </div>
+            <div className="px-5 py-5 text-center">
+              <p className="text-sm text-crt/30">No media attached</p>
+              <p className="mt-1 text-xs text-crt/18 leading-relaxed">
+                Future: screenshots · archived images · document fragments · video stills · audio clips
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RebirthSuccessPanel (Task 2 — clear success state)
+// ---------------------------------------------------------------------------
+
+function RebirthSuccessPanel({ result }: { result: PublishResult }) {
+  return (
+    <div className="border-t-2 border-[#86d46e]/40 bg-[rgba(134,212,110,0.03)] px-5 py-6 md:px-6">
+      {/* Success heading */}
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="mb-1 text-[13px] uppercase tracking-[0.18em] text-[#d7a85c]/85">
-            ◈ Thread reborn
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xl text-[#86d46e]">✓</span>
+            <span className="text-xl font-semibold text-crt/92">Thread reborn into the archive</span>
           </div>
-          <div className="text-[14px] text-crt/48">Story restored to archive</div>
+          <p className="text-base text-crt/55">The signal has been published as a public SWIM thread.</p>
         </div>
         <Link
           href={`/threads/${result.threadSlug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[14px] text-[#86d46e]/75 transition-colors hover:text-[#86d46e]"
+          className="inline-flex items-center gap-2 border border-[#86d46e]/45 bg-[rgba(134,212,110,0.08)] px-5 py-2.5 text-base font-semibold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.15)] hover:border-[#86d46e]/65"
         >
-          ✓ View reborn thread ↗
+          Open Published Thread ↗
         </Link>
       </div>
 
-      <div className="mb-2 text-[12px] uppercase tracking-[0.16em] text-crt/35">
-        Share package — copy and post manually
-      </div>
+      {/* Share copy */}
+      <h5 className="mb-3 text-sm font-semibold text-crt/50">
+        Share copy — paste manually (no API calls made)
+      </h5>
 
       <div className="space-y-4">
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[13px] uppercase tracking-[0.12em] text-crt/38">Telegram</span>
+            <span className="text-sm font-medium text-crt/50">Telegram</span>
             <CopyButton text={result.telegramText} />
           </div>
-          <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/55 whitespace-pre-wrap">
+          <div className="max-h-36 overflow-y-auto border border-crt/15 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/60 whitespace-pre-wrap">
             {result.telegramText}
           </div>
         </div>
@@ -248,25 +486,22 @@ function SharePackagePanel({ result }: { result: PublishResult }) {
         <div>
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-[13px] uppercase tracking-[0.12em] text-crt/38">X / Twitter</span>
+              <span className="text-sm font-medium text-crt/50">X / Twitter</span>
               <span
-                className="text-[13px] tabular-nums"
-                style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.38)' }}
+                className="text-sm tabular-nums"
+                style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.40)' }}
               >
                 {result.xText.length}/280
               </span>
               {result.titleTruncated && (
-                <span className="text-[12px] text-[#d7a85c]/72">title truncated</span>
+                <span className="text-xs text-[#d7a85c]/80">title truncated</span>
               )}
             </div>
             <CopyButton text={result.xText} />
           </div>
-          <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/55 whitespace-pre-wrap">
+          <div className="border border-crt/15 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/60 whitespace-pre-wrap">
             {result.xText}
           </div>
-          <p className="mt-2 text-[12px] text-crt/28">
-            No API calls made — copy and post manually
-          </p>
         </div>
       </div>
     </div>
@@ -274,7 +509,7 @@ function SharePackagePanel({ result }: { result: PublishResult }) {
 }
 
 // ---------------------------------------------------------------------------
-// RebirthPanel — large admin edit form
+// RebirthPanel — large readable editor (Task 4)
 // ---------------------------------------------------------------------------
 
 function RebirthPanel({
@@ -292,6 +527,18 @@ function RebirthPanel({
   const [body,     setBody]     = useState(buildPreviewBody(sig));
   const [category, setCategory] = useState(sig.category);
   const [tagsStr,  setTagsStr]  = useState(sig.tags.join(', '));
+  const [checked,  setChecked]  = useState<Set<string>>(new Set());
+  const [showPreview, setShowPreview] = useState(false);
+
+  const allChecked = checked.size === REBIRTH_CHECKLIST.length;
+
+  function toggleCheck(id: string) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
   const parsedTags = tagsStr
     .split(',')
@@ -312,136 +559,191 @@ function RebirthPanel({
   const xCharCount      = xPreview.length;
   const xTruncated      = xPostTitleTruncated(previewData);
 
-  const inputCls =
-    'w-full border border-crt/20 bg-[rgba(4,7,5,0.85)] px-4 py-3 text-[16px] text-crt/88 placeholder:text-crt/25 focus:border-crt/42 focus:outline-none transition-colors';
-  const labelCls = 'mb-2 block text-[13px] text-crt/50';
+  const fieldCls =
+    'w-full border border-crt/22 bg-[rgba(4,7,5,0.85)] px-4 py-3 text-base text-crt/90 placeholder:text-crt/25 focus:border-crt/42 focus:outline-none transition-colors';
+  const labelCls = 'mb-2 block text-base font-medium text-crt/65';
 
   return (
-    <div className="border-t-2 border-[#d7a85c]/28 bg-[rgba(215,168,92,0.03)]">
+    <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(2,3,3,0.70)]">
       {/* Header */}
-      <div className="border-b border-[#d7a85c]/15 px-6 py-5 md:px-8">
-        <div className="mb-1 flex items-center gap-2">
-          <span className="h-2 w-2 bg-[#d7a85c]/72" />
-          <span className="text-[13px] uppercase tracking-[0.16em] text-[#d7a85c]/85">
-            Prepare Rebirth
-          </span>
+      <div className="border-b border-crt/12 px-5 py-5 md:px-6">
+        <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-[#c084fc]/70">
+          Rebirth as Thread
         </div>
-        <p className="text-[15px] leading-relaxed text-crt/55">
-          Edit the content below, then publish as a SWIM thread.
-          Remove the curator note from the body before confirming.
+        <p className="text-lg font-medium text-crt/88">
+          This will create a public SWIM thread in:{' '}
+          <span className="text-[#c084fc]">{category}</span>
+        </p>
+        <p className="mt-1 text-sm text-crt/50">
+          Edit the content below, complete the checklist, then click Publish.
+          Remove the curator note from the body before publishing.
         </p>
       </div>
 
-      <div className="px-6 py-6 md:px-8">
+      <div className="px-5 py-6 md:px-6">
         {/* Title */}
-        <div className="mb-5">
-          <label className={labelCls}>Thread Title</label>
+        <div className="mb-6">
+          <label className={labelCls}>Public thread title</label>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={200}
             disabled={isRebirthPending}
-            className={`${inputCls} text-[18px]`}
+            className={`${fieldCls} text-lg`}
+            placeholder="Thread title as it will appear publicly…"
           />
+          <p className="mt-1.5 text-xs text-crt/30">{title.length}/200 characters</p>
+        </div>
+
+        {/* Category */}
+        <div className="mb-6">
+          <label className={labelCls}>Category</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            disabled={isRebirthPending}
+            className={`${fieldCls} cursor-pointer`}
+          >
+            {CATEGORY_ORDER.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-crt/30">
+            Thread will publish to: <span className="text-[#c084fc]/70">{category}</span>
+          </p>
         </div>
 
         {/* Body */}
-        <div className="mb-5">
+        <div className="mb-6">
           <label className={labelCls}>
-            Thread Body
-            <span className="ml-2 text-crt/30">— remove curator note before publishing</span>
+            Thread body
+            <span className="ml-2 text-sm font-normal text-crt/40">
+              — delete the curator note line before publishing
+            </span>
           </label>
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={16}
+            rows={18}
             disabled={isRebirthPending}
-            className={`${inputCls} resize-y font-mono text-[15px]`}
+            className={`${fieldCls} resize-y font-mono text-[15px] leading-relaxed`}
           />
         </div>
 
-        {/* Category + Tags */}
-        <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-2">
-          <div>
-            <label className={labelCls}>Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              disabled={isRebirthPending}
-              className={`${inputCls} cursor-pointer`}
-            >
-              {CATEGORY_ORDER.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={labelCls}>
-              Tags <span className="text-crt/30">— comma separated</span>
-            </label>
-            <input
-              type="text"
-              value={tagsStr}
-              onChange={(e) => setTagsStr(e.target.value)}
-              maxLength={300}
-              disabled={isRebirthPending}
-              className={inputCls}
-            />
-          </div>
+        {/* Tags */}
+        <div className="mb-8">
+          <label className={labelCls}>
+            Tags
+            <span className="ml-2 text-sm font-normal text-crt/40">comma separated</span>
+          </label>
+          <input
+            type="text"
+            value={tagsStr}
+            onChange={(e) => setTagsStr(e.target.value)}
+            maxLength={300}
+            disabled={isRebirthPending}
+            className={fieldCls}
+            placeholder="e.g. deletion, audio, independent-witnesses"
+          />
         </div>
 
-        {/* Social preview */}
-        <div className="mb-6 space-y-4 border-t border-crt/10 pt-5">
-          <div className="text-[13px] uppercase tracking-[0.14em] text-crt/35">
-            Social preview — live
-          </div>
+        {/* Social preview (collapsible) */}
+        <div className="mb-8 border border-crt/12">
+          <button
+            type="button"
+            onClick={() => setShowPreview((v) => !v)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-crt/55 transition-colors hover:text-crt/75"
+          >
+            <span>Preview share text (Telegram / X)</span>
+            <span className="text-crt/35">{showPreview ? '▾' : '▸'}</span>
+          </button>
+          {showPreview && (
+            <div className="space-y-4 border-t border-crt/10 px-4 py-4">
+              <div>
+                <div className="mb-2 text-sm font-medium text-crt/45">Telegram</div>
+                <div className="max-h-40 overflow-y-auto bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-sm leading-relaxed text-crt/55 whitespace-pre-wrap">
+                  {telegramPreview}
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 flex items-center gap-3">
+                  <span className="text-sm font-medium text-crt/45">X / Twitter</span>
+                  <span
+                    className="text-sm tabular-nums"
+                    style={{ color: xCharCount > 260 ? '#d7a85c' : 'rgba(134,212,110,0.38)' }}
+                  >
+                    {xCharCount}/280
+                  </span>
+                  {xTruncated && (
+                    <span className="text-xs text-[#d7a85c]/80">title truncated</span>
+                  )}
+                </div>
+                <div className="bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-sm leading-relaxed text-crt/55 whitespace-pre-wrap">
+                  {xPreview}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
-          <div>
-            <div className="mb-2 text-[13px] text-crt/35">Telegram</div>
-            <div className="max-h-36 overflow-y-auto border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/50 whitespace-pre-wrap">
-              {telegramPreview}
-            </div>
+        {/* Pre-publish checklist */}
+        <div className="mb-8 border border-crt/18 bg-[rgba(4,7,5,0.5)] px-5 py-5">
+          <h5 className="mb-4 text-sm font-semibold text-crt/65">
+            Pre-publish checklist — complete all before publishing
+          </h5>
+          <div className="space-y-3">
+            {REBIRTH_CHECKLIST.map(({ id, label }) => {
+              const isChecked = checked.has(id);
+              return (
+                <label key={id} className="flex cursor-pointer items-start gap-3">
+                  <span
+                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border text-xs transition-colors"
+                    style={{
+                      borderColor: isChecked ? 'rgba(192,132,252,0.70)' : 'rgba(134,212,110,0.25)',
+                      background:  isChecked ? 'rgba(192,132,252,0.14)' : 'transparent',
+                      color:       isChecked ? '#c084fc' : 'transparent',
+                    }}
+                    onClick={() => toggleCheck(id)}
+                  >
+                    ✓
+                  </span>
+                  <span className={`text-base leading-snug ${isChecked ? 'text-crt/80' : 'text-crt/48'}`}>
+                    {label}
+                  </span>
+                </label>
+              );
+            })}
           </div>
-
-          <div>
-            <div className="mb-2 flex items-center gap-3">
-              <span className="text-[13px] text-crt/35">X / Twitter</span>
-              <span
-                className="text-[13px] tabular-nums"
-                style={{ color: xCharCount > 260 ? '#d7a85c' : 'rgba(134,212,110,0.35)' }}
-              >
-                {xCharCount}/280
-              </span>
-              {xTruncated && (
-                <span className="text-[12px] text-[#d7a85c]/72">title truncated</span>
-              )}
-            </div>
-            <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/50 whitespace-pre-wrap">
-              {xPreview}
-            </div>
-          </div>
+          {!allChecked && (
+            <p className="mt-4 text-sm text-crt/35">
+              {REBIRTH_CHECKLIST.length - checked.size} item{REBIRTH_CHECKLIST.length - checked.size !== 1 ? 's' : ''} remaining
+            </p>
+          )}
         </div>
 
         {/* Commit buttons */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
           <button
             onClick={() => onRebirth({ title, body, category, tags: parsedTags })}
-            disabled={isRebirthPending || !title.trim() || !body.trim()}
-            className="bg-[rgba(215,168,92,0.15)] border border-[#d7a85c]/50 px-8 py-3 text-[15px] font-medium text-[#d7a85c] transition-colors hover:bg-[rgba(215,168,92,0.25)] hover:border-[#d7a85c]/72 disabled:cursor-not-allowed disabled:opacity-30"
+            disabled={isRebirthPending || !title.trim() || !body.trim() || !allChecked}
+            className="w-full border border-[#c084fc]/50 bg-[rgba(192,132,252,0.12)] px-6 py-3.5 text-base font-semibold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.22)] hover:border-[#c084fc]/72 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
           >
-            {isRebirthPending ? '↯ Rebirthng...' : '◈ Rebirth as Thread'}
+            {isRebirthPending ? 'Publishing…' : 'Publish Thread'}
           </button>
           <button
             onClick={onCancel}
             disabled={isRebirthPending}
-            className="border border-crt/18 px-6 py-3 text-[15px] text-crt/45 transition-colors hover:border-crt/30 hover:text-crt/70 disabled:cursor-not-allowed disabled:opacity-30"
+            className="w-full border border-crt/18 px-6 py-3.5 text-base text-crt/55 transition-colors hover:border-crt/32 hover:text-crt/75 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
           >
             Cancel
           </button>
+          {!allChecked && (
+            <p className="text-sm text-crt/35 sm:ml-2">Complete the checklist to publish</p>
+          )}
         </div>
-        <p className="mt-3 text-[13px] text-crt/28">
-          Thread created with author=ARCHIVIST · signal marked approved · recovered-signal tag added automatically
+        <p className="mt-3 text-xs text-crt/28">
+          Author will be set to ARCHIVIST · "recovered-signal" tag added automatically
         </p>
       </div>
     </div>
@@ -449,7 +751,248 @@ function RebirthPanel({
 }
 
 // ---------------------------------------------------------------------------
-// SignalCard — large admin card layout
+// CuratorNotesField — private, never shown publicly
+// ---------------------------------------------------------------------------
+
+function CuratorNotesField({ signalId, initialNotes }: { signalId: string; initialNotes: string }) {
+  const [isOpen,      setIsOpen]      = useState(false);
+  const [value,       setValue]       = useState(initialNotes);
+  const [isSaving,    setIsSaving]    = useState(false);
+  const [savedRecent, setSavedRecent] = useState(false);
+
+  async function handleBlur() {
+    if (value === initialNotes) return;
+    setIsSaving(true);
+    await updateCuratorNotesAction(signalId, value);
+    setIsSaving(false);
+    setSavedRecent(true);
+    setTimeout(() => setSavedRecent(false), 2500);
+  }
+
+  return (
+    <div className="border-t border-crt/10">
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className="flex w-full items-center justify-between bg-[rgba(2,3,3,0.35)] px-5 py-2.5 text-left transition-colors hover:bg-[rgba(2,3,3,0.55)] md:px-6"
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="text-xs font-semibold uppercase tracking-wider text-crt/38">Curator Notes</span>
+          <span
+            className="px-1.5 py-0.5 text-[11px] font-medium"
+            style={{ background: 'rgba(109,168,255,0.10)', border: '1px solid rgba(109,168,255,0.22)', color: 'rgba(109,168,255,0.60)' }}
+          >
+            Private
+          </span>
+          {initialNotes && !isOpen && (
+            <span className="text-xs text-crt/30 italic">has notes</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {isSaving && <span className="text-xs text-crt/30">Saving…</span>}
+          {savedRecent && !isSaving && <span className="text-xs text-[#86d46e]/55">✓ Saved</span>}
+          <span className="text-xs text-crt/28">{isOpen ? '▾' : '▸'}</span>
+        </div>
+      </button>
+      {isOpen && (
+        <div className="px-5 py-3 md:px-6">
+          <textarea
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={handleBlur}
+            placeholder="Internal notes — not visible to the public. Remove sensitive info before rebirth."
+            rows={3}
+            className="w-full resize-none border border-crt/14 bg-[rgba(4,7,5,0.7)] px-3 py-2.5 text-[15px] leading-relaxed text-crt/75 placeholder:text-crt/25 focus:border-crt/28 focus:outline-none"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RelatedSignalsPanel
+// ---------------------------------------------------------------------------
+
+function RelatedSignalsPanel({ result }: { result: DuplicateRiskResult }) {
+  const { risk, reasons, related } = result;
+  const riskColor = DUPLICATE_RISK_COLORS[risk];
+
+  return (
+    <div className="border-t border-crt/12 bg-[rgba(2,3,3,0.35)] px-5 py-5 md:px-6">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <span className="text-sm font-semibold text-crt/55">Duplicate Risk:</span>
+        <span
+          className="px-2.5 py-0.5 text-sm font-semibold"
+          style={{ color: riskColor, border: `1px solid ${riskColor}55`, background: `${riskColor}14` }}
+        >
+          {risk.charAt(0).toUpperCase() + risk.slice(1)}
+        </span>
+        {risk === 'high' && (
+          <span className="text-sm text-[#ff6b6b]/75">— review before publishing</span>
+        )}
+        <span className="ml-auto text-xs text-crt/25">heuristic · no AI</span>
+      </div>
+
+      {reasons.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {reasons.map((r) => (
+            <span key={r} className="border border-crt/14 px-2.5 py-0.5 text-sm text-crt/55">
+              {r}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {related.length > 0 ? (
+        <div className="space-y-2">
+          {related.map((rel: RelatedSignal) => {
+            const statusColor = STATUS_COLORS[rel.status as RecoveredSignalStatus] ?? 'rgba(134,212,110,0.40)';
+            return (
+              <div key={rel.id} className="border border-crt/12 bg-[rgba(4,7,5,0.55)] px-4 py-3">
+                <p className="mb-1 text-[15px] text-crt/78 leading-snug">{rel.title}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm">
+                  <span className="text-crt/40">{rel.category}</span>
+                  <span className="text-crt/20">·</span>
+                  <span className="font-medium" style={{ color: statusColor }}>{SECTION_LABELS[rel.status as RecoveredSignalStatus] ?? rel.status}</span>
+                  <span className="text-crt/20">·</span>
+                  <span className="text-crt/42">{rel.similarityNote}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-crt/38">No similar signals found in the current queue.</p>
+      )}
+
+      <p className="mt-3 text-xs text-crt/22">
+        Matches on: title words · tags · source URL · phrase overlap — no embeddings used
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisPanel — mock AI (collapsed by default)
+// ---------------------------------------------------------------------------
+
+const REC_COLORS: Record<SignalAnalysis['publishRecommendation'], string> = {
+  publish: '#86d46e', review: '#d7a85c', archive: '#6da8ff', reject: '#ff6b6b',
+};
+const REC_BG: Record<SignalAnalysis['publishRecommendation'], string> = {
+  publish: 'rgba(134,212,110,0.08)', review: 'rgba(215,168,92,0.10)',
+  archive: 'rgba(109,168,255,0.08)', reject: 'rgba(255,107,107,0.07)',
+};
+const FLAG_COLORS: Record<SignalAnalysis['safetyFlags'][number]['severity'], string> = {
+  low: 'rgba(215,168,92,0.60)', medium: '#d7a85c', high: '#ff6b6b',
+};
+
+function AnalysisPanel({ analysis }: { analysis: SignalAnalysis }) {
+  const recColor = REC_COLORS[analysis.publishRecommendation];
+  const recBg    = REC_BG[analysis.publishRecommendation];
+
+  return (
+    <div className="border-t border-crt/12 bg-[rgba(2,3,3,0.40)] px-5 py-5 md:px-6">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <span className="text-sm font-semibold text-crt/55">Mock Analysis Output</span>
+        <span className="rounded px-2 py-0.5 text-xs font-medium"
+          style={{ background: 'rgba(215,168,92,0.10)', border: '1px solid rgba(215,168,92,0.30)', color: 'rgba(215,168,92,0.75)' }}>
+          Preview only — no AI API
+        </span>
+        <span className="ml-auto font-mono text-xs text-crt/22">v{analysis.analysisVersion}</span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <div className="space-y-4">
+          {/* Category */}
+          <div>
+            <p className="mb-1 text-sm font-medium text-crt/45">Suggested Category</p>
+            <div className="flex items-center gap-2.5">
+              <span className="text-[15px] text-crt/82">{analysis.suggestedCategory}</span>
+              {analysis.categoryMatch ? (
+                <span className="text-sm text-[#86d46e]/65">✓ matches current</span>
+              ) : (
+                <span className="text-sm text-[#d7a85c]/72">≠ differs</span>
+              )}
+            </div>
+          </div>
+          {/* Inferred tags */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-crt/45">Inferred Tags</p>
+            {analysis.newTags.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {analysis.newTags.map((tag) => (
+                  <span key={tag} className="border border-crt/18 bg-[rgba(134,212,110,0.04)] px-2 py-0.5 text-sm text-crt/60">
+                    + {tag}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="text-sm text-crt/35">No new tags inferred</span>
+            )}
+          </div>
+          {/* Safety flags */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-crt/45">Safety Flags</p>
+            {analysis.safetyFlags.length === 0 ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#86d46e]/65">✓</span>
+                <span className="text-sm text-crt/50">No flags detected</span>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {analysis.safetyFlags.map((flag, i) => (
+                  <div key={i} className="border-l-2 pl-3" style={{ borderLeftColor: FLAG_COLORS[flag.severity] }}>
+                    <span className="text-sm font-semibold" style={{ color: FLAG_COLORS[flag.severity] }}>
+                      {flag.severity} · {flag.type}
+                    </span>
+                    <p className="text-sm leading-relaxed text-crt/55">{flag.note}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {/* Recommendation */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-crt/45">Recommendation</p>
+            <div className="mb-1.5 inline-flex items-center gap-2 px-3 py-1.5" style={{ background: recBg, border: `1px solid ${recColor}44` }}>
+              <span className="text-[15px] font-semibold" style={{ color: recColor }}>
+                {analysis.publishRecommendation.charAt(0).toUpperCase() + analysis.publishRecommendation.slice(1)}
+              </span>
+            </div>
+            <p className="text-sm leading-relaxed text-crt/52">{analysis.recommendationNote}</p>
+          </div>
+          {/* Rationale */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-crt/45">Anomaly Rationale</p>
+            <p className="text-sm leading-relaxed text-crt/62">{analysis.anomalyRationale}</p>
+          </div>
+          {/* Confidence */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-crt/45">Confidence</p>
+            <div className="flex items-center gap-3">
+              <div className="h-2 w-28 bg-[rgba(134,212,110,0.10)]">
+                <div className="h-full bg-crt/40 transition-all" style={{ width: `${analysis.confidence}%` }} />
+              </div>
+              <span className="font-mono text-[15px] text-crt/65">{analysis.confidence}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-4 text-xs text-crt/22">
+        Deterministic mock — same signal always returns same output — no external API calls
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SignalCard
 // ---------------------------------------------------------------------------
 
 interface SignalCardProps {
@@ -463,6 +1006,10 @@ interface SignalCardProps {
   isRebirthOpen:    boolean;
   publishedResult:  PublishResult | null;
   inRebirthQueue:   boolean;
+  duplicateResult:  DuplicateRiskResult;
+  allSignals:       DbRecoveredSignal[];
+  isActiveReview:   boolean;
+  anyRebirthOpen:   boolean;
 }
 
 function SignalCard({
@@ -476,125 +1023,108 @@ function SignalCard({
   isRebirthOpen,
   publishedResult,
   inRebirthQueue,
+  duplicateResult,
+  allSignals: _allSignals,
+  isActiveReview,
+  anyRebirthOpen,
 }: SignalCardProps) {
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showRelated,  setShowRelated]  = useState(false);
+  const analysis = analyzeRecoveredSignal(sig);
+
   const alreadyPublished = Boolean(sig.published_thread_id) && !publishedResult;
   const busy = statusPending || isPublishing;
 
-  const leftAccent = inRebirthQueue
-    ? 'rgba(215,168,92,0.70)'
-    : `${STATUS_COLORS[sig.status]}55`;
+  const accentColor = isActiveReview
+    ? '#4db8c8'
+    : inRebirthQueue
+    ? STATUS_COLORS['rebirth-ready']
+    : STATUS_COLORS[sig.status];
+
+  const cardBg = isActiveReview ? 'rgba(77,184,200,0.018)' : 'rgba(4,7,5,0.97)';
+  const isDimmed = anyRebirthOpen && !isRebirthOpen;
 
   return (
     <div
-      className="border border-crt/18 bg-[rgba(4,7,5,0.97)]"
-      style={{ borderLeftColor: leftAccent, borderLeftWidth: '4px' }}
+      className="relative transition-all duration-300"
+      style={{
+        background:   cardBg,
+        border:       `1px solid rgba(134,212,110,0.12)`,
+        borderLeft:   `4px solid ${accentColor}`,
+        boxShadow:    isRebirthOpen
+          ? `0 8px 40px rgba(0,0,0,0.65), 0 0 0 1px ${accentColor}30`
+          : '0 4px 20px rgba(0,0,0,0.40)',
+        opacity:      isDimmed ? 0.45 : 1,
+        pointerEvents: isDimmed ? 'none' : undefined,
+      }}
     >
-      {/* ── TOP BAR: ID · category · source type · badges · status ── */}
+      {/* ── TOP ROW: status + category + dup warning ── */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-crt/10 px-5 py-3 md:px-6">
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-          <span className="font-mono text-[12px] text-crt/32">
-            {sig.id.slice(0, 13).toUpperCase()}
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge sig={sig} />
+          <span className="text-sm font-medium text-crt/65">{sig.category}</span>
           <span className="text-crt/20">·</span>
-          <span className="text-[13px] uppercase tracking-[0.08em] text-crt/68">
-            {sig.category}
-          </span>
-          <span className="text-crt/20">·</span>
-          <span className="text-[13px] text-crt/45">
-            {SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}
-          </span>
+          <span className="text-sm text-crt/45">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</span>
           {sig.submitted_publicly && (
             <span
-              className="px-2 py-0.5 text-[11px] font-medium"
+              className="px-2 py-0.5 text-xs font-medium"
               style={{ background: 'rgba(109,168,255,0.12)', border: '1px solid rgba(109,168,255,0.32)', color: '#6da8ff' }}
             >
-              public
+              Public submission
             </span>
           )}
-          {inRebirthQueue && (
+          {isActiveReview && (
             <span
-              className="px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.08em]"
-              style={{ background: 'rgba(215,168,92,0.12)', border: '1px solid rgba(215,168,92,0.40)', color: '#d7a85c' }}
+              className="px-2 py-0.5 text-xs font-medium"
+              style={{ background: 'rgba(77,184,200,0.12)', border: '1px solid rgba(77,184,200,0.45)', color: '#4db8c8' }}
             >
-              ◈ rebirth ready
+              ● Under review
+            </span>
+          )}
+          {duplicateResult.risk !== 'low' && (
+            <span
+              className="px-2 py-0.5 text-xs font-semibold"
+              style={{
+                background: `${DUPLICATE_RISK_COLORS[duplicateResult.risk]}12`,
+                border:     `1px solid ${DUPLICATE_RISK_COLORS[duplicateResult.risk]}45`,
+                color:      DUPLICATE_RISK_COLORS[duplicateResult.risk],
+              }}
+            >
+              Dup risk: {duplicateResult.risk}
             </span>
           )}
         </div>
-        <StatusBadge status={sig.status} />
+        <AnomalyScore score={sig.anomaly_score} />
       </div>
 
-      {/* ── TITLE ── */}
-      <div className="px-5 pb-3 pt-5 md:px-6">
-        <h3 className="text-[1.5rem] font-medium leading-[1.28] tracking-[0.01em] text-crt/95 md:text-[1.6rem]">
+      {/* ── PIPELINE BAR ── */}
+      <PipelineBar sig={sig} publishedResult={publishedResult} />
+
+      {/* ── TITLE + SUMMARY ── */}
+      <div className="px-5 pb-3 pt-6 md:px-6">
+        <h3 className="text-2xl font-semibold leading-tight text-crt/95 md:text-[1.7rem]">
           {sig.title}
         </h3>
       </div>
 
-      {/* ── SUMMARY ── */}
-      <div className="px-5 pb-5 md:px-6">
-        <p className="text-[17px] leading-[1.72] tracking-[0.02em] text-crt/82 md:text-[18px]">
+      <div className="px-5 pb-6 md:px-6">
+        <p className="text-lg leading-relaxed text-crt/78">
           {sig.summary}
         </p>
       </div>
 
-      {/* ── SOURCE ── */}
-      <div className="border-t border-crt/10 px-5 py-4 md:px-6">
-        <div className="mb-1.5 text-[12px] uppercase tracking-[0.12em] text-crt/38">Source</div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[15px] text-crt/75">{sig.source_name}</span>
-          <span className="text-crt/22">·</span>
-          <span className="text-[14px] uppercase tracking-[0.06em] text-crt/48">
-            {SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}
-          </span>
-          {sig.source_url && (
-            <a
-              href={sig.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[14px] text-crt/38 transition-colors hover:text-crt/65"
-            >
-              ↗ view source
-            </a>
-          )}
-        </div>
-      </div>
-
-      {/* ── METADATA GRID ── */}
-      <div className="border-t border-crt/10 px-5 py-4 md:px-6">
-        <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
-          <div>
-            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Anomaly</div>
-            <AnomalyScore score={sig.anomaly_score} />
-          </div>
-          <div>
-            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Discovered</div>
-            <div className="text-[15px] text-crt/72">{sig.discovered_at.slice(0, 10)}</div>
-          </div>
-          <div>
-            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Approved</div>
-            <div className="text-[15px] text-crt/72">
-              {sig.approved_at ? sig.approved_at.slice(0, 10) : '—'}
-            </div>
-          </div>
-          <div>
-            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Origin</div>
-            <div className="text-[15px] text-crt/65">
-              {sig.submitted_publicly ? 'Public submission' : 'Curator intake'}
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* ── ORIGINAL EVIDENCE ── */}
+      <EvidenceSection sig={sig} />
 
       {/* ── TAGS ── */}
       {sig.tags.length > 0 && (
-        <div className="border-t border-crt/10 px-5 py-4 md:px-6">
-          <div className="mb-2.5 text-[12px] uppercase tracking-[0.12em] text-crt/38">Tags</div>
-          <div className="flex flex-wrap gap-2">
+        <div className="border-t border-crt/10">
+          <div className="bg-[rgba(2,3,3,0.35)] px-5 py-2 md:px-6">
+            <span className="text-xs font-semibold uppercase tracking-wider text-crt/35">Tags</span>
+          </div>
+          <div className="flex flex-wrap gap-2 px-5 py-3 md:px-6">
             {sig.tags.map((tag) => (
-              <span
-                key={tag}
-                className="border border-crt/20 px-2.5 py-1 text-[13px] text-crt/60"
-              >
+              <span key={tag} className="border border-crt/18 px-2.5 py-1 text-sm text-crt/60">
                 {tag}
               </span>
             ))}
@@ -602,16 +1132,85 @@ function SignalCard({
         </div>
       )}
 
-      {/* ── ACTIONS ── */}
-      <div className="border-t border-crt/12 px-5 py-4 md:px-6">
-        <div className="flex flex-wrap items-center gap-3">
+      {/* ── CURATOR NOTES ── */}
+      <CuratorNotesField signalId={sig.id} initialNotes={sig.curator_notes ?? ''} />
 
-          {/* Status actions */}
-          {sig.status !== 'approved' && (
+      {/* ── COLLAPSIBLE: AI Analysis ── */}
+      <div className="border-t border-crt/10">
+        <button
+          onClick={() => setShowAnalysis((v) => !v)}
+          className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-[rgba(134,212,110,0.025)] md:px-6"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-crt/50">AI Analysis (mock)</span>
+            <span className="text-sm text-crt/30">
+              {analysis.publishRecommendation}
+              {analysis.safetyFlags.some((f) => f.severity === 'high') && (
+                <span className="ml-2 text-[#ff6b6b]/70">⚠ flags</span>
+              )}
+            </span>
+          </div>
+          <span className="text-sm text-crt/30">{showAnalysis ? '▾' : '▸'}</span>
+        </button>
+        {showAnalysis && <AnalysisPanel analysis={analysis} />}
+      </div>
+
+      {/* ── COLLAPSIBLE: Related Signals ── */}
+      <div className="border-t border-crt/10">
+        <button
+          onClick={() => setShowRelated((v) => !v)}
+          className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-[rgba(134,212,110,0.025)] md:px-6"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-crt/50">Related Signals</span>
+            {duplicateResult.related.length > 0 ? (
+              <span className="text-sm" style={{ color: DUPLICATE_RISK_COLORS[duplicateResult.risk] }}>
+                {duplicateResult.related.length} found ({duplicateResult.risk} risk)
+              </span>
+            ) : (
+              <span className="text-sm text-crt/28">none found</span>
+            )}
+          </div>
+          <span className="text-sm text-crt/30">{showRelated ? '▾' : '▸'}</span>
+        </button>
+        {showRelated && <RelatedSignalsPanel result={duplicateResult} />}
+      </div>
+
+      {/* ── ACTIONS ── */}
+      <div className="border-t border-crt/12">
+        <div className="bg-[rgba(2,3,3,0.35)] px-5 py-2 md:px-6">
+          <span className="text-xs font-semibold uppercase tracking-wider text-crt/35">Actions</span>
+        </div>
+      </div>
+      <div className="px-5 py-4 md:px-6">
+        <div className="flex flex-wrap items-center gap-2.5">
+
+          {/* Workflow buttons (context-aware) */}
+          {sig.status === 'pending' && (
+            <button
+              onClick={() => onStatusChange(sig.id, 'reviewing')}
+              disabled={busy || isRebirthOpen}
+              className="border border-[#4db8c8]/40 bg-[rgba(77,184,200,0.08)] px-5 py-2.5 text-[15px] font-medium text-[#4db8c8] transition-colors hover:bg-[rgba(77,184,200,0.16)] disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Review
+            </button>
+          )}
+          {sig.status === 'reviewing' && (
+            <button
+              onClick={() => onStatusChange(sig.id, 'rebirth-ready')}
+              disabled={busy || isRebirthOpen}
+              className="border border-[#c084fc]/40 bg-[rgba(192,132,252,0.08)] px-5 py-2.5 text-[15px] font-medium text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.16)] disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Mark Ready
+            </button>
+          )}
+
+          {/* Status transitions */}
+          {sig.status !== 'approved' && sig.status !== 'rebirth-ready' && (
             <button
               onClick={() => onStatusChange(sig.id, 'approved')}
               disabled={busy || isRebirthOpen}
-              className="border border-[#86d46e]/38 bg-[rgba(134,212,110,0.08)] px-5 py-2.5 text-[14px] font-medium text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.16)] hover:border-[#86d46e]/60 disabled:cursor-not-allowed disabled:opacity-30"
+              className="border border-[#86d46e]/38 bg-[rgba(134,212,110,0.07)] px-5 py-2.5 text-[15px] font-medium text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.14)] disabled:cursor-not-allowed disabled:opacity-30"
             >
               Approve
             </button>
@@ -620,7 +1219,7 @@ function SignalCard({
             <button
               onClick={() => onStatusChange(sig.id, 'archived')}
               disabled={busy || isRebirthOpen}
-              className="border border-[#6da8ff]/32 bg-[rgba(109,168,255,0.07)] px-5 py-2.5 text-[14px] font-medium text-[#6da8ff]/82 transition-colors hover:bg-[rgba(109,168,255,0.14)] hover:border-[#6da8ff]/55 disabled:cursor-not-allowed disabled:opacity-30"
+              className="border border-[#6da8ff]/30 bg-[rgba(109,168,255,0.06)] px-5 py-2.5 text-[15px] font-medium text-[#6da8ff]/80 transition-colors hover:bg-[rgba(109,168,255,0.13)] disabled:cursor-not-allowed disabled:opacity-30"
             >
               Archive
             </button>
@@ -629,7 +1228,7 @@ function SignalCard({
             <button
               onClick={() => onStatusChange(sig.id, 'rejected')}
               disabled={busy || isRebirthOpen}
-              className="border border-[#ff6b6b]/25 bg-[rgba(255,107,107,0.05)] px-5 py-2.5 text-[14px] font-medium text-[#ff6b6b]/62 transition-colors hover:bg-[rgba(255,107,107,0.12)] hover:border-[#ff6b6b]/45 disabled:cursor-not-allowed disabled:opacity-30"
+              className="border border-[#ff6b6b]/22 bg-[rgba(255,107,107,0.04)] px-5 py-2.5 text-[15px] font-medium text-[#ff6b6b]/65 transition-colors hover:bg-[rgba(255,107,107,0.11)] disabled:cursor-not-allowed disabled:opacity-30"
             >
               Reject
             </button>
@@ -638,25 +1237,31 @@ function SignalCard({
           {/* Rebirth — right-aligned */}
           <div className="ml-auto">
             {publishedResult ? null : alreadyPublished ? (
-              <span className="text-[14px] text-crt/28">◈ Already reborn</span>
+              <Link
+                href={`/threads/${sig.published_thread_id}`}
+                target="_blank"
+                className="inline-flex items-center gap-1.5 text-[15px] text-[#c084fc]/65 hover:text-[#c084fc]"
+              >
+                Open reborn thread ↗
+              </Link>
             ) : isRebirthOpen ? null : (
               <button
                 onClick={() => onRequestRebirth(sig)}
                 disabled={busy}
-                className={`border px-5 py-2.5 text-[14px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
-                  inRebirthQueue
-                    ? 'border-[#d7a85c]/50 bg-[rgba(215,168,92,0.10)] text-[#d7a85c] hover:bg-[rgba(215,168,92,0.20)] hover:border-[#d7a85c]/72'
-                    : 'border-crt/25 bg-[rgba(134,212,110,0.04)] text-crt/58 hover:border-crt/38 hover:text-crt/80'
+                className={`border px-5 py-2.5 text-[15px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
+                  inRebirthQueue || sig.status === 'rebirth-ready'
+                    ? 'border-[#c084fc]/55 bg-[rgba(192,132,252,0.12)] text-[#c084fc] hover:bg-[rgba(192,132,252,0.22)]'
+                    : 'border-crt/22 bg-[rgba(134,212,110,0.03)] text-crt/58 hover:border-crt/36 hover:text-crt/80'
                 }`}
               >
-                ◈ Prepare Rebirth
+                Rebirth as Thread →
               </button>
             )}
           </div>
         </div>
       </div>
 
-      {/* ── Rebirth panel ── */}
+      {/* ── Rebirth editor ── */}
       {isRebirthOpen && !publishedResult && (
         <RebirthPanel
           sig={sig}
@@ -666,14 +1271,14 @@ function SignalCard({
         />
       )}
 
-      {/* ── Share package ── */}
-      {publishedResult && <SharePackagePanel result={publishedResult} />}
+      {/* ── Success state ── */}
+      {publishedResult && <RebirthSuccessPanel result={publishedResult} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// QueueStats — sidebar widget
+// QueueStats — sidebar
 // ---------------------------------------------------------------------------
 
 function QueueStats({
@@ -683,73 +1288,135 @@ function QueueStats({
   counts:            Record<RecoveredSignalStatus | 'all', number>;
   rebirthQueueCount: number;
 }) {
-  return (
-    <div className="border border-crt/15 bg-[rgba(4,7,5,0.97)] p-5">
-      <h3 className="mb-4 text-[12px] uppercase tracking-[0.16em] text-crt/42">
-        Queue Status
-      </h3>
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[14px] text-crt/52">Total</span>
-          <span className="font-mono text-[15px] font-medium text-crt/80">{counts.all}</span>
-        </div>
-        {(Object.entries({
-          pending:  { label: 'Pending',  color: STATUS_COLORS.pending  },
-          approved: { label: 'Approved', color: STATUS_COLORS.approved },
-          archived: { label: 'Archived', color: STATUS_COLORS.archived },
-          rejected: { label: 'Rejected', color: STATUS_COLORS.rejected },
-        }) as Array<[RecoveredSignalStatus, { label: string; color: string }]>).map(([key, { label, color }]) => (
-          <div key={key} className="flex items-center justify-between">
-            <span className="text-[14px]" style={{ color: `${color}88` }}>{label}</span>
-            <span className="font-mono text-[15px] font-medium" style={{ color }}>{counts[key]}</span>
-          </div>
-        ))}
+  const rows: Array<{ key: RecoveredSignalStatus; label: string; color: string }> = [
+    { key: 'pending',         label: 'Pending',       color: STATUS_COLORS.pending          },
+    { key: 'reviewing',       label: 'Reviewing',     color: STATUS_COLORS.reviewing        },
+    { key: 'rebirth-ready',   label: 'Ready',         color: STATUS_COLORS['rebirth-ready'] },
+    { key: 'approved',        label: 'Approved',      color: STATUS_COLORS.approved         },
+    { key: 'archived',        label: 'Archived',      color: STATUS_COLORS.archived         },
+    { key: 'rejected',        label: 'Rejected',      color: STATUS_COLORS.rejected         },
+  ];
 
-        {rebirthQueueCount > 0 && (
-          <div className="border-t border-crt/10 pt-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[14px] text-[#d7a85c]/72">Rebirth ready</span>
-              <span className="font-mono text-[15px] font-medium text-[#d7a85c]">
-                {rebirthQueueCount}
+  return (
+    <div className="border border-crt/14 bg-[rgba(4,7,5,0.97)]" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}>
+      <div className="border-b border-crt/10 px-4 py-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-crt/45">Queue</h3>
+        <div className="mt-1 flex items-baseline gap-2">
+          <span className="font-mono text-2xl font-bold text-crt/85">{counts.all}</span>
+          <span className="text-sm text-crt/35">signals total</span>
+        </div>
+      </div>
+      <div className="p-4 space-y-2">
+        {rows.map(({ key, label, color }) => (
+          <div key={key} className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full" style={{ background: counts[key] > 0 ? color : `${color}30` }} />
+              <span className="text-sm" style={{ color: counts[key] > 0 ? `${color}cc` : 'rgba(134,212,110,0.28)' }}>
+                {label}
               </span>
             </div>
+            <span
+              className="font-mono text-base font-semibold tabular-nums"
+              style={{ color: counts[key] > 0 ? color : 'rgba(134,212,110,0.22)' }}
+            >
+              {counts[key]}
+            </span>
           </div>
-        )}
+        ))}
       </div>
+      {rebirthQueueCount > 0 && (
+        <div className="border-t border-[#c084fc]/15 bg-[rgba(192,132,252,0.04)] px-4 py-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-[#c084fc]/75">◈ Rebirth Ready</span>
+            <span className="font-mono text-base font-bold text-[#c084fc]">{rebirthQueueCount}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// AIScannerPanel — sidebar widget (placeholder, non-functional)
+// OperationsPanel — sidebar live operations
 // ---------------------------------------------------------------------------
 
-function AIScannerPanel() {
+function OperationsPanel({
+  activeReviews,
+  rebirthReady,
+  duplicateWarnings,
+  latestPublishedTitle,
+}: {
+  activeReviews:        number;
+  rebirthReady:         number;
+  duplicateWarnings:    number;
+  latestPublishedTitle: string | null;
+}) {
   return (
-    <div className="border border-crt/15 bg-[rgba(4,7,5,0.97)] p-5">
-      <div className="mb-1 flex items-center gap-2">
-        <span className="h-1.5 w-1.5 bg-crt/25" />
-        <h3 className="text-[12px] uppercase tracking-[0.16em] text-crt/42">
-          AI Scanner
-        </h3>
+    <div className="border border-crt/14 bg-[rgba(4,7,5,0.97)]" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}>
+      <div className="border-b border-crt/10 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full" style={{ background: '#4db8c8', boxShadow: '0 0 5px #4db8c880' }} />
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-crt/45">Operations</h3>
+        </div>
       </div>
-      <p className="mb-4 text-[12px] text-crt/28">future phase — not active</p>
 
-      <div className="space-y-2">
-        {AI_SCANNER_ROWS.map(({ label, value, dim }) => (
-          <div key={label} className="flex items-baseline justify-between gap-3">
-            <span className="text-[13px] text-crt/42">{label}</span>
-            <span className={`text-[13px] font-medium ${dim ? 'text-crt/28' : 'text-crt/65'}`}>
-              {value}
-            </span>
+      <div className="divide-y divide-crt/8">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-[#4db8c8]/80">Active Reviews</p>
           </div>
-        ))}
+          <span
+            className="font-mono text-xl font-bold tabular-nums"
+            style={{ color: activeReviews > 0 ? '#4db8c8' : 'rgba(134,212,110,0.22)' }}
+          >
+            {activeReviews}
+          </span>
+        </div>
+        <div className="flex items-center justify-between px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-[#c084fc]/80">Rebirth Ready</p>
+          </div>
+          <span
+            className="font-mono text-xl font-bold tabular-nums"
+            style={{ color: rebirthReady > 0 ? '#c084fc' : 'rgba(134,212,110,0.22)' }}
+          >
+            {rebirthReady}
+          </span>
+        </div>
+        <div className="flex items-center justify-between px-4 py-3">
+          <div>
+            <p className="text-sm font-medium" style={{ color: duplicateWarnings > 0 ? '#d7a85c' : 'rgba(134,212,110,0.35)' }}>
+              Dup Warnings
+            </p>
+          </div>
+          <span
+            className="font-mono text-xl font-bold tabular-nums"
+            style={{ color: duplicateWarnings > 0 ? '#d7a85c' : 'rgba(134,212,110,0.22)' }}
+          >
+            {duplicateWarnings}
+          </span>
+        </div>
+        <div className="px-4 py-3">
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-crt/30">Latest Reborn</p>
+          {latestPublishedTitle ? (
+            <p className="text-sm leading-snug text-crt/55 line-clamp-2">{latestPublishedTitle}</p>
+          ) : (
+            <p className="text-sm text-crt/22">No threads published yet</p>
+          )}
+        </div>
       </div>
 
-      <p className="mt-4 text-[12px] leading-relaxed text-crt/30">
-        Automated signal recovery planned for a future phase.
-        Current intake is manual curator workflow only.
-      </p>
+      <div className="border-t border-crt/8 px-4 py-3">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-crt/25">Scanner</p>
+        <div className="space-y-1">
+          {AI_SCANNER_ROWS.map(({ label, value, dim }) => (
+            <div key={label} className="flex items-baseline justify-between gap-2">
+              <span className="text-xs text-crt/35">{label}</span>
+              <span className={`text-xs font-medium ${dim ? 'text-crt/22' : 'text-crt/52'}`}>{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -759,17 +1426,21 @@ function AIScannerPanel() {
 // ---------------------------------------------------------------------------
 
 export interface SignalQueueClientProps {
-  pending:  DbRecoveredSignal[];
-  approved: DbRecoveredSignal[];
-  archived: DbRecoveredSignal[];
-  rejected: DbRecoveredSignal[];
+  pending:      DbRecoveredSignal[];
+  reviewing:    DbRecoveredSignal[];
+  rebirthReady: DbRecoveredSignal[];
+  approved:     DbRecoveredSignal[];
+  archived:     DbRecoveredSignal[];
+  rejected:     DbRecoveredSignal[];
 }
 
 export function SignalQueueClient({
-  pending:  initialPending,
-  approved: initialApproved,
-  archived: initialArchived,
-  rejected: initialRejected,
+  pending:      initialPending,
+  reviewing:    initialReviewing,
+  rebirthReady: initialRebirthReady,
+  approved:     initialApproved,
+  archived:     initialArchived,
+  rejected:     initialRejected,
 }: SignalQueueClientProps) {
   const router = useRouter();
   const [isStatusPending, startStatusTransition] = useTransition();
@@ -797,6 +1468,8 @@ export function SignalQueueClient({
   // Merge + apply optimistic overrides
   const allSignals = [
     ...initialPending,
+    ...initialReviewing,
+    ...initialRebirthReady,
     ...initialApproved,
     ...initialArchived,
     ...initialRejected,
@@ -806,61 +1479,59 @@ export function SignalQueueClient({
   const uniqueSourceTypes = [...new Set(allSignals.map((s) => s.source_type))].sort() as SignalSourceType[];
 
   const counts: Record<RecoveredSignalStatus | 'all', number> = {
-    all:      allSignals.length,
-    pending:  allSignals.filter((s) => s.status === 'pending').length,
-    approved: allSignals.filter((s) => s.status === 'approved').length,
-    archived: allSignals.filter((s) => s.status === 'archived').length,
-    rejected: allSignals.filter((s) => s.status === 'rejected').length,
+    all:             allSignals.length,
+    pending:         allSignals.filter((s) => s.status === 'pending').length,
+    reviewing:       allSignals.filter((s) => s.status === 'reviewing').length,
+    'rebirth-ready': allSignals.filter((s) => s.status === 'rebirth-ready').length,
+    approved:        allSignals.filter((s) => s.status === 'approved').length,
+    archived:        allSignals.filter((s) => s.status === 'archived').length,
+    rejected:        allSignals.filter((s) => s.status === 'rejected').length,
   };
+
+  const duplicateMap = useMemo(
+    () => new Map(allSignals.map((s) => [s.id, computeDuplicateRisk(s, allSignals)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allSignals.map((s) => s.id).join(',')],
+  );
+
+  const duplicateWarnings = Array.from(duplicateMap.values()).filter((r) => r.risk !== 'low').length;
+
+  const latestPublished = allSignals
+    .filter((s) => Boolean(s.published_thread_id))
+    .sort((a, b) => (b.approved_at ?? '').localeCompare(a.approved_at ?? ''))[0]?.title ?? null;
 
   // Tab filter
   let visibleSignals =
-    activeTab === 'all'
-      ? allSignals
-      : allSignals.filter((s) => s.status === activeTab);
+    activeTab === 'all' ? allSignals : allSignals.filter((s) => s.status === activeTab);
 
-  // Search filter
   if (searchQuery.trim()) {
     const q = searchQuery.toLowerCase();
     visibleSignals = visibleSignals.filter(
-      (s) =>
-        s.title.toLowerCase().includes(q) ||
-        s.summary.toLowerCase().includes(q) ||
-        s.source_name.toLowerCase().includes(q),
+      (s) => s.title.toLowerCase().includes(q) || s.summary.toLowerCase().includes(q) || s.source_name.toLowerCase().includes(q),
     );
   }
-
-  // Category / source type filters
   if (filterCategory)   visibleSignals = visibleSignals.filter((s) => s.category === filterCategory);
   if (filterSourceType) visibleSignals = visibleSignals.filter((s) => s.source_type === filterSourceType);
-
-  // Sort
   if (sortScore === 'desc') visibleSignals = [...visibleSignals].sort((a, b) => b.anomaly_score - a.anomaly_score);
   if (sortScore === 'asc')  visibleSignals = [...visibleSignals].sort((a, b) => a.anomaly_score - b.anomaly_score);
 
-  // Grouped for "all" tab
   const groupedByStatus: Record<RecoveredSignalStatus, DbRecoveredSignal[]> =
     STATUS_SECTION_ORDER.reduce(
       (acc, s) => { acc[s] = visibleSignals.filter((sig) => sig.status === s); return acc; },
       {} as Record<RecoveredSignalStatus, DbRecoveredSignal[]>,
     );
 
-  // Rebirth queue split
-  const rebirthQueueSignals  = visibleSignals.filter(
-    (s) => s.status === 'pending' && s.anomaly_score >= REBIRTH_SCORE_THRESHOLD,
+  const rebirthQueueSignals = visibleSignals.filter(
+    (s) => s.status === 'rebirth-ready' || (s.status === 'pending' && s.anomaly_score >= 7),
   );
-  const rebirthQueueIds      = new Set(rebirthQueueSignals.map((s) => s.id));
-  const regularPendingSignals = visibleSignals.filter(
-    (s) => s.status === 'pending' && !rebirthQueueIds.has(s.id),
-  );
-
-  const hasActiveFilter = Boolean(searchQuery.trim() || filterCategory || filterSourceType || sortScore);
+  const rebirthQueueIds       = new Set(rebirthQueueSignals.map((s) => s.id));
+  const regularPendingSignals = visibleSignals.filter((s) => s.status === 'pending' && !rebirthQueueIds.has(s.id));
+  const reviewingSignals      = visibleSignals.filter((s) => s.status === 'reviewing');
+  const reviewingIds          = new Set(allSignals.filter((s) => s.status === 'reviewing').map((s) => s.id));
+  const hasActiveFilter       = Boolean(searchQuery.trim() || filterCategory || filterSourceType || sortScore);
 
   function clearFilters() {
-    setSearchQuery('');
-    setFilterCategory('');
-    setFilterSourceType('');
-    setSortScore(null);
+    setSearchQuery(''); setFilterCategory(''); setFilterSourceType(''); setSortScore(null);
   }
 
   function showError(msg: string) {
@@ -871,7 +1542,6 @@ export function SignalQueueClient({
   function handleStatusChange(id: string, status: RecoveredSignalStatus) {
     const prev = overrides[id] ?? allSignals.find((s) => s.id === id)?.status;
     setOverrides((o) => ({ ...o, [id]: status }));
-
     startStatusTransition(async () => {
       const result = await updateSignalStatusAction({ id, status });
       if ('error' in result) {
@@ -895,32 +1565,27 @@ export function SignalQueueClient({
   async function handleRebirth(sig: DbRecoveredSignal, payload: RebirthPayload) {
     if (publishingId) return;
     setPublishingId(sig.id);
-
     try {
       const result = await rebirthSignalAsThreadAction({
-        signalId:  sig.id,
-        title:     payload.title,
-        body:      payload.body,
-        category:  payload.category,
-        tags:      payload.tags,
+        signalId: sig.id, title: payload.title, body: payload.body,
+        category: payload.category, tags: payload.tags,
       });
-
       if ('error' in result) {
         showError(`Rebirth failed — ${result.error}`);
         setRebirthOpenId(null);
         return;
       }
-
       const shareData = {
-        title:        payload.title,
-        category:     payload.category,
-        summary:      sig.summary,
-        threadSlug:   result.threadSlug,
-        sourceName:   sig.source_name,
-        anomalyScore: sig.anomaly_score,
-        tags:         payload.tags,
+        title:           payload.title,
+        category:        payload.category,
+        summary:         sig.summary,
+        threadSlug:      result.threadSlug,
+        sourceName:      sig.source_name,
+        anomalyScore:    sig.anomaly_score,
+        tags:            payload.tags,
+        hasEvidence:     Boolean(sig.source_image_url || sig.media_url),
+        attributionText: sig.attribution_text ?? undefined,
       };
-
       setPublishedResults((p) => ({
         ...p,
         [sig.id]: {
@@ -930,7 +1595,6 @@ export function SignalQueueClient({
           titleTruncated: xPostTitleTruncated(shareData),
         },
       }));
-
       setOverrides((o) => ({ ...o, [sig.id]: 'approved' }));
       setRebirthOpenId(null);
       router.refresh();
@@ -953,13 +1617,17 @@ export function SignalQueueClient({
         isRebirthOpen={rebirthOpenId === sig.id}
         publishedResult={publishedResults[sig.id] ?? null}
         inRebirthQueue={rebirthQueueIds.has(sig.id)}
+        duplicateResult={duplicateMap.get(sig.id) ?? { risk: 'low', reasons: [], related: [] }}
+        allSignals={allSignals}
+        isActiveReview={reviewingIds.has(sig.id)}
+        anyRebirthOpen={Boolean(rebirthOpenId)}
       />
     );
   }
 
   return (
     <div className="relative min-h-screen pb-16 pt-[80px] md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.10]" />
+      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.08]" />
 
       {/* ── Sticky toolbar ── */}
       <div className="sticky top-[72px] z-20 border-b border-crt/15 bg-[rgba(2,3,3,0.98)] backdrop-blur-sm md:top-[80px]">
@@ -968,108 +1636,94 @@ export function SignalQueueClient({
         <div className="border-b border-crt/10 px-4 py-3 md:px-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-crt/35">
-                swim · curator console · restricted access
-              </div>
-              <h1 className="text-[1.5rem] font-semibold tracking-[0.05em] text-crt/92 md:text-[1.7rem]">
+              <p className="text-xs font-medium text-crt/35">
+                SWIM · Curator Console · Restricted Access
+              </p>
+              <h1 className="text-2xl font-bold text-crt/92 md:text-3xl">
                 Signal Queue
               </h1>
             </div>
             <button
               onClick={() => setShowIntake((v) => !v)}
-              className={`border px-4 py-2 text-[13px] font-medium transition-colors ${
+              className={`border px-4 py-2 text-[15px] font-medium transition-colors ${
                 showIntake
-                  ? 'border-crt/30 text-crt/65 hover:border-crt/18 hover:text-crt/40'
-                  : 'border-crt/22 text-crt/48 hover:border-crt/38 hover:text-crt/72'
+                  ? 'border-crt/28 text-crt/60 hover:border-crt/15 hover:text-crt/40'
+                  : 'border-crt/22 text-crt/50 hover:border-crt/38 hover:text-crt/75'
               }`}
             >
-              {showIntake ? '− Close Intake' : '+ New Signal'}
+              {showIntake ? '− Close Intake' : '+ Add Signal'}
             </button>
           </div>
         </div>
 
         {/* Status tabs */}
         <div className="border-b border-crt/8 px-4 md:px-8">
-          <div className="flex gap-0 overflow-x-auto">
-            {STATUS_TABS.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`border-b-2 px-5 py-3 text-[14px] font-medium transition-colors whitespace-nowrap ${
-                  activeTab === key
-                    ? 'border-crt/60 text-crt/88'
-                    : 'border-transparent text-crt/38 hover:text-crt/65'
-                }`}
-              >
-                {label}
-                {key !== 'all' && (
-                  <span className={`ml-2 text-[13px] ${activeTab === key ? 'text-crt/50' : 'text-crt/28'}`}>
-                    {counts[key as RecoveredSignalStatus]}
-                  </span>
-                )}
-              </button>
-            ))}
+          <div className="flex overflow-x-auto">
+            {STATUS_TABS.map(({ key, label }) => {
+              const count = key !== 'all' ? counts[key as RecoveredSignalStatus] : null;
+              const isActive = activeTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveTab(key)}
+                  className={`shrink-0 border-b-2 px-4 py-3 text-[15px] font-medium transition-colors ${
+                    isActive ? 'border-crt/60 text-crt/88' : 'border-transparent text-crt/40 hover:text-crt/65'
+                  }`}
+                >
+                  {label}
+                  {count !== null && (
+                    <span className={`ml-1.5 text-sm ${isActive ? 'text-crt/52' : 'text-crt/28'}`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
         {/* Filter row */}
         <div className="px-4 py-2.5 md:px-8">
           <div className="flex flex-wrap items-center gap-3">
-            {/* Search */}
-            <div className="min-w-[160px] flex-1 max-w-xs">
+            <div className="min-w-[160px] max-w-xs flex-1">
               <input
                 type="search"
-                placeholder="Search title / summary / source…"
+                placeholder="Search title, summary, source…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full border border-crt/18 bg-transparent px-3 py-1.5 text-[14px] text-crt/72 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
+                className="w-full border border-crt/18 bg-transparent px-3 py-1.5 text-[15px] text-crt/75 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
               />
             </div>
-
-            {/* Category */}
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="border border-crt/18 bg-transparent px-3 py-1.5 text-[13px] text-crt/62 focus:border-crt/32 focus:outline-none"
+              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-1.5 text-[14px] text-crt/65 focus:border-crt/32 focus:outline-none"
             >
               <option value="">All categories</option>
-              {uniqueCategories.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
+              {uniqueCategories.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-
-            {/* Source type */}
             <select
               value={filterSourceType}
               onChange={(e) => setFilterSourceType(e.target.value)}
-              className="border border-crt/18 bg-transparent px-3 py-1.5 text-[13px] text-crt/62 focus:border-crt/32 focus:outline-none"
+              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-1.5 text-[14px] text-crt/65 focus:border-crt/32 focus:outline-none"
             >
               <option value="">All sources</option>
-              {uniqueSourceTypes.map((t) => (
-                <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>
-              ))}
+              {uniqueSourceTypes.map((t) => <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>)}
             </select>
-
-            {/* Score sort */}
             <button
               onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
-              className={`border px-3 py-1.5 text-[13px] transition-colors ${
-                sortScore
-                  ? 'border-crt/30 text-crt/65 hover:border-crt/18 hover:text-crt/42'
-                  : 'border-crt/15 text-crt/38 hover:border-crt/25 hover:text-crt/58'
+              className={`border px-3 py-1.5 text-[14px] transition-colors ${
+                sortScore ? 'border-crt/30 text-crt/65' : 'border-crt/15 text-crt/40 hover:border-crt/25'
               }`}
             >
               Score {sortScore === 'desc' ? '↓' : sortScore === 'asc' ? '↑' : '—'}
             </button>
-
-            {/* Clear */}
             {hasActiveFilter && (
               <button
                 onClick={clearFilters}
-                className="ml-auto text-[13px] text-crt/35 transition-colors hover:text-crt/62"
+                className="ml-auto text-[14px] text-crt/40 transition-colors hover:text-crt/65"
               >
-                × Clear filters
-                <span className="ml-2 text-crt/25">({visibleSignals.length} shown)</span>
+                × Clear ({visibleSignals.length} shown)
               </button>
             )}
           </div>
@@ -1088,98 +1742,100 @@ export function SignalQueueClient({
 
         {/* Error */}
         {errorMsg && (
-          <div className="mb-5 border border-red-900/45 bg-[rgba(40,10,10,0.65)] px-5 py-3 text-[14px] text-red-400/85">
-            › {errorMsg}
+          <div className="mb-5 border border-red-900/45 bg-[rgba(40,10,10,0.65)] px-5 py-3 text-base text-red-400/85">
+            {errorMsg}
           </div>
         )}
 
         {/* Two-column */}
-        <div className="flex flex-col gap-6 md:flex-row md:items-start lg:gap-8">
+        <div className="flex flex-col gap-6 md:flex-row md:items-start lg:gap-10">
 
-          {/* ── Signal cards (main column) ── */}
+          {/* Signal cards */}
           <div className="min-w-0 flex-1">
             {visibleSignals.length === 0 ? (
-              <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] py-20 text-center text-[15px] text-crt/35">
+              <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] py-20 text-center text-base text-crt/38">
                 {hasActiveFilter ? 'No signals match the current filters.' : 'No signals in this state.'}
               </div>
 
             ) : activeTab === 'pending' ? (
               <div className="space-y-6">
-                {/* Rebirth Queue */}
                 {rebirthQueueSignals.length > 0 && (
-                  <div>
+                  <section>
                     <div className="mb-3 flex items-center gap-3">
-                      <div className="h-px flex-1 bg-[rgba(215,168,92,0.22)]" />
-                      <span className="shrink-0 text-[13px] uppercase tracking-[0.14em] text-[#d7a85c]/80">
-                        ◈ Rebirth Queue — {rebirthQueueSignals.length} signal{rebirthQueueSignals.length !== 1 ? 's' : ''} · anomaly ≥ {REBIRTH_SCORE_THRESHOLD}
+                      <div className="h-px flex-1" style={{ background: 'rgba(192,132,252,0.25)' }} />
+                      <span className="shrink-0 text-sm font-semibold" style={{ color: '#c084fc99' }}>
+                        ◈ Rebirth Ready — {rebirthQueueSignals.length}
                       </span>
-                      <div className="h-px flex-1 bg-[rgba(215,168,92,0.22)]" />
+                      <div className="h-px flex-1" style={{ background: 'rgba(192,132,252,0.25)' }} />
                     </div>
-                    <div className="space-y-4">
-                      {rebirthQueueSignals.map(renderCard)}
-                    </div>
-                  </div>
+                    <div className="space-y-6">{rebirthQueueSignals.map(renderCard)}</div>
+                  </section>
                 )}
-
-                {/* Remaining pending */}
+                {reviewingSignals.length > 0 && (
+                  <section>
+                    <div className="mb-3 flex items-center gap-3">
+                      <div className="h-px flex-1" style={{ background: 'rgba(77,184,200,0.22)' }} />
+                      <span className="shrink-0 text-sm font-semibold" style={{ color: '#4db8c890' }}>
+                        ● Under Review — {reviewingSignals.length}
+                      </span>
+                      <div className="h-px flex-1" style={{ background: 'rgba(77,184,200,0.22)' }} />
+                    </div>
+                    <div className="space-y-6">{reviewingSignals.map(renderCard)}</div>
+                  </section>
+                )}
                 {regularPendingSignals.length > 0 && (
-                  <div>
-                    {rebirthQueueSignals.length > 0 && (
+                  <section>
+                    {(rebirthQueueSignals.length > 0 || reviewingSignals.length > 0) && (
                       <div className="mb-3 flex items-center gap-3">
                         <div className="h-px flex-1 bg-crt/10" />
-                        <span className="shrink-0 text-[13px] text-crt/35">
-                          Remaining · {regularPendingSignals.length}
+                        <span className="shrink-0 text-sm text-crt/38">
+                          Awaiting Review — {regularPendingSignals.length}
                         </span>
                         <div className="h-px flex-1 bg-crt/10" />
                       </div>
                     )}
-                    <div className="space-y-4">
-                      {regularPendingSignals.map(renderCard)}
-                    </div>
-                  </div>
+                    <div className="space-y-6">{regularPendingSignals.map(renderCard)}</div>
+                  </section>
                 )}
               </div>
 
             ) : activeTab === 'all' ? (
-              <div className="space-y-10">
+              <div className="space-y-12">
                 {STATUS_SECTION_ORDER.map((status) => {
                   const sigs = groupedByStatus[status];
                   if (sigs.length === 0) return null;
                   return (
-                    <div key={status}>
+                    <section key={status}>
                       <div className="mb-4 flex items-center gap-3">
                         <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
-                        <span
-                          className="shrink-0 text-[13px] uppercase tracking-[0.12em]"
-                          style={{ color: `${STATUS_COLORS[status]}90` }}
-                        >
-                          {SECTION_LABELS[status]} · {sigs.length}
+                        <span className="shrink-0 text-sm font-semibold"
+                          style={{ color: `${STATUS_COLORS[status]}90` }}>
+                          {SECTION_LABELS[status]} — {sigs.length}
                         </span>
                         <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
                       </div>
-                      <div className="space-y-4">
-                        {sigs.map(renderCard)}
-                      </div>
-                    </div>
+                      <div className="space-y-6">{sigs.map(renderCard)}</div>
+                    </section>
                   );
                 })}
               </div>
 
             ) : (
-              <div className="space-y-4">
-                {visibleSignals.map(renderCard)}
-              </div>
+              <div className="space-y-6">{visibleSignals.map(renderCard)}</div>
             )}
           </div>
 
-          {/* ── Sidebar ── */}
+          {/* Sidebar */}
           <div className="w-full shrink-0 space-y-4 md:w-[268px] lg:w-[288px]">
             <QueueStats counts={counts} rebirthQueueCount={rebirthQueueSignals.length} />
-            <AIScannerPanel />
-
-            {/* Footer note */}
-            <p className="text-center text-[12px] text-crt/22">
-              Service role key required · Not accessible to public users
+            <OperationsPanel
+              activeReviews={counts.reviewing}
+              rebirthReady={counts['rebirth-ready']}
+              duplicateWarnings={duplicateWarnings}
+              latestPublishedTitle={latestPublished}
+            />
+            <p className="text-center text-xs text-crt/22">
+              Requires service role key · Not accessible to public
             </p>
           </div>
 

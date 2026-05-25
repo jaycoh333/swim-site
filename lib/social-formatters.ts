@@ -13,13 +13,15 @@
 const SITE_BASE = 'https://www.sw1m.me';
 
 export interface ThreadShareData {
-  title:         string;
-  category:      string;
-  summary:       string;
-  threadSlug:    string;
-  sourceName?:   string;
-  anomalyScore?: number;
-  tags?:         string[];
+  title:            string;
+  category:         string;
+  summary:          string;
+  threadSlug:       string;
+  sourceName?:      string;
+  anomalyScore?:    number;
+  tags?:            string[];
+  hasEvidence?:     boolean;
+  attributionText?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,8 +50,14 @@ export function formatTelegramPost(data: ThreadShareData): string {
   if (data.sourceName) {
     lines.push('', `Source: ${data.sourceName}`);
   }
+  if (data.attributionText) {
+    lines.push(`Credit: ${data.attributionText}`);
+  }
   if (data.anomalyScore !== undefined) {
     lines.push(`Anomaly score: ${data.anomalyScore}/10`);
+  }
+  if (data.hasEvidence) {
+    lines.push('Evidence attached — see full thread');
   }
   if (data.tags && data.tags.length > 0) {
     lines.push('', `─ ${data.tags.slice(0, 4).join(' · ')}`);
