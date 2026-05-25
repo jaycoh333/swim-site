@@ -22,6 +22,7 @@ import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
+import { IntakeFormClient } from '@/components/IntakeFormClient';
 import { updateSignalStatusAction, publishSignalAsThreadAction } from '@/app/actions';
 import { formatTelegramPost, formatXPost, xPostTitleTruncated } from '@/lib/social-formatters';
 import type { DbRecoveredSignal, RecoveredSignalStatus } from '@/lib/supabase/types';
@@ -340,6 +341,7 @@ export function SignalQueueClient({
   const router = useRouter();
   const [isStatusPending, startStatusTransition] = useTransition();
   const [activeTab, setActiveTab] = useState<RecoveredSignalStatus | 'all'>('pending');
+  const [showIntake, setShowIntake] = useState(false);
 
   // Optimistic status overrides for approve/archive/reject actions
   const [overrides, setOverrides] = useState<Record<string, RecoveredSignalStatus>>({});
@@ -440,8 +442,20 @@ export function SignalQueueClient({
 
           {/* ── Header ── */}
           <div className="border-b border-crt/12 px-6 py-7 md:px-10 md:py-9">
-            <div className="mb-1.5 text-[11px] uppercase tracking-[0.30em] text-crt/35">
-              swim · internal · curator access only
+            <div className="mb-1.5 flex items-start justify-between gap-4">
+              <div className="text-[11px] uppercase tracking-[0.30em] text-crt/35">
+                swim · internal · curator access only
+              </div>
+              <button
+                onClick={() => setShowIntake((v) => !v)}
+                className={`shrink-0 border px-3 py-1.5 text-[10px] uppercase tracking-[0.22em] transition-colors ${
+                  showIntake
+                    ? 'border-crt/35 text-crt/70 hover:border-crt/22 hover:text-crt/40'
+                    : 'border-crt/22 text-crt/42 hover:border-crt/38 hover:text-crt/65'
+                }`}
+              >
+                {showIntake ? '[ − close intake ]' : '[ + intake signal ]'}
+              </button>
             </div>
             <h1 className="text-[1.8rem] tracking-[0.10em] text-crt md:text-[2.2rem]">
               SIGNAL QUEUE
@@ -450,6 +464,11 @@ export function SignalQueueClient({
               human approval required before any signal becomes public
             </p>
           </div>
+
+          {/* ── Manual intake form ── */}
+          {showIntake && (
+            <IntakeFormClient onSuccess={() => setShowIntake(false)} />
+          )}
 
           {/* ── Status counts ── */}
           <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.018)] px-6 py-4 md:px-10">

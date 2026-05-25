@@ -16,11 +16,13 @@ import {
   reportContent,
   updateSignalStatus,
   publishSignalAsThread,
+  createRecoveredSignal,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
   type ReportContentInput,
   type UpdateSignalStatusInput,
+  type CreateRecoveredSignalInput,
 } from '@/lib/supabase/repository';
 
 export async function createThreadAction(
@@ -59,6 +61,18 @@ export async function updateSignalStatusAction(
   input: UpdateSignalStatusInput,
 ): Promise<{ ok: true } | { error: string }> {
   return updateSignalStatus(input);
+}
+
+// Curator action — manually intake a new recovered signal.
+// Signals created here default to status='pending'.
+// All fields are validated server-side; no content restrictions bypass applies.
+//
+// SAFETY GATE: summarize don't copy; no PII; no illegal instructions.
+// See docs/scanner-source-registry.md for intake guidelines.
+export async function createRecoveredSignalAction(
+  input: CreateRecoveredSignalInput,
+): Promise<{ id: string } | { error: string }> {
+  return createRecoveredSignal(input);
 }
 
 // Curator action — publish a recovered signal as a SWIM thread.
