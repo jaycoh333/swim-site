@@ -3,25 +3,29 @@
 /**
  * SignalQueueClient — curator interface for reviewing recovered signals.
  *
- * Actions: approve, archive, reject, publish to thread (stub).
+ * Actions: approve, archive, reject, publish to thread.
  *
  * HUMAN APPROVAL GATE:
- *   Approval here is the mandatory step before any signal becomes public.
- *   No signal reaches /scanner or any thread without curator action.
- *
- * TELEGRAM / X INTEGRATION POINT:
- *   A future webhook or cron will trigger when status changes to 'approved'.
- *   See docs/growth-playbook.md — Phase 2 (Telegram Bot).
+ *   Approval and publishing here are the mandatory steps before any signal
+ *   becomes public. Nothing reaches /scanner or any thread automatically.
  *
  * PUBLISH TO THREAD:
- *   The [ publish ] button is a stub. Future phase: pre-fill CreateThreadPanel
- *   with signal content so the curator can review and post in one step.
+ *   [ publish to thread ] calls publishSignalAsThreadAction, which:
+ *   1. Formats a thread body from the signal content
+ *   2. Creates a thread with author_handle='ARCHIVIST'
+ *   3. Stamps the signal with published_thread_id + status='approved'
+ *   A link to the new thread appears in place of the button on success.
+ *
+ * TELEGRAM / X INTEGRATION POINT:
+ *   After publishing, share the thread link manually using the growth playbook
+ *   (docs/growth-playbook.md). Automated Telegram/X posting is a future phase.
  */
 
+import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
-import { updateSignalStatusAction } from '@/app/actions';
+import { updateSignalStatusAction, publishSignalAsThreadAction } from '@/app/actions';
 import type { DbRecoveredSignal, RecoveredSignalStatus } from '@/lib/supabase/types';
 
 const STATUS_TABS: Array<{ key: RecoveredSignalStatus | 'all'; label: string }> = [
@@ -63,12 +67,24 @@ function AnomalyBar({ score }: { score: number }) {
 }
 
 interface SignalCardProps {
-  signal: DbRecoveredSignal;
-  onStatusChange: (id: string, status: RecoveredSignalStatus) => void;
-  pending: boolean;
+  signal:              DbRecoveredSignal;
+  onStatusChange:      (id: string, status: RecoveredSignalStatus) => void;
+  statusPending:       boolean;
+  onPublish:           (id: string) => void;
+  isPublishing:        boolean;
+  publishedThreadSlug: string | null;
 }
 
-function SignalCard({ signal: sig, onStatusChange, pending }: SignalCardProps) {
+function SignalCard({
+  signal: sig,
+  onStatusChange,
+  statusPending,
+  onPublish,
+  isPublishing,
+  publishedThreadSlug,
+}: SignalCardProps) {
+  const alreadyPublished = Boolean(sig.published_thread_id);
+
   return (
     <div
       className="terminal-card px-5 py-5 md:px-6 md:py-6"
@@ -150,11 +166,12 @@ function SignalCard({ signal: sig, onStatusChange, pending }: SignalCardProps) {
 
       {/* Action row */}
       <div className="flex flex-wrap items-center gap-2 border-t border-crt/8 pt-4">
+        {/* Status actions */}
         {sig.status !== 'approved' && (
           <button
             onClick={() => onStatusChange(sig.id, 'approved')}
-            disabled={pending}
-            className="border border-[#86d46e]/30 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/70 transition-colors hover:border-[#86d46e]/55 hover:text-[#86d46e] disabled:opacity-30"
+            disabled={statusPending || isPublishing}
+            className="border border-[#86d46e]/30 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/70 transition-colors hover:border-[#86d46e]/55 hover:text-[#86d46e] disabled:opacity-30 disabled:cursor-not-allowed"
           >
             [ approve ]
           </button>
@@ -162,8 +179,8 @@ function SignalCard({ signal: sig, onStatusChange, pending }: SignalCardProps) {
         {sig.status !== 'archived' && (
           <button
             onClick={() => onStatusChange(sig.id, 'archived')}
-            disabled={pending}
-            className="border border-[#6da8ff]/28 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#6da8ff]/65 transition-colors hover:border-[#6da8ff]/50 hover:text-[#6da8ff] disabled:opacity-30"
+            disabled={statusPending || isPublishing}
+            className="border border-[#6da8ff]/28 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#6da8ff]/65 transition-colors hover:border-[#6da8ff]/50 hover:text-[#6da8ff] disabled:opacity-30 disabled:cursor-not-allowed"
           >
             [ archive ]
           </button>
@@ -171,20 +188,41 @@ function SignalCard({ signal: sig, onStatusChange, pending }: SignalCardProps) {
         {sig.status !== 'rejected' && (
           <button
             onClick={() => onStatusChange(sig.id, 'rejected')}
-            disabled={pending}
-            className="border border-[#ff6b6b]/22 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#ff6b6b]/55 transition-colors hover:border-[#ff6b6b]/42 hover:text-[#ff6b6b]/85 disabled:opacity-30"
+            disabled={statusPending || isPublishing}
+            className="border border-[#ff6b6b]/22 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#ff6b6b]/55 transition-colors hover:border-[#ff6b6b]/42 hover:text-[#ff6b6b]/85 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             [ reject ]
           </button>
         )}
-        {/* PUBLISH TO THREAD — stub: future phase wires this to CreateThreadPanel */}
-        <button
-          disabled
-          title="Publish to thread — future phase"
-          className="ml-auto border border-crt/12 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-crt/25 cursor-not-allowed"
-        >
-          [ publish to thread — soon ]
-        </button>
+
+        {/* Publish to thread */}
+        <div className="ml-auto">
+          {publishedThreadSlug ? (
+            // Just published in this session — show link
+            <Link
+              href={`/threads/${publishedThreadSlug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center border border-[#86d46e]/40 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/80 transition-colors hover:border-[#86d46e]/65 hover:text-[#86d46e]"
+            >
+              ✓ published — view thread ↗
+            </Link>
+          ) : alreadyPublished ? (
+            // Previously published (from server) — no slug available without extra join
+            <span className="px-1 text-[11px] uppercase tracking-[0.18em] text-crt/25">
+              ◈ already published
+            </span>
+          ) : (
+            // Not yet published — active button
+            <button
+              onClick={() => onPublish(sig.id)}
+              disabled={statusPending || isPublishing}
+              className="border border-crt/25 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-crt/55 transition-colors hover:border-crt/42 hover:text-crt/80 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {isPublishing ? '↯ publishing...' : '[ publish to thread ]'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -204,12 +242,19 @@ export function SignalQueueClient({
   rejected: initialRejected,
 }: SignalQueueClientProps) {
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [isStatusPending, startStatusTransition] = useTransition();
   const [activeTab, setActiveTab] = useState<RecoveredSignalStatus | 'all'>('pending');
-  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Local optimistic state maps id → status override
+  // Status overrides — optimistic local state for approve/archive/reject
   const [overrides, setOverrides] = useState<Record<string, RecoveredSignalStatus>>({});
+
+  // Publish state — one signal can publish at a time
+  const [publishingId,   setPublishingId]   = useState<string | null>(null);
+  // Maps signalId → threadSlug for signals published in this session
+  const [publishedSlugs, setPublishedSlugs] = useState<Record<string, string>>({});
+
+  // Shared error banner (status changes and publish failures share it)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const allSignals = [
     ...initialPending,
@@ -231,21 +276,43 @@ export function SignalQueueClient({
       ? allSignals
       : allSignals.filter((s) => s.status === activeTab);
 
+  function showError(msg: string) {
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(null), 5000);
+  }
+
   function handleStatusChange(id: string, status: RecoveredSignalStatus) {
     const prev = overrides[id] ?? allSignals.find((s) => s.id === id)?.status;
     setOverrides((o) => ({ ...o, [id]: status }));
-    setActionError(null);
 
-    startTransition(async () => {
+    startStatusTransition(async () => {
       const result = await updateSignalStatusAction({ id, status });
       if ('error' in result) {
         if (prev) setOverrides((o) => ({ ...o, [id]: prev }));
-        setActionError(`signal lost — ${result.error}`);
-        setTimeout(() => setActionError(null), 4000);
+        showError(`signal lost — ${result.error}`);
       } else {
         router.refresh();
       }
     });
+  }
+
+  async function handlePublish(signalId: string) {
+    if (publishingId) return; // one at a time
+    setPublishingId(signalId);
+
+    try {
+      const result = await publishSignalAsThreadAction(signalId);
+      if ('error' in result) {
+        showError(`publish failed — ${result.error}`);
+      } else {
+        setPublishedSlugs((p) => ({ ...p, [signalId]: result.threadSlug }));
+        // Optimistically flip status to approved
+        setOverrides((o) => ({ ...o, [signalId]: 'approved' }));
+        router.refresh();
+      }
+    } finally {
+      setPublishingId(null);
+    }
   }
 
   return (
@@ -324,9 +391,9 @@ export function SignalQueueClient({
           </div>
 
           {/* ── Error banner ── */}
-          {actionError && (
+          {errorMsg && (
             <div className="border-b border-red-900/40 bg-[rgba(40,10,10,0.6)] px-6 py-3 text-[12px] uppercase tracking-[0.18em] text-red-400/80 md:px-10">
-              › {actionError}
+              › {errorMsg}
             </div>
           )}
 
@@ -343,7 +410,10 @@ export function SignalQueueClient({
                     key={sig.id}
                     signal={sig}
                     onStatusChange={handleStatusChange}
-                    pending={isPending}
+                    statusPending={isStatusPending}
+                    onPublish={handlePublish}
+                    isPublishing={publishingId === sig.id}
+                    publishedThreadSlug={publishedSlugs[sig.id] ?? null}
                   />
                 ))}
               </div>

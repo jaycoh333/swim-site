@@ -514,6 +514,116 @@ export interface CreateRecoveredSignalInput {
   discoveredAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Recovered signals — publish to thread (curator only)
+//
+// Creates a SWIM thread from a recovered signal in a single server-side
+// operation, then stamps the signal with the thread UUID and status='approved'.
+// Prevents duplicate publishing if published_thread_id is already set.
+//
+// HUMAN APPROVAL GATE:
+//   This function is the mandatory step between a recovered signal and the
+//   public archive. Nothing calls this automatically — a curator must click
+//   [ publish to thread ] in /scanner/queue.
+// ---------------------------------------------------------------------------
+
+function formatSignalBody(sig: DbRecoveredSignal): string {
+  const lines: string[] = [
+    `> RECOVERED SIGNAL // ${sig.category.toUpperCase()}`,
+    `> source: ${sig.source_name} · ${sig.source_type}`,
+    `> anomaly score: ${sig.anomaly_score}/10`,
+    `> discovered: ${sig.discovered_at.slice(0, 10)}`,
+    '',
+    sig.summary,
+  ];
+
+  if (sig.source_url) {
+    lines.push('', `source: ${sig.source_url}`);
+  }
+
+  lines.push(
+    '',
+    '[ curator note: add context about how this signal was found and why it matters — remove this line before the thread goes live ]',
+  );
+
+  return lines.join('\n');
+}
+
+export async function publishSignalAsThread(
+  signalId: string,
+): Promise<{ threadSlug: string } | { error: string }> {
+  if (!hasSupabase) {
+    const sig = RECOVERED_SIGNAL_SEED.find((s) => s.id === signalId);
+    if (!sig) return { error: 'signal not found' };
+    // Mock: return a fake slug so the UI can display the success state
+    return { threadSlug: `th-local-${Date.now()}` };
+  }
+
+  const db = getDb()!;
+
+  // 1. Fetch the signal
+  const { data: sigData, error: sigErr } = await db
+    .from('recovered_signals')
+    .select('*')
+    .eq('id', signalId)
+    .single();
+
+  if (sigErr || !sigData) {
+    return { error: sigErr?.message ?? 'signal not found' };
+  }
+  const sig = sigData as DbRecoveredSignal;
+
+  // 2. Prevent duplicate publishing
+  if (sig.published_thread_id) {
+    return { error: 'signal already published to a thread' };
+  }
+
+  // 3. Create the thread — select both UUID (for the FK) and slug (for the link)
+  const slug = `${Date.now()}-${sig.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 60)}`;
+  const now = new Date().toISOString();
+
+  const { data: threadData, error: threadErr } = await db
+    .from('threads')
+    .insert({
+      slug,
+      title:            sig.title,
+      body:             formatSignalBody(sig),
+      category:         sig.category,
+      author_handle:    'ARCHIVIST',
+      author_mode:      'ghost',
+      tags:             [...(sig.tags ?? []), 'recovered-signal'],
+      last_activity_at: now,
+    })
+    .select('id, slug')
+    .single();
+
+  if (threadErr || !threadData) {
+    console.error('[repository] publishSignalAsThread (thread insert):', threadErr?.message);
+    return { error: threadErr?.message ?? 'thread creation failed' };
+  }
+
+  // 4. Stamp the signal: status='approved', approved_at, published_thread_id=UUID
+  const { error: updateErr } = await db
+    .from('recovered_signals')
+    .update({
+      status:               'approved',
+      approved_at:          now,
+      published_thread_id:  threadData.id,
+    })
+    .eq('id', signalId);
+
+  if (updateErr) {
+    // Thread was created — non-fatal. Log and still return success so the
+    // curator can navigate to the new thread.
+    console.error('[repository] publishSignalAsThread (signal update):', updateErr.message);
+  }
+
+  return { threadSlug: threadData.slug };
+}
+
 // SCRAPER INTEGRATION POINT:
 //   Future automated scrapers call this to submit signals for curator review.
 //   All signals are inserted with status='pending' regardless of the caller.

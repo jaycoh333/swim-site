@@ -15,6 +15,7 @@ import {
   addReaction,
   reportContent,
   updateSignalStatus,
+  publishSignalAsThread,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
@@ -58,4 +59,22 @@ export async function updateSignalStatusAction(
   input: UpdateSignalStatusInput,
 ): Promise<{ ok: true } | { error: string }> {
   return updateSignalStatus(input);
+}
+
+// Curator action — publish a recovered signal as a SWIM thread.
+// Creates the thread, then stamps the signal with the thread UUID and
+// sets status='approved'. Prevents duplicate publishing.
+//
+// HUMAN APPROVAL GATE:
+//   Nothing calls this automatically. A curator must click [ publish to thread ]
+//   in /scanner/queue for this to run.
+//
+// TELEGRAM / X INTEGRATION POINT:
+//   After a signal is published, the growth workflow (docs/growth-playbook.md)
+//   describes how to share the resulting thread on Telegram/X.
+//   Automated sharing is a future phase; this action does not trigger it.
+export async function publishSignalAsThreadAction(
+  signalId: string,
+): Promise<{ threadSlug: string } | { error: string }> {
+  return publishSignalAsThread(signalId);
 }
