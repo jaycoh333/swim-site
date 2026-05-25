@@ -36,7 +36,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
-import type { FetchedCandidate, SignalDuplicate } from '@/lib/scanner-fetch-types';
+import type { FetchedCandidate, SignalDuplicate, SessionSourceResult } from '@/lib/scanner-fetch-types';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -374,6 +374,110 @@ export async function queueFetchedCandidateAction(input: {
   await updateScannerSourceLastScanned(source.id);
 
   return { signalId: signalResult.id, title: input.title, url: input.sourceUrl, scannedAt };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch session — iterates enabled sources, fetches one page each.
+//
+// SAFETY:
+//   - Source must be enabled=true and have a base_url
+//   - Fetches are sequential — no parallel crawl
+//   - Raw HTML discarded after extraction
+//   - No DB writes here; curator queues each candidate individually
+//   - Max 20 sources per session
+//   - Per-source timeout: 10 seconds
+// ---------------------------------------------------------------------------
+
+export async function runFetchSessionAction(
+  sourceIds: string[],
+): Promise<{ results: SessionSourceResult[] } | { error: string }> {
+  if (!sourceIds.length)    return { error: 'no source IDs provided' };
+  if (sourceIds.length > 20) return { error: 'max 20 sources per session' };
+
+  // One DB query to load all sources; avoids N round trips inside the loop.
+  const allSources = await getScannerSources();
+  const sourceMap  = new Map(allSources.map((s) => [s.id, s]));
+
+  const results: SessionSourceResult[] = [];
+
+  for (const sourceId of sourceIds) {
+    const source = sourceMap.get(sourceId);
+
+    if (!source) {
+      results.push({ sourceId, sourceName: sourceId, status: 'error', error: 'not found in registry' });
+      continue;
+    }
+    if (!source.enabled) {
+      results.push({ sourceId, sourceName: source.name, status: 'error', error: 'source is not enabled' });
+      continue;
+    }
+    if (!source.base_url) {
+      results.push({ sourceId, sourceName: source.name, status: 'error', error: 'no base URL configured' });
+      continue;
+    }
+
+    let html: string;
+    try {
+      const response = await fetch(source.base_url, {
+        cache:   'no-store',
+        headers: {
+          'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+          'Accept':     'text/html,application/xhtml+xml;q=0.9',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: `HTTP ${response.status} — ${response.statusText}` });
+        continue;
+      }
+      const ct = response.headers.get('content-type') ?? '';
+      if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: `non-HTML response: ${ct.split(';')[0].trim()}` });
+        continue;
+      }
+      html = await response.text();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({ sourceId, sourceName: source.name, status: 'error', error: `network — ${msg}` });
+      continue;
+    }
+
+    // Extract metadata — raw HTML discarded after this point
+    const extracted = extractPageData(html, source.base_url);
+    const title     = cleanTitle(extracted.title) || source.name;
+    const summary   = buildSummary(extracted.description, extracted.snippet, source.name, extracted.canonicalUrl || source.base_url);
+
+    const candidate: FetchedCandidate = {
+      title:        title.slice(0, 200),
+      summary:      summary.slice(0, 2000),
+      sourceUrl:    extracted.canonicalUrl || source.base_url,
+      category:     source.category_focus[0] ?? 'Internet Lore',
+      tags:         ['scanner-source', source.source_type],
+      anomalyScore: 5,
+      categoryNote: buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+    };
+
+    // Duplicate check — include in session results so curator sees it immediately
+    const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+    if (dupes.length > 0) {
+      results.push({
+        sourceId,
+        sourceName: source.name,
+        status:     'duplicate',
+        candidate,
+        duplicates: dupes.map((d) => ({
+          id:        d.id,
+          title:     d.title,
+          sourceUrl: d.source_url,
+          status:    d.status,
+        })),
+      });
+    } else {
+      results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+    }
+  }
+
+  return { results };
 }
 
 // Curator action — rebirth a recovered signal as a SWIM thread using
