@@ -10,6 +10,7 @@ import {
   queueFetchedCandidateAction,
   runFetchSessionAction,
 } from '@/app/actions';
+import { AdminFlowBanner } from '@/components/AdminFlowBanner';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource, ScannerRiskLevel } from '@/lib/supabase/types';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
@@ -106,11 +107,11 @@ interface SessionHistoryRecord {
 function StatusBar() {
   return (
     <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.012)] px-6 py-3 md:px-10">
-      <div className="flex flex-wrap gap-x-6 gap-y-1 text-[10px] uppercase tracking-[0.20em]">
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs font-medium uppercase tracking-wider">
         <span style={{ color: '#86d46e' }}>◈ manual fetch only — one page per call</span>
-        <span className="text-crt/35">◈ no automated crawl</span>
-        <span className="text-crt/35">◈ curator reviews candidate before queueing</span>
-        <span className="text-crt/35">◈ raw html is never stored</span>
+        <span className="text-crt/38">◈ no automated crawl</span>
+        <span className="text-crt/38">◈ curator reviews candidate before queueing</span>
+        <span className="text-crt/38">◈ raw html is never stored</span>
       </div>
     </div>
   );
@@ -119,7 +120,7 @@ function StatusBar() {
 function RiskBadge({ level }: { level: ScannerRiskLevel }) {
   return (
     <span
-      className="inline-block px-2 py-0.5 text-[9px] uppercase tracking-[0.18em]"
+      className="inline-block px-2 py-0.5 text-xs font-semibold uppercase tracking-wider"
       style={{
         color:      RISK_COLORS[level],
         background: RISK_BG[level],
@@ -133,7 +134,7 @@ function RiskBadge({ level }: { level: ScannerRiskLevel }) {
 
 function TypeBadge({ type }: { type: string }) {
   return (
-    <span className="inline-block border border-crt/15 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-crt/45">
+    <span className="inline-block border border-crt/15 px-2 py-0.5 text-xs font-medium uppercase tracking-wider text-crt/50">
       {type}
     </span>
   );
@@ -144,7 +145,7 @@ function CategoryTags({ categories }: { categories: string[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {categories.map((c) => (
-        <span key={c} className="border border-crt/10 px-1.5 py-0.5 text-[9px] tracking-[0.10em] text-crt/35">
+        <span key={c} className="border border-crt/12 px-2 py-0.5 text-xs text-crt/40">
           {c}
         </span>
       ))}
@@ -515,10 +516,9 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
     };
   });
 
-  const inputBase =
-    'w-full border border-crt/15 bg-transparent px-2.5 py-1.5 font-mono text-[11px] tracking-[0.04em] text-crt/80 placeholder:text-crt/22 focus:border-crt/35 focus:outline-none transition-colors';
-  const labelBase =
-    'mb-1 block text-[9px] uppercase tracking-[0.20em] text-crt/35';
+  const fieldCls =
+    'w-full border border-crt/18 bg-transparent px-3 py-2 text-sm text-crt/80 placeholder:text-crt/25 focus:border-crt/35 focus:outline-none transition-colors';
+  const labelCls = 'mb-1.5 block text-xs font-semibold uppercase tracking-wider text-crt/40';
 
   const isActioned  = actionStatus === 'queued' || actionStatus === 'skipped';
   const isDuplicate = result.status === 'duplicate';
@@ -539,7 +539,7 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
         overrideDuplicate,
       });
       if ('error' in res)            { setQueueError(res.error); return; }
-      if ('duplicateWarning' in res) { setQueueError('duplicate still detected — use [ queue anyway ]'); return; }
+      if ('duplicateWarning' in res) { setQueueError('duplicate still detected — use queue anyway'); return; }
       onStatusChange('queued');
     });
   }
@@ -548,24 +548,20 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
   if (isActioned) {
     return (
       <div
-        className="flex items-center justify-between border-b border-crt/5 px-4 py-3"
+        className="flex items-center justify-between border-b border-crt/6 px-5 py-3"
         style={{ opacity: 0.4 }}
       >
         <div className="flex min-w-0 items-center gap-3">
-          <span className="font-mono text-[11px] tracking-[0.04em] text-crt/55 shrink-0">
-            {result.sourceName}
-          </span>
+          <span className="text-sm font-medium text-crt/60 shrink-0">{result.sourceName}</span>
           {result.status !== 'error' && (
-            <span className="truncate text-[10px] text-crt/35">
-              {editForm.title}
-            </span>
+            <span className="truncate text-sm text-crt/38">{editForm.title}</span>
           )}
         </div>
         <span
-          className="ml-3 shrink-0 text-[9px] uppercase tracking-[0.20em]"
-          style={{ color: actionStatus === 'queued' ? '#86d46e' : 'rgba(134,212,110,0.25)' }}
+          className="ml-3 shrink-0 text-xs font-semibold uppercase tracking-wider"
+          style={{ color: actionStatus === 'queued' ? '#86d46e' : 'rgba(134,212,110,0.30)' }}
         >
-          {actionStatus === 'queued' ? '✓ queued' : '— skipped'}
+          {actionStatus === 'queued' ? '✓ Queued' : '— Skipped'}
         </span>
       </div>
     );
@@ -575,23 +571,19 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
   if (result.status === 'error') {
     return (
       <div
-        className="border-b border-crt/5 px-4 py-4"
+        className="border-b border-crt/6 px-5 py-4"
         style={{ background: 'rgba(255,107,107,0.018)' }}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="mb-1 font-mono text-[11px] tracking-[0.04em] text-crt/50">
-              {result.sourceName}
-            </div>
-            <div className="text-[10px] tracking-[0.04em] text-[#ff6b6b]/50">
-              ✗ {result.error}
-            </div>
+            <div className="mb-1 text-sm font-semibold text-crt/55">{result.sourceName}</div>
+            <div className="text-sm text-[#ff6b6b]/55">✗ {result.error}</div>
           </div>
           <button
             onClick={() => onStatusChange('skipped')}
-            className="shrink-0 text-[9px] uppercase tracking-[0.14em] text-crt/22 hover:text-crt/45 transition-colors"
+            className="shrink-0 text-sm font-medium text-crt/35 hover:text-crt/60 transition-colors"
           >
-            dismiss
+            Dismiss
           </button>
         </div>
       </div>
@@ -601,70 +593,69 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
   // ── Preview or Duplicate ──
   return (
     <div
-      className="border-b border-crt/5"
+      className="border-b border-crt/6"
       style={{
-        borderLeft: `2px solid ${isDuplicate ? 'rgba(215,168,92,0.30)' : 'rgba(134,212,110,0.15)'}`,
+        borderLeft: `3px solid ${isDuplicate ? 'rgba(215,168,92,0.35)' : 'rgba(134,212,110,0.20)'}`,
       }}
     >
       {/* Card header */}
-      <div className="px-4 pt-4 pb-2">
-        <div className="mb-2 flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="font-mono text-[11px] tracking-[0.05em] text-crt/65">
-              {result.sourceName}
-            </span>
+      <div className="px-5 pt-5 pb-3">
+        {/* Source name + status badges */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-sm font-semibold text-crt/70">{result.sourceName}</span>
             {isDuplicate && (
               <span
-                className="px-1.5 py-0.5 text-[9px] uppercase tracking-[0.14em]"
-                style={{ color: '#d7a85c', background: 'rgba(215,168,92,0.08)', border: '1px solid rgba(215,168,92,0.20)' }}
+                className="px-2 py-0.5 text-xs font-semibold uppercase tracking-wider"
+                style={{ color: '#d7a85c', background: 'rgba(215,168,92,0.10)', border: '1px solid rgba(215,168,92,0.25)' }}
               >
-                ⚠ duplicate risk
+                ⚠ Duplicate Risk
               </span>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex shrink-0 items-center gap-4">
             {!isEditing && (
               <button
                 onClick={() => setIsEditing(true)}
-                className="text-[9px] uppercase tracking-[0.12em] text-crt/22 hover:text-crt/48 transition-colors"
+                className="text-sm font-medium text-crt/38 hover:text-crt/65 transition-colors"
               >
-                edit ▸
+                Edit ▸
               </button>
             )}
             <button
               onClick={() => onStatusChange('skipped')}
               disabled={queuePending}
-              className="text-[9px] uppercase tracking-[0.12em] text-crt/22 hover:text-crt/48 transition-colors disabled:opacity-30"
+              className="text-sm font-medium text-crt/35 hover:text-crt/60 transition-colors disabled:opacity-30"
             >
-              skip
+              Skip
             </button>
           </div>
         </div>
 
-        {/* Collapsed candidate info */}
+        {/* Candidate info (collapsed view) */}
         {!isEditing && (
           <>
-            <div className="mb-1 truncate font-mono text-[12px] tracking-[0.04em] text-crt/72">
+            <p className="mb-2 font-mono text-base font-medium text-crt/85 leading-snug">
               {editForm.title}
-            </div>
-            <div className="mb-1.5 line-clamp-2 text-[10px] leading-relaxed tracking-[0.03em] text-crt/40">
+            </p>
+            <p className="mb-2 text-sm leading-relaxed text-crt/55 line-clamp-3">
               {editForm.summary}
-            </div>
-            <div className="text-[9px] uppercase tracking-[0.10em] text-crt/22">
+            </p>
+            <p className="text-xs uppercase tracking-wider text-crt/30">
               {result.candidate.categoryNote}
-            </div>
+            </p>
 
             {/* Duplicate list */}
             {isDuplicate && (
-              <div className="mt-2.5 space-y-1 border-t border-crt/8 pt-2">
-                <div className="mb-1 text-[9px] uppercase tracking-[0.14em] text-crt/28">
-                  similar signals exist:
-                </div>
+              <div className="mt-3 border-t border-crt/8 pt-3 space-y-1.5">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-crt/35">
+                  Similar signals in queue:
+                </p>
                 {result.duplicates.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 font-mono text-[9px] tracking-[0.04em]">
-                    <span className="text-crt/22">·</span>
-                    <span className="flex-1 truncate text-crt/42">{d.title}</span>
-                    <span className="text-[8px] uppercase tracking-[0.12em] text-crt/22">{d.status}</span>
+                  <div key={d.id} className="flex items-center gap-2.5 text-sm">
+                    <span className="text-crt/25">·</span>
+                    <span className="flex-1 truncate text-crt/55">{d.title}</span>
+                    <span className="text-xs font-medium uppercase tracking-wider text-crt/30">{d.status}</span>
                   </div>
                 ))}
               </div>
@@ -676,36 +667,36 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
       {/* Inline edit form */}
       {isEditing && (
         <div
-          className="border-t border-crt/8 px-4 pb-4 pt-3 space-y-3"
+          className="border-t border-crt/8 px-5 pb-5 pt-4 space-y-4"
           style={{ background: 'rgba(134,212,110,0.012)' }}
         >
           <div>
-            <label className={labelBase}>title</label>
+            <label className={labelCls}>Title</label>
             <input
               type="text"
               value={editForm.title}
               onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
               maxLength={200}
-              className={inputBase}
+              className={`${fieldCls} font-mono`}
             />
           </div>
           <div>
-            <label className={labelBase}>summary</label>
+            <label className={labelCls}>Summary</label>
             <textarea
               value={editForm.summary}
               onChange={(e) => setEditForm((f) => ({ ...f, summary: e.target.value }))}
-              rows={4}
+              rows={5}
               maxLength={2000}
-              className={`${inputBase} resize-y`}
+              className={`${fieldCls} resize-y leading-relaxed`}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className={labelBase}>category</label>
+              <label className={labelCls}>Category</label>
               <select
                 value={editForm.category}
                 onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}
-                className={`${inputBase} cursor-pointer`}
+                className={`${fieldCls} cursor-pointer`}
               >
                 {CATEGORY_ORDER.map((c: string) => (
                   <option key={c} value={c}>{c}</option>
@@ -713,10 +704,10 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
               </select>
             </div>
             <div>
-              <label className={labelBase}>
-                anomaly score
+              <label className={labelCls}>
+                Anomaly Score
                 <span
-                  className="ml-1.5 tabular-nums"
+                  className="ml-2 font-mono tabular-nums"
                   style={{ color: editForm.anomalyScore >= 8 ? '#ff6b6b' : editForm.anomalyScore >= 6 ? '#d7a85c' : '#86d46e' }}
                 >
                   {editForm.anomalyScore}/10
@@ -728,47 +719,47 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
                 max={10}
                 value={editForm.anomalyScore}
                 onChange={(e) => setEditForm((f) => ({ ...f, anomalyScore: parseInt(e.target.value, 10) }))}
-                className="mt-2 w-full accent-crt"
+                className="mt-2.5 w-full accent-crt"
               />
             </div>
           </div>
           <div>
-            <label className={labelBase}>tags <span className="text-crt/20">— comma separated</span></label>
+            <label className={labelCls}>Tags <span className="font-normal text-crt/30 normal-case">— comma separated</span></label>
             <input
               type="text"
               value={editForm.tags}
               onChange={(e) => setEditForm((f) => ({ ...f, tags: e.target.value }))}
-              className={inputBase}
+              className={fieldCls}
             />
           </div>
           <button
             onClick={() => setIsEditing(false)}
-            className="text-[9px] uppercase tracking-[0.14em] text-crt/30 hover:text-crt/55 transition-colors"
+            className="text-sm font-medium text-crt/40 hover:text-crt/65 transition-colors"
           >
-            ✓ done editing
+            ✓ Done editing
           </button>
         </div>
       )}
 
       {/* Action buttons */}
       {!isEditing && (
-        <div className="flex items-center gap-4 px-4 pb-4">
+        <div className="flex flex-wrap items-center gap-3 px-5 pb-5">
           {isDuplicate ? (
             <button
               onClick={() => handleQueue(true)}
               disabled={queuePending}
-              className="border px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] transition-colors disabled:opacity-40"
-              style={{ borderColor: 'rgba(215,168,92,0.25)', color: 'rgba(215,168,92,0.62)' }}
+              className="border-2 px-5 py-2.5 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ borderColor: 'rgba(215,168,92,0.35)', color: 'rgba(215,168,92,0.75)' }}
             >
-              {queuePending ? '↯ queueing...' : '[ queue anyway ]'}
+              {queuePending ? '↯ Queueing…' : 'Queue Anyway →'}
             </button>
           ) : (
             <button
               onClick={() => handleQueue(false)}
               disabled={queuePending}
-              className="border border-crt/20 px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-crt/55 transition-colors hover:border-crt/35 hover:text-crt/78 disabled:opacity-40"
+              className="border-2 border-crt/28 px-5 py-2.5 text-sm font-bold text-crt/70 transition-colors hover:border-crt/45 hover:text-crt/90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {queuePending ? '↯ queueing...' : '[ queue ]'}
+              {queuePending ? '↯ Queueing…' : 'Queue Candidate →'}
             </button>
           )}
         </div>
@@ -776,7 +767,7 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
 
       {/* Queue error */}
       {queueError && (
-        <div className="px-4 pb-3 text-[10px] tracking-[0.04em] text-[#ff6b6b]/55">
+        <div className="px-5 pb-4 text-sm text-[#ff6b6b]/60">
           ✗ {queueError}
         </div>
       )}
@@ -1364,6 +1355,9 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
               <a href="/scanner" className="text-crt/35 transition-colors hover:text-crt/60">scanner →</a>
             </div>
           </div>
+
+          {/* ── Operator flow ── */}
+          <AdminFlowBanner currentStep={1} />
 
           {/* ── Status bar ── */}
           <StatusBar />

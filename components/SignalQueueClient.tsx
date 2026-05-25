@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { useState, useMemo, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
+import { AdminFlowBanner } from '@/components/AdminFlowBanner';
 import { IntakeFormClient } from '@/components/IntakeFormClient';
 import { analyzeRecoveredSignal } from '@/lib/ai-analysis';
 import type { SignalAnalysis } from '@/lib/ai-analysis';
@@ -1265,6 +1266,9 @@ function SignalCard({
         </div>
       </div>
 
+      {/* ── EVIDENCE SECTION (always visible) ── */}
+      <EvidenceSection sig={sig} />
+
       {/* ── WORKFLOW STEP BANNER ── */}
       {!publishedResult && <WorkflowStepBanner sig={sig} isReborn={isReborn} />}
 
@@ -1351,10 +1355,10 @@ function SignalCard({
           className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-[rgba(134,212,110,0.018)] md:px-6"
         >
           <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-crt/40">Advanced details</span>
+            <span className="text-sm font-medium text-crt/40">More details</span>
             {!showAdvanced && (
               <span className="text-xs text-crt/22">
-                evidence · tags · curator notes · AI · duplicates
+                tags · curator notes · AI analysis · related signals
               </span>
             )}
           </div>
@@ -1363,8 +1367,6 @@ function SignalCard({
 
         {showAdvanced && (
           <>
-            <EvidenceSection sig={sig} />
-
             {sig.tags.length > 0 && (
               <div className="border-t border-crt/10">
                 <div className="bg-[rgba(2,3,3,0.35)] px-5 py-2 md:px-6">
@@ -1818,6 +1820,9 @@ export function SignalQueueClient({
             </button>
           </div>
         </div>
+
+        {/* Operator flow — 4-step visual workflow */}
+        <AdminFlowBanner currentStep={2} />
 
         {/* Status tabs */}
         <div className="border-b border-crt/8 px-4 md:px-8">
