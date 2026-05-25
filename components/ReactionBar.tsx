@@ -8,20 +8,20 @@ interface ReactionBarProps {
 }
 
 const REACTIONS: Array<{ key: keyof ReactionSet; label: string; glyph: string }> = [
-  { key: 'echo', label: 'Echo', glyph: '~' },
-  { key: 'dive', label: 'Dive', glyph: 'v' },
-  { key: 'ripple', label: 'Ripple', glyph: '*' },
-  { key: 'witness', label: 'Witness', glyph: '+' },
-  { key: 'signal', label: 'Signal', glyph: '>' },
+  { key: 'echo',    label: 'Echo',      glyph: '~'  },
+  { key: 'witness', label: 'Witnessed', glyph: '◉'  },
+  { key: 'signal',  label: 'Signal',    glyph: '▲'  },
+  { key: 'ripple',  label: 'Archived',  glyph: '⊟'  },
+  { key: 'dive',    label: 'Glitch',    glyph: '↯'  },
 ];
 
 export function ReactionBar({ reactions, compact = false }: ReactionBarProps) {
   return (
-    <div className={`flex flex-wrap gap-x-4 gap-y-2 ${compact ? 'text-[10px]' : 'text-xs'} tracking-[0.16em]`}>
+    <div className={`flex flex-wrap gap-x-4 gap-y-1.5 ${compact ? 'text-[11px]' : 'text-[12px]'} uppercase tracking-[0.14em]`}>
       {REACTIONS.map(({ key, label, glyph }) => (
-        <button key={key} className="text-crt/28 transition-colors hover:text-crt/72">
-          {glyph} {reactions[key]} {label.toUpperCase()}
-        </button>
+        <span key={key} className="text-crt/35">
+          {glyph} {reactions[key]} {label}
+        </span>
       ))}
     </div>
   );

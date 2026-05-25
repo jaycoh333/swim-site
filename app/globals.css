@@ -1415,29 +1415,57 @@ body::after {
 }
 
 .reaction-btn {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: rgba(134, 212, 110, 0.58);
-  border: 1px solid rgba(134, 212, 110, 0.20);
-  padding: 6px 13px;
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s, text-shadow 0.12s;
-  background: transparent;
   font-family: inherit;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.50);
+  border: 1px solid rgba(134, 212, 110, 0.18);
+  padding: 10px 16px;
+  min-height: 52px;
+  min-width: 72px;
+  cursor: pointer;
+  transition: color 0.14s, border-color 0.14s, background 0.14s, text-shadow 0.14s, box-shadow 0.14s;
+  background: transparent;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .reaction-btn:hover {
-  color: rgba(134, 212, 110, 0.88);
-  border-color: rgba(134, 212, 110, 0.45);
-  background: rgba(134, 212, 110, 0.04);
+  color: rgba(134, 212, 110, 0.82);
+  border-color: rgba(134, 212, 110, 0.38);
+  background: rgba(134, 212, 110, 0.035);
 }
 
 .reaction-btn.reacted {
-  color: var(--crt);
-  border-color: rgba(134, 212, 110, 0.5);
-  background: rgba(134, 212, 110, 0.07);
-  text-shadow: 0 0 5px rgba(134, 212, 110, 0.14);
+  color: rgba(134, 212, 110, 0.95);
+  border-color: rgba(134, 212, 110, 0.55);
+  background: rgba(134, 212, 110, 0.09);
+  box-shadow: 0 0 12px rgba(134, 212, 110, 0.10), inset 0 0 8px rgba(134, 212, 110, 0.05);
+  text-shadow: 0 0 8px rgba(134, 212, 110, 0.22);
+}
+
+.reaction-glyph-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.reaction-count {
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.reaction-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  opacity: 0.72;
 }
 
 .post-permalink {
@@ -1769,10 +1797,9 @@ body::after {
     padding: 18px 13px 14px;
   }
 
-  /* Reaction buttons slightly larger tap target on mobile */
   .reaction-btn {
-    padding: 8px 15px;
-    font-size: 13px;
+    min-width: 62px;
+    padding: 10px 12px;
   }
 }
 

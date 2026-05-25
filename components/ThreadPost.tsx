@@ -14,12 +14,12 @@ interface ThreadPostProps {
   isOP?: boolean;
 }
 
-const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: string }> = [
-  { key: 'echo',    glyph: '~', label: 'ECHO'     },
-  { key: 'witness', glyph: '+', label: 'WITNESSED' },
-  { key: 'signal',  glyph: '▸', label: 'SIGNAL'   },
-  { key: 'ripple',  glyph: '◻', label: 'ARCHIVED'  },
-  { key: 'dive',    glyph: '↯', label: 'GLITCH'   },
+const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: string; desc: string }> = [
+  { key: 'echo',    glyph: '~',  label: 'ECHO',      desc: 'this should echo further' },
+  { key: 'witness', glyph: '◉',  label: 'WITNESSED', desc: 'I saw this'               },
+  { key: 'signal',  glyph: '▲',  label: 'SIGNAL',    desc: 'important signal'         },
+  { key: 'ripple',  glyph: '⊟',  label: 'ARCHIVED',  desc: 'save this memory'         },
+  { key: 'dive',    glyph: '↯',  label: 'GLITCH',    desc: 'something is off'         },
 ];
 
 function renderBody(body: string) {
@@ -142,14 +142,18 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
 
       {/* Reactions */}
       <div className="post-reactions">
-        {REACTION_DEFS.map(({ key, glyph, label }) => (
+        {REACTION_DEFS.map(({ key, glyph, label, desc }) => (
           <button
             key={key}
             onClick={() => toggleReaction(key)}
             className={`reaction-btn ${reacted[key] ? 'reacted' : ''}`}
-            title={`${label}: ${counts[key]}`}
+            title={desc}
           >
-            {glyph} {counts[key]} {label}
+            <span className="reaction-glyph-count">
+              <span>{glyph}</span>
+              <span className="reaction-count">{counts[key]}</span>
+            </span>
+            <span className="reaction-label">{label}</span>
           </button>
         ))}
       </div>
