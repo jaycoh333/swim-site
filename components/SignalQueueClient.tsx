@@ -3,22 +3,19 @@
 /**
  * SignalQueueClient — curator interface for reviewing recovered signals.
  *
- * Actions: approve, archive, reject, publish to thread.
+ * After publishing a signal as a thread, a share package panel appears
+ * showing pre-formatted Telegram and X copy with one-click copy buttons.
+ * No API calls are made from this component — sharing is manual.
  *
  * HUMAN APPROVAL GATE:
- *   Approval and publishing here are the mandatory steps before any signal
- *   becomes public. Nothing reaches /scanner or any thread automatically.
- *
- * PUBLISH TO THREAD:
- *   [ publish to thread ] calls publishSignalAsThreadAction, which:
- *   1. Formats a thread body from the signal content
- *   2. Creates a thread with author_handle='ARCHIVIST'
- *   3. Stamps the signal with published_thread_id + status='approved'
- *   A link to the new thread appears in place of the button on success.
+ *   Approval and publishing here are mandatory steps before any signal
+ *   becomes public. Nothing posts automatically.
  *
  * TELEGRAM / X INTEGRATION POINT:
- *   After publishing, share the thread link manually using the growth playbook
- *   (docs/growth-playbook.md). Automated Telegram/X posting is a future phase.
+ *   formatTelegramPost / formatXPost from lib/social-formatters.ts generate
+ *   the preview text. When Phase 2/3 are implemented, the [ post to telegram ]
+ *   and [ post to x ] buttons will call server actions that invoke social-poster.ts.
+ *   See docs/social-automation-plan.md.
  */
 
 import Link from 'next/link';
@@ -26,6 +23,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { updateSignalStatusAction, publishSignalAsThreadAction } from '@/app/actions';
+import { formatTelegramPost, formatXPost, xPostTitleTruncated } from '@/lib/social-formatters';
 import type { DbRecoveredSignal, RecoveredSignalStatus } from '@/lib/supabase/types';
 
 const STATUS_TABS: Array<{ key: RecoveredSignalStatus | 'all'; label: string }> = [
@@ -42,6 +40,17 @@ const STATUS_COLORS: Record<RecoveredSignalStatus, string> = {
   archived: '#6da8ff',
   rejected: '#ff6b6b',
 };
+
+interface PublishResult {
+  threadSlug:    string;
+  telegramText:  string;
+  xText:         string;
+  titleTruncated: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// AnomalyBar
+// ---------------------------------------------------------------------------
 
 function AnomalyBar({ score }: { score: number }) {
   return (
@@ -66,13 +75,106 @@ function AnomalyBar({ score }: { score: number }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// SharePackagePanel
+// ---------------------------------------------------------------------------
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(text).catch(() => {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    });
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="text-[10px] uppercase tracking-[0.16em] text-crt/38 transition-colors hover:text-crt/65"
+    >
+      {copied ? '✓ copied' : '[ copy ]'}
+    </button>
+  );
+}
+
+function SharePackagePanel({ result }: { result: PublishResult }) {
+  return (
+    <div className="mt-4 border-t border-crt/10 pt-4">
+      {/* Panel header + view thread */}
+      <div className="mb-4 flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-[0.26em] text-crt/28">
+          share package
+        </span>
+        <Link
+          href={`/threads/${result.threadSlug}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/72 transition-colors hover:text-[#86d46e]"
+        >
+          ✓ view thread ↗
+        </Link>
+      </div>
+
+      {/* Telegram block */}
+      <div className="mb-3">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-[0.20em] text-crt/28">telegram</span>
+          <CopyButton text={result.telegramText} />
+        </div>
+        <div className="border border-crt/10 bg-[rgba(134,212,110,0.018)] px-3 py-2.5 font-mono text-[11px] leading-relaxed tracking-[0.03em] text-crt/45 whitespace-pre-wrap">
+          {result.telegramText}
+        </div>
+      </div>
+
+      {/* X block */}
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] uppercase tracking-[0.20em] text-crt/28">x.com</span>
+            <span
+              className="text-[10px] tabular-nums tracking-[0.12em]"
+              style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.30)' }}
+            >
+              {result.xText.length}/280
+            </span>
+            {result.titleTruncated && (
+              <span className="text-[10px] uppercase tracking-[0.12em] text-[#d7a85c]/70">
+                title truncated
+              </span>
+            )}
+          </div>
+          <CopyButton text={result.xText} />
+        </div>
+        <div className="border border-crt/10 bg-[rgba(134,212,110,0.018)] px-3 py-2.5 font-mono text-[11px] leading-relaxed tracking-[0.03em] text-crt/45 whitespace-pre-wrap">
+          {result.xText}
+        </div>
+        <p className="mt-1.5 text-[10px] uppercase tracking-[0.14em] text-crt/22">
+          no api calls made — copy and post manually or wait for phase 2/3
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SignalCard
+// ---------------------------------------------------------------------------
+
 interface SignalCardProps {
-  signal:              DbRecoveredSignal;
-  onStatusChange:      (id: string, status: RecoveredSignalStatus) => void;
-  statusPending:       boolean;
-  onPublish:           (id: string) => void;
-  isPublishing:        boolean;
-  publishedThreadSlug: string | null;
+  signal:          DbRecoveredSignal;
+  onStatusChange:  (id: string, status: RecoveredSignalStatus) => void;
+  statusPending:   boolean;
+  onPublish:       (sig: DbRecoveredSignal) => void;
+  isPublishing:    boolean;
+  publishedResult: PublishResult | null;
 }
 
 function SignalCard({
@@ -81,9 +183,9 @@ function SignalCard({
   statusPending,
   onPublish,
   isPublishing,
-  publishedThreadSlug,
+  publishedResult,
 }: SignalCardProps) {
-  const alreadyPublished = Boolean(sig.published_thread_id);
+  const alreadyPublished = Boolean(sig.published_thread_id) && !publishedResult;
 
   return (
     <div
@@ -166,7 +268,6 @@ function SignalCard({
 
       {/* Action row */}
       <div className="flex flex-wrap items-center gap-2 border-t border-crt/8 pt-4">
-        {/* Status actions */}
         {sig.status !== 'approved' && (
           <button
             onClick={() => onStatusChange(sig.id, 'approved')}
@@ -195,27 +296,15 @@ function SignalCard({
           </button>
         )}
 
-        {/* Publish to thread */}
+        {/* Publish button — right-aligned, three states */}
         <div className="ml-auto">
-          {publishedThreadSlug ? (
-            // Just published in this session — show link
-            <Link
-              href={`/threads/${publishedThreadSlug}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center border border-[#86d46e]/40 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-[#86d46e]/80 transition-colors hover:border-[#86d46e]/65 hover:text-[#86d46e]"
-            >
-              ✓ published — view thread ↗
-            </Link>
-          ) : alreadyPublished ? (
-            // Previously published (from server) — no slug available without extra join
+          {publishedResult ? null /* panel renders below */ : alreadyPublished ? (
             <span className="px-1 text-[11px] uppercase tracking-[0.18em] text-crt/25">
               ◈ already published
             </span>
           ) : (
-            // Not yet published — active button
             <button
-              onClick={() => onPublish(sig.id)}
+              onClick={() => onPublish(sig)}
               disabled={statusPending || isPublishing}
               className="border border-crt/25 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-crt/55 transition-colors hover:border-crt/42 hover:text-crt/80 disabled:opacity-30 disabled:cursor-not-allowed"
             >
@@ -224,9 +313,16 @@ function SignalCard({
           )}
         </div>
       </div>
+
+      {/* Share package — appears after successful publish in this session */}
+      {publishedResult && <SharePackagePanel result={publishedResult} />}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// SignalQueueClient
+// ---------------------------------------------------------------------------
 
 export interface SignalQueueClientProps {
   pending:  DbRecoveredSignal[];
@@ -245,15 +341,14 @@ export function SignalQueueClient({
   const [isStatusPending, startStatusTransition] = useTransition();
   const [activeTab, setActiveTab] = useState<RecoveredSignalStatus | 'all'>('pending');
 
-  // Status overrides — optimistic local state for approve/archive/reject
+  // Optimistic status overrides for approve/archive/reject actions
   const [overrides, setOverrides] = useState<Record<string, RecoveredSignalStatus>>({});
 
-  // Publish state — one signal can publish at a time
-  const [publishingId,   setPublishingId]   = useState<string | null>(null);
-  // Maps signalId → threadSlug for signals published in this session
-  const [publishedSlugs, setPublishedSlugs] = useState<Record<string, string>>({});
+  // Publish state
+  const [publishingId,     setPublishingId]     = useState<string | null>(null);
+  // Maps signalId → PublishResult for signals published in this session
+  const [publishedResults, setPublishedResults] = useState<Record<string, PublishResult>>({});
 
-  // Shared error banner (status changes and publish failures share it)
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const allSignals = [
@@ -296,20 +391,41 @@ export function SignalQueueClient({
     });
   }
 
-  async function handlePublish(signalId: string) {
-    if (publishingId) return; // one at a time
-    setPublishingId(signalId);
+  async function handlePublish(sig: DbRecoveredSignal) {
+    if (publishingId) return;
+    setPublishingId(sig.id);
 
     try {
-      const result = await publishSignalAsThreadAction(signalId);
+      const result = await publishSignalAsThreadAction(sig.id);
       if ('error' in result) {
         showError(`publish failed — ${result.error}`);
-      } else {
-        setPublishedSlugs((p) => ({ ...p, [signalId]: result.threadSlug }));
-        // Optimistically flip status to approved
-        setOverrides((o) => ({ ...o, [signalId]: 'approved' }));
-        router.refresh();
+        return;
       }
+
+      // Build share data from the signal + returned slug
+      const shareData = {
+        title:        sig.title,
+        category:     sig.category,
+        summary:      sig.summary,
+        threadSlug:   result.threadSlug,
+        sourceName:   sig.source_name,
+        anomalyScore: sig.anomaly_score,
+        tags:         sig.tags,
+      };
+
+      setPublishedResults((p) => ({
+        ...p,
+        [sig.id]: {
+          threadSlug:    result.threadSlug,
+          telegramText:  formatTelegramPost(shareData),
+          xText:         formatXPost(shareData),
+          titleTruncated: xPostTitleTruncated(shareData),
+        },
+      }));
+
+      // Optimistically flip to approved in the status tab counts
+      setOverrides((o) => ({ ...o, [sig.id]: 'approved' }));
+      router.refresh();
     } finally {
       setPublishingId(null);
     }
@@ -413,7 +529,7 @@ export function SignalQueueClient({
                     statusPending={isStatusPending}
                     onPublish={handlePublish}
                     isPublishing={publishingId === sig.id}
-                    publishedThreadSlug={publishedSlugs[sig.id] ?? null}
+                    publishedResult={publishedResults[sig.id] ?? null}
                   />
                 ))}
               </div>
