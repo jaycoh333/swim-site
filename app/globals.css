@@ -1582,6 +1582,31 @@ body::after {
   text-shadow: 0 0 5px rgba(134, 212, 110, 0.18);
 }
 
+/* ── SHARE BUTTONS ───────────────────────────────────────── */
+
+.share-btn {
+  font-family: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  border: 1px solid rgba(134, 212, 110, 0.20);
+  padding: 5px 11px;
+  min-height: 36px;
+  color: rgba(134, 212, 110, 0.42);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.14s, border-color 0.14s;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.share-btn:hover {
+  color: rgba(134, 212, 110, 0.78);
+  border-color: rgba(134, 212, 110, 0.38);
+}
+
 /* ── HIGHLIGHTED STORY CARDS ─────────────────────────────── */
 
 .story-card {

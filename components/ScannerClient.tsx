@@ -3,6 +3,14 @@
 import Link from 'next/link';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { NetworkFooter } from '@/components/NetworkFooter';
+import { ShareBar } from '@/components/ShareBar';
+
+const SCANNER_URL = 'https://www.sw1m.me/scanner';
+
+function buildSignalShareText(sig: SignalEntry): string {
+  const preview = sig.summary.length > 160 ? sig.summary.slice(0, 157) + '...' : sig.summary;
+  return `RECOVERED SIGNAL // ${sig.category.toUpperCase()} [${sig.id}]\n"${preview}"\n\nSource: ${sig.source}\nswim scanner: ${SCANNER_URL}`;
+}
 
 interface SignalEntry {
   id: string;
@@ -234,6 +242,14 @@ export function ScannerClient() {
                     <span className="text-[11px] uppercase tracking-[0.14em] text-crt/30">
                       recovered {sig.recovered}
                     </span>
+                  </div>
+
+                  {/* Share */}
+                  <div className="mt-3 border-t border-crt/8 pt-3">
+                    <ShareBar
+                      shareText={buildSignalShareText(sig)}
+                      shareUrl={SCANNER_URL}
+                    />
                   </div>
                 </div>
               ))}

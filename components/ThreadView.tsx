@@ -9,6 +9,15 @@ import { CATEGORY_COLORS } from '@/lib/forum-types';
 import type { Reply, ThreadContent } from '@/lib/forum-types';
 import { useIdentity } from '@/lib/identity';
 import { createReplyAction } from '@/app/actions';
+import { ShareBar } from '@/components/ShareBar';
+
+const SITE_BASE = 'https://www.sw1m.me';
+
+function buildThreadShareText(thread: ThreadContent): string {
+  const url = `${SITE_BASE}/threads/${thread.id}`;
+  const title = thread.title.length > 100 ? thread.title.slice(0, 97) + '...' : thread.title;
+  return `RECOVERED SIGNAL // ${thread.category.toUpperCase()}\n"${title}"\n\nswim archive: ${url}`;
+}
 
 interface ThreadViewProps {
   threadId: string;
@@ -150,6 +159,15 @@ export function ThreadView({
               )}
               <span className="text-crt/28">↯ last signal: {thread.lastActivityAt}</span>
               {thread.pinned && <span className="text-crt/55">■ pinned</span>}
+            </div>
+
+            {/* Share bar */}
+            <div className="mt-4 border-t border-crt/8 pt-4">
+              <ShareBar
+                shareText={buildThreadShareText(thread)}
+                shareUrl={`${SITE_BASE}/threads/${thread.id}`}
+                label="share signal"
+              />
             </div>
           </div>
 
