@@ -290,10 +290,10 @@ export function ScannerClient({ approvedSignals }: ScannerClientProps) {
             <p className="mb-7 text-[1.05rem] leading-relaxed tracking-[0.04em] text-crt/55">
               Found something that should not be forgotten?
               <br className="hidden sm:block" />
-              {' '}Post it as a thread. Curators monitor all incoming signals.
+              {' '}Submit it. Curators review all signals before anything enters the archive.
             </p>
             <div className="flex flex-col gap-4 sm:flex-row sm:justify-center">
-              <Link href="/threads?compose=true" className="create-thread-cta">
+              <Link href="/scanner/submit" className="create-thread-cta">
                 [ submit found signal ]
               </Link>
               <Link href="/threads" className="create-thread-cta">

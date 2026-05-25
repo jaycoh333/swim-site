@@ -63,6 +63,32 @@ export async function updateSignalStatusAction(
   return updateSignalStatus(input);
 }
 
+// Public action — submit a found signal for curator review.
+// Anomaly score is fixed at 5 (curators set the real score during review).
+// Honeypot field (_hp) must be empty — bots that fill it get a fake success.
+// All public submissions start as status='pending'.
+//
+// SAFETY GATE: no content is published from this path without a curator
+// approving the signal and then explicitly clicking [ publish to thread ].
+export async function createPublicSignalAction(input: {
+  title:      string;
+  summary:    string;
+  category:   string;
+  sourceName: string;
+  sourceUrl?: string;
+  sourceType: import('@/lib/supabase/types').SignalSourceType;
+  tags?:      string[];
+  _hp:        string;  // honeypot — must be empty string
+}): Promise<{ ok: true } | { error: string }> {
+  // Honeypot: bots fill this. Return fake success so they think it worked.
+  if (input._hp) return { ok: true };
+
+  const { _hp: _ignored, ...rest } = input;
+  const result = await createRecoveredSignal({ ...rest, anomalyScore: 5 });
+  if ('error' in result) return { error: result.error };
+  return { ok: true };
+}
+
 // Curator action — manually intake a new recovered signal.
 // Signals created here default to status='pending'.
 // All fields are validated server-side; no content restrictions bypass applies.
