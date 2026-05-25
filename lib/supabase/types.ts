@@ -12,7 +12,9 @@ export type DbSignalLevel    = 'LOW' | 'ACTIVE' | 'UNSTABLE' | 'BURIED';
 export type GhostLabel       = 'GHOST' | 'NODE' | 'SIGNAL IDENTITY' | 'ARCHIVE HANDLE';
 export type ReportReason     = 'spam' | 'illegal_content' | 'doxxing' | 'harassment' | 'off_topic' | 'other';
 export type ReportStatus     = 'pending' | 'reviewed' | 'dismissed';
-export type ModerationAction = 'hide' | 'pin' | 'unpin' | 'flag' | 'restore' | 'redact';
+export type ModerationAction        = 'hide' | 'pin' | 'unpin' | 'flag' | 'restore' | 'redact';
+export type RecoveredSignalStatus   = 'pending' | 'approved' | 'archived' | 'rejected';
+export type SignalSourceType        = 'reddit' | 'pastebin' | 'wayback' | 'imageboard' | 'irc' | 'forum' | 'other';
 
 // ---------------------------------------------------------------------------
 // Row types (what Supabase returns from SELECT)
@@ -88,6 +90,32 @@ export interface DbCategory {
   display_order: number;
   created_at: string;
 }
+
+export interface DbRecoveredSignal {
+  id:                   string;
+  created_at:           string;
+  category:             string;
+  title:                string;
+  summary:              string;
+  source_name:          string;
+  source_url:           string | null;
+  source_type:          SignalSourceType;
+  status:               RecoveredSignalStatus;
+  anomaly_score:        number;
+  tags:                 string[];
+  discovered_at:        string;
+  approved_at:          string | null;
+  published_thread_id:  string | null;
+}
+
+export type DbRecoveredSignalInsert = Omit<DbRecoveredSignal,
+  'id' | 'created_at' | 'approved_at' | 'published_thread_id'
+> & {
+  id?:                  string;
+  created_at?:          string;
+  approved_at?:         string | null;
+  published_thread_id?: string | null;
+};
 
 export interface DbModerationAction {
   id: string;
@@ -186,6 +214,12 @@ export interface Database {
         Row: DbModerationAction;
         Insert: Omit<DbModerationAction, 'id' | 'created_at'> & { id?: string; created_at?: string };
         Update: Record<string, never>;
+        Relationships: [];
+      };
+      recovered_signals: {
+        Row: DbRecoveredSignal;
+        Insert: DbRecoveredSignalInsert;
+        Update: Partial<DbRecoveredSignalInsert>;
         Relationships: [];
       };
     };

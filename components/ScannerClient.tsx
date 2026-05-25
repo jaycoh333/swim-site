@@ -4,13 +4,16 @@ import Link from 'next/link';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { NetworkFooter } from '@/components/NetworkFooter';
 import { ShareBar } from '@/components/ShareBar';
+import { CATEGORY_COLORS } from '@/lib/forum-types';
+import type { DbRecoveredSignal } from '@/lib/supabase/types';
 
 const SCANNER_URL = 'https://www.sw1m.me/scanner';
 
-function buildSignalShareText(sig: SignalEntry): string {
-  const preview = sig.summary.length > 160 ? sig.summary.slice(0, 157) + '...' : sig.summary;
-  return `RECOVERED SIGNAL // ${sig.category.toUpperCase()} [${sig.id}]\n"${preview}"\n\nSource: ${sig.source}\nswim scanner: ${SCANNER_URL}`;
-}
+// SCRAPER INTEGRATION POINT:
+//   In production, `approvedSignals` is fetched in app/scanner/page.tsx
+//   (server component) and passed here as a prop. Scrapers insert rows into
+//   Supabase with status='pending'. Curators approve at /scanner/queue.
+//   Only status='approved' signals ever reach this component.
 
 interface SignalEntry {
   id: string;
@@ -22,6 +25,25 @@ interface SignalEntry {
   recovered: string;
 }
 
+function dbSignalToEntry(sig: DbRecoveredSignal): SignalEntry {
+  const color = (CATEGORY_COLORS as Record<string, string>)[sig.category] ?? '#86d46e';
+  return {
+    id:            sig.id,
+    source:        sig.source_name,
+    category:      sig.category,
+    categoryColor: color,
+    summary:       sig.summary,
+    status:        'approved',
+    recovered:     sig.discovered_at.slice(0, 10),
+  };
+}
+
+function buildSignalShareText(sig: SignalEntry): string {
+  const preview = sig.summary.length > 160 ? sig.summary.slice(0, 157) + '...' : sig.summary;
+  return `RECOVERED SIGNAL // ${sig.category.toUpperCase()} [${sig.id.toUpperCase()}]\n"${preview}"\n\nSource: ${sig.source}\nswim scanner: ${SCANNER_URL}`;
+}
+
+// Fallback mock data — displayed when no Supabase connection or no approved signals exist.
 const MOCK_SIGNALS: SignalEntry[] = [
   {
     id: 'SIG-0847',
@@ -109,7 +131,16 @@ const PROCESS_STEPS = [
   },
 ];
 
-export function ScannerClient() {
+export interface ScannerClientProps {
+  approvedSignals?: DbRecoveredSignal[];
+}
+
+export function ScannerClient({ approvedSignals }: ScannerClientProps) {
+  const signals: SignalEntry[] =
+    approvedSignals && approvedSignals.length > 0
+      ? approvedSignals.map(dbSignalToEntry)
+      : MOCK_SIGNALS;
+
   return (
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-20" />
@@ -141,12 +172,7 @@ export function ScannerClient() {
               <span className="text-crt/45">
                 <span className="text-crt/30">signals recovered</span>
                 <span className="mx-2 text-crt/20">//</span>
-                847
-              </span>
-              <span className="text-crt/45">
-                <span className="text-crt/30">pending review</span>
-                <span className="mx-2 text-crt/20">//</span>
-                23
+                {signals.length > 0 ? signals.length : 847}
               </span>
               <span className="text-crt/45">
                 <span className="text-crt/30">last scan</span>
@@ -201,7 +227,7 @@ export function ScannerClient() {
             </div>
 
             <div className="terminal-card-grid">
-              {MOCK_SIGNALS.map((sig) => (
+              {signals.map((sig) => (
                 <div
                   key={sig.id}
                   className="terminal-card px-5 py-5 md:px-7 md:py-6"

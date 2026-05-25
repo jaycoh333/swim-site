@@ -13,7 +13,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { mockDb } from '@/lib/mock-db';
 import type { Category, ThreadContent, Reply } from '@/lib/forum-types';
-import type { DbThread, DbReply, ReactionType } from './types';
+import type { DbThread, DbReply, ReactionType, DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType } from './types';
+import { RECOVERED_SIGNAL_SEED } from '@/lib/recovered-signals-seed';
 
 // ---------------------------------------------------------------------------
 // Untyped client — the repository casts results to our own DB types explicitly.
@@ -410,4 +411,140 @@ export async function reportContent(
     return { error: error.message };
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Recovered signals — read
+//
+// SCRAPER INTEGRATION POINT:
+//   Automated scrapers will INSERT rows with status='pending'.
+//   Only status='approved' rows are shown on the public /scanner page.
+//   Human approval via /scanner/queue is mandatory before any signal goes public.
+// ---------------------------------------------------------------------------
+
+export async function getRecoveredSignals(
+  status?: RecoveredSignalStatus,
+): Promise<DbRecoveredSignal[]> {
+  if (!hasSupabase) {
+    if (!status) return RECOVERED_SIGNAL_SEED;
+    return RECOVERED_SIGNAL_SEED.filter((s) => s.status === status);
+  }
+
+  const db = getDb()!;
+  let q = db
+    .from('recovered_signals')
+    .select('*')
+    .order('anomaly_score', { ascending: false })
+    .order('discovered_at', { ascending: false });
+  if (status) q = q.eq('status', status);
+
+  const { data, error } = await q;
+  if (error) {
+    console.error('[repository] getRecoveredSignals:', error.message);
+    if (!status) return RECOVERED_SIGNAL_SEED;
+    return RECOVERED_SIGNAL_SEED.filter((s) => s.status === status);
+  }
+  return (data ?? []) as DbRecoveredSignal[];
+}
+
+export async function getRecoveredSignal(
+  id: string,
+): Promise<DbRecoveredSignal | undefined> {
+  if (!hasSupabase) {
+    return RECOVERED_SIGNAL_SEED.find((s) => s.id === id);
+  }
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('recovered_signals')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error || !data) {
+    console.error('[repository] getRecoveredSignal:', error?.message);
+    return RECOVERED_SIGNAL_SEED.find((s) => s.id === id);
+  }
+  return data as DbRecoveredSignal;
+}
+
+// ---------------------------------------------------------------------------
+// Recovered signals — write (curator only, service role key required)
+// ---------------------------------------------------------------------------
+
+export interface UpdateSignalStatusInput {
+  id:                  string;
+  status:              RecoveredSignalStatus;
+  publishedThreadId?:  string;
+}
+
+export async function updateSignalStatus(
+  input: UpdateSignalStatusInput,
+): Promise<{ ok: true } | { error: string }> {
+  if (!hasSupabase) return { ok: true };
+
+  const db = getDb()!;
+  const now = new Date().toISOString();
+
+  const patch: Record<string, unknown> = { status: input.status };
+  if (input.status === 'approved') patch.approved_at = now;
+  if (input.publishedThreadId) patch.published_thread_id = input.publishedThreadId;
+
+  const { error } = await db
+    .from('recovered_signals')
+    .update(patch)
+    .eq('id', input.id);
+
+  if (error) {
+    console.error('[repository] updateSignalStatus:', error.message);
+    return { error: error.message };
+  }
+  return { ok: true };
+}
+
+export interface CreateRecoveredSignalInput {
+  category:      string;
+  title:         string;
+  summary:       string;
+  sourceName:    string;
+  sourceUrl?:    string;
+  sourceType:    SignalSourceType;
+  anomalyScore:  number;
+  tags?:         string[];
+  discoveredAt?: string;
+}
+
+// SCRAPER INTEGRATION POINT:
+//   Future automated scrapers call this to submit signals for curator review.
+//   All signals are inserted with status='pending' regardless of the caller.
+export async function createRecoveredSignal(
+  input: CreateRecoveredSignalInput,
+): Promise<{ id: string } | { error: string }> {
+  if (!hasSupabase) {
+    return { id: `sig-local-${Date.now()}` };
+  }
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('recovered_signals')
+    .insert({
+      category:      input.category,
+      title:         input.title,
+      summary:       input.summary,
+      source_name:   input.sourceName,
+      source_url:    input.sourceUrl ?? null,
+      source_type:   input.sourceType,
+      status:        'pending',
+      anomaly_score: input.anomalyScore,
+      tags:          input.tags ?? [],
+      discovered_at: input.discoveredAt ?? new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('[repository] createRecoveredSignal:', error.message);
+    return { error: error.message };
+  }
+  return { id: data.id };
 }
