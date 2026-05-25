@@ -1,14 +1,14 @@
 'use client';
 
 /**
- * SignalQueueClient — curator interface for reviewing and rebirthng recovered signals.
+ * SignalQueueClient — curator console for recovered signal management.
  *
- * OPERATOR MODE: readability-first layout.
- * - Sticky filter toolbar (tabs + secondary filters)
- * - Large text: 17–20px body, 13–15px metadata
- * - High-contrast typography
- * - Large tap-target action buttons (min 44px height)
- * - Terminal case-file card structure
+ * OPERATOR MODE: admin dashboard layout, readability-first.
+ *   - Large admin cards (title 24px, summary 18px, meta 15px, buttons 15px)
+ *   - Sticky toolbar: search + status tabs + category/source filters + sort
+ *   - Two-column desktop layout: signal cards | queue stats + AI scanner panel
+ *   - Filled action buttons: Approve (green) / Archive (blue) / Reject (red) / Rebirth (amber)
+ *   - Rebirth panel: large edit form with full-width inputs
  *
  * HUMAN APPROVAL GATE:
  *   Nothing publishes automatically. Every status change and rebirth requires
@@ -37,20 +37,20 @@ import type { DbRecoveredSignal, RecoveredSignalStatus, SignalSourceType } from 
 // ---------------------------------------------------------------------------
 
 const STATUS_TABS: Array<{ key: RecoveredSignalStatus | 'all'; label: string }> = [
-  { key: 'all',      label: 'ALL'      },
-  { key: 'pending',  label: 'PENDING'  },
-  { key: 'approved', label: 'APPROVED' },
-  { key: 'archived', label: 'ARCHIVED' },
-  { key: 'rejected', label: 'REJECTED' },
+  { key: 'all',      label: 'All'      },
+  { key: 'pending',  label: 'Pending'  },
+  { key: 'approved', label: 'Approved' },
+  { key: 'archived', label: 'Archived' },
+  { key: 'rejected', label: 'Rejected' },
 ];
 
 const STATUS_SECTION_ORDER: RecoveredSignalStatus[] = ['pending', 'approved', 'archived', 'rejected'];
 
 const SECTION_LABELS: Record<RecoveredSignalStatus, string> = {
-  pending:  'PENDING REVIEW',
-  approved: 'APPROVED',
-  archived: 'ARCHIVED',
-  rejected: 'REJECTED',
+  pending:  'Pending Review',
+  approved: 'Approved',
+  archived: 'Archived',
+  rejected: 'Rejected',
 };
 
 const STATUS_COLORS: Record<RecoveredSignalStatus, string> = {
@@ -58,6 +58,20 @@ const STATUS_COLORS: Record<RecoveredSignalStatus, string> = {
   approved: '#86d46e',
   archived: '#6da8ff',
   rejected: '#ff6b6b',
+};
+
+const STATUS_BG: Record<RecoveredSignalStatus, string> = {
+  pending:  'rgba(215,168,92,0.10)',
+  approved: 'rgba(134,212,110,0.08)',
+  archived: 'rgba(109,168,255,0.08)',
+  rejected: 'rgba(255,107,107,0.07)',
+};
+
+const STATUS_BORDER: Record<RecoveredSignalStatus, string> = {
+  pending:  'rgba(215,168,92,0.38)',
+  approved: 'rgba(134,212,110,0.35)',
+  archived: 'rgba(109,168,255,0.32)',
+  rejected: 'rgba(255,107,107,0.28)',
 };
 
 const SOURCE_TYPE_LABELS: Record<SignalSourceType, string> = {
@@ -71,6 +85,14 @@ const SOURCE_TYPE_LABELS: Record<SignalSourceType, string> = {
 };
 
 const REBIRTH_SCORE_THRESHOLD = 7;
+
+const AI_SCANNER_ROWS = [
+  { label: 'Mode',        value: 'Manual intake',   dim: false },
+  { label: 'Intelligence', value: 'Planned',         dim: true  },
+  { label: 'Sources',     value: 'Offline',          dim: true  },
+  { label: 'Approval',    value: 'Human required',   dim: false },
+  { label: 'Auto-post',   value: 'Never',            dim: false },
+];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,7 +113,7 @@ interface RebirthPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Utilities (client-side replication of formatSignalBody for preview)
+// Utilities
 // ---------------------------------------------------------------------------
 
 function buildPreviewBody(sig: DbRecoveredSignal): string {
@@ -112,29 +134,45 @@ function buildPreviewBody(sig: DbRecoveredSignal): string {
 }
 
 // ---------------------------------------------------------------------------
-// AnomalyBar — enlarged for operator readability
+// AnomalyScore
 // ---------------------------------------------------------------------------
 
-function AnomalyBar({ score }: { score: number }) {
+function AnomalyScore({ score }: { score: number }) {
+  const color = score >= 8 ? '#ff6b6b' : score >= 6 ? '#d7a85c' : '#86d46e';
   return (
-    <div className="flex items-center gap-2.5">
-      <div className="flex gap-[4px]">
+    <div className="flex items-center gap-3">
+      <div className="flex gap-[3px]">
         {Array.from({ length: 10 }, (_, i) => (
           <div
             key={i}
-            className="h-[16px] w-[9px]"
-            style={{
-              backgroundColor: i < score
-                ? score >= 8 ? '#ff6b6b' : score >= 6 ? '#d7a85c' : '#86d46e'
-                : 'rgba(134,212,110,0.12)',
-            }}
+            className="h-[18px] w-[10px]"
+            style={{ backgroundColor: i < score ? color : 'rgba(134,212,110,0.10)' }}
           />
         ))}
       </div>
-      <span className="text-[14px] tabular-nums tracking-[0.10em] text-crt/55">
+      <span className="text-[15px] font-medium tabular-nums" style={{ color }}>
         {score}/10
       </span>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StatusBadge
+// ---------------------------------------------------------------------------
+
+function StatusBadge({ status }: { status: RecoveredSignalStatus }) {
+  return (
+    <span
+      className="px-2.5 py-1 text-[12px] font-medium uppercase tracking-[0.08em]"
+      style={{
+        background: STATUS_BG[status],
+        border:     `1px solid ${STATUS_BORDER[status]}`,
+        color:      STATUS_COLORS[status],
+      }}
+    >
+      {status}
+    </span>
   );
 }
 
@@ -161,7 +199,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="text-[12px] uppercase tracking-[0.14em] text-crt/42 transition-colors hover:text-crt/70"
+      className="text-[13px] uppercase tracking-[0.10em] text-crt/42 transition-colors hover:text-crt/72"
     >
       {copied ? '✓ copied' : '[ copy ]'}
     </button>
@@ -169,76 +207,74 @@ function CopyButton({ text }: { text: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// SharePackagePanel — shown after successful rebirth
+// SharePackagePanel
 // ---------------------------------------------------------------------------
 
 function SharePackagePanel({ result }: { result: PublishResult }) {
   return (
-    <div className="mt-5 border-t border-crt/12 pt-5">
-      <div className="mb-5 flex items-center justify-between gap-4">
+    <div className="mt-6 border-t border-crt/12 bg-[rgba(134,212,110,0.018)] px-6 py-6 md:px-8">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="mb-1 text-[12px] uppercase tracking-[0.26em] text-[#d7a85c]/80">
-            ◈ thread reborn
+          <div className="mb-1 text-[13px] uppercase tracking-[0.18em] text-[#d7a85c]/85">
+            ◈ Thread reborn
           </div>
-          <div className="text-[13px] uppercase tracking-[0.16em] text-crt/42">
-            story restored to archive
-          </div>
+          <div className="text-[14px] text-crt/48">Story restored to archive</div>
         </div>
         <Link
           href={`/threads/${result.threadSlug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 text-[13px] uppercase tracking-[0.16em] text-[#86d46e]/75 transition-colors hover:text-[#86d46e]"
+          className="text-[14px] text-[#86d46e]/75 transition-colors hover:text-[#86d46e]"
         >
-          ✓ view reborn thread ↗
+          ✓ View reborn thread ↗
         </Link>
       </div>
 
-      <div className="mb-4 text-[12px] uppercase tracking-[0.22em] text-crt/32">
-        share package — copy and post manually
+      <div className="mb-2 text-[12px] uppercase tracking-[0.16em] text-crt/35">
+        Share package — copy and post manually
       </div>
 
-      <div className="mb-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[12px] uppercase tracking-[0.18em] text-crt/32">telegram</span>
-          <CopyButton text={result.telegramText} />
-        </div>
-        <div className="border border-crt/12 bg-[rgba(134,212,110,0.02)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/52 whitespace-pre-wrap">
-          {result.telegramText}
-        </div>
-      </div>
-
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-[12px] uppercase tracking-[0.18em] text-crt/32">x.com</span>
-            <span
-              className="text-[12px] tabular-nums tracking-[0.10em]"
-              style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.35)' }}
-            >
-              {result.xText.length}/280
-            </span>
-            {result.titleTruncated && (
-              <span className="text-[12px] uppercase tracking-[0.10em] text-[#d7a85c]/75">
-                title truncated
-              </span>
-            )}
+      <div className="space-y-4">
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[13px] uppercase tracking-[0.12em] text-crt/38">Telegram</span>
+            <CopyButton text={result.telegramText} />
           </div>
-          <CopyButton text={result.xText} />
+          <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/55 whitespace-pre-wrap">
+            {result.telegramText}
+          </div>
         </div>
-        <div className="border border-crt/12 bg-[rgba(134,212,110,0.02)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/52 whitespace-pre-wrap">
-          {result.xText}
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-[13px] uppercase tracking-[0.12em] text-crt/38">X / Twitter</span>
+              <span
+                className="text-[13px] tabular-nums"
+                style={{ color: result.xText.length > 260 ? '#d7a85c' : 'rgba(134,212,110,0.38)' }}
+              >
+                {result.xText.length}/280
+              </span>
+              {result.titleTruncated && (
+                <span className="text-[12px] text-[#d7a85c]/72">title truncated</span>
+              )}
+            </div>
+            <CopyButton text={result.xText} />
+          </div>
+          <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/55 whitespace-pre-wrap">
+            {result.xText}
+          </div>
+          <p className="mt-2 text-[12px] text-crt/28">
+            No API calls made — copy and post manually
+          </p>
         </div>
-        <p className="mt-2 text-[12px] uppercase tracking-[0.12em] text-crt/25">
-          no api calls made — copy and post manually or wait for phase 2/3
-        </p>
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// RebirthPanel — editable pre-publish editor with live social preview
+// RebirthPanel — large admin edit form
 // ---------------------------------------------------------------------------
 
 function RebirthPanel({
@@ -276,141 +312,144 @@ function RebirthPanel({
   const xCharCount      = xPreview.length;
   const xTruncated      = xPostTitleTruncated(previewData);
 
-  const inputBase =
-    'w-full border border-crt/20 bg-transparent px-4 py-3 font-mono text-[15px] tracking-[0.03em] text-crt/85 placeholder:text-crt/25 focus:border-crt/42 focus:outline-none transition-colors';
-  const labelBase =
-    'mb-2 block text-[12px] uppercase tracking-[0.18em] text-crt/42';
+  const inputCls =
+    'w-full border border-crt/20 bg-[rgba(4,7,5,0.85)] px-4 py-3 text-[16px] text-crt/88 placeholder:text-crt/25 focus:border-crt/42 focus:outline-none transition-colors';
+  const labelCls = 'mb-2 block text-[13px] text-crt/50';
 
   return (
-    <div className="mt-6 border-t border-[#d7a85c]/25 pt-6">
-
-      <div className="mb-6">
-        <div className="mb-1.5 flex items-center gap-2.5">
-          <span className="h-2 w-2 bg-[#d7a85c]/70" />
-          <span className="text-[12px] uppercase tracking-[0.28em] text-[#d7a85c]/80">
-            ◈ dead signal prepared
+    <div className="border-t-2 border-[#d7a85c]/28 bg-[rgba(215,168,92,0.03)]">
+      {/* Header */}
+      <div className="border-b border-[#d7a85c]/15 px-6 py-5 md:px-8">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="h-2 w-2 bg-[#d7a85c]/72" />
+          <span className="text-[13px] uppercase tracking-[0.16em] text-[#d7a85c]/85">
+            Prepare Rebirth
           </span>
         </div>
-        <p className="text-[14px] uppercase tracking-[0.14em] text-crt/48">
-          edit title, body, and tags — then rebirth into the archive
+        <p className="text-[15px] leading-relaxed text-crt/55">
+          Edit the content below, then publish as a SWIM thread.
+          Remove the curator note from the body before confirming.
         </p>
       </div>
 
-      <div className="mb-5">
-        <label className={labelBase}>thread title</label>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={200}
-          disabled={isRebirthPending}
-          className={inputBase}
-        />
-      </div>
-
-      <div className="mb-5">
-        <label className={labelBase}>
-          thread body
-          <span className="ml-2 text-crt/28">— remove curator note before rebirth</span>
-        </label>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={14}
-          disabled={isRebirthPending}
-          className={`${inputBase} resize-y`}
-        />
-      </div>
-
-      <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-2">
-        <div>
-          <label className={labelBase}>category</label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            disabled={isRebirthPending}
-            className={`${inputBase} cursor-pointer`}
-          >
-            {CATEGORY_ORDER.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelBase}>
-            tags <span className="text-crt/28">— comma separated</span>
-          </label>
+      <div className="px-6 py-6 md:px-8">
+        {/* Title */}
+        <div className="mb-5">
+          <label className={labelCls}>Thread Title</label>
           <input
             type="text"
-            value={tagsStr}
-            onChange={(e) => setTagsStr(e.target.value)}
-            maxLength={300}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={200}
             disabled={isRebirthPending}
-            className={inputBase}
+            className={`${inputCls} text-[18px]`}
           />
         </div>
-      </div>
 
-      {/* Live social preview */}
-      <div className="mb-6 space-y-4 border-t border-crt/10 pt-5">
-        <div className="text-[12px] uppercase tracking-[0.22em] text-crt/35">
-          social preview — updates as you edit
+        {/* Body */}
+        <div className="mb-5">
+          <label className={labelCls}>
+            Thread Body
+            <span className="ml-2 text-crt/30">— remove curator note before publishing</span>
+          </label>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={16}
+            disabled={isRebirthPending}
+            className={`${inputCls} resize-y font-mono text-[15px]`}
+          />
         </div>
 
-        <div>
-          <div className="mb-1.5 text-[12px] uppercase tracking-[0.16em] text-crt/30">telegram</div>
-          <div className="max-h-40 overflow-y-auto border border-crt/12 bg-[rgba(134,212,110,0.018)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/48 whitespace-pre-wrap">
-            {telegramPreview}
-          </div>
-        </div>
-
-        <div>
-          <div className="mb-1.5 flex items-center gap-3">
-            <span className="text-[12px] uppercase tracking-[0.16em] text-crt/30">x.com</span>
-            <span
-              className="text-[12px] tabular-nums"
-              style={{ color: xCharCount > 260 ? '#d7a85c' : 'rgba(134,212,110,0.32)' }}
+        {/* Category + Tags */}
+        <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <div>
+            <label className={labelCls}>Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              disabled={isRebirthPending}
+              className={`${inputCls} cursor-pointer`}
             >
-              {xCharCount}/280
-            </span>
-            {xTruncated && (
-              <span className="text-[12px] uppercase tracking-[0.10em] text-[#d7a85c]/70">
-                title truncated
-              </span>
-            )}
+              {CATEGORY_ORDER.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
           </div>
-          <div className="border border-crt/12 bg-[rgba(134,212,110,0.018)] px-4 py-3 font-mono text-[13px] leading-relaxed tracking-[0.03em] text-crt/48 whitespace-pre-wrap">
-            {xPreview}
+          <div>
+            <label className={labelCls}>
+              Tags <span className="text-crt/30">— comma separated</span>
+            </label>
+            <input
+              type="text"
+              value={tagsStr}
+              onChange={(e) => setTagsStr(e.target.value)}
+              maxLength={300}
+              disabled={isRebirthPending}
+              className={inputCls}
+            />
           </div>
         </div>
-      </div>
 
-      {/* Rebirth / cancel */}
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={() => onRebirth({ title, body, category, tags: parsedTags })}
-          disabled={isRebirthPending || !title.trim() || !body.trim()}
-          className="border border-[#d7a85c]/45 px-6 py-3 text-[13px] uppercase tracking-[0.20em] text-[#d7a85c]/78 transition-colors hover:border-[#d7a85c]/70 hover:text-[#d7a85c] disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          {isRebirthPending ? '↯ rebirthing...' : '[ rebirth as thread ]'}
-        </button>
-        <button
-          onClick={onCancel}
-          disabled={isRebirthPending}
-          className="border border-crt/15 px-5 py-3 text-[13px] uppercase tracking-[0.16em] text-crt/38 transition-colors hover:border-crt/28 hover:text-crt/60 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          [ cancel ]
-        </button>
+        {/* Social preview */}
+        <div className="mb-6 space-y-4 border-t border-crt/10 pt-5">
+          <div className="text-[13px] uppercase tracking-[0.14em] text-crt/35">
+            Social preview — live
+          </div>
+
+          <div>
+            <div className="mb-2 text-[13px] text-crt/35">Telegram</div>
+            <div className="max-h-36 overflow-y-auto border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/50 whitespace-pre-wrap">
+              {telegramPreview}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center gap-3">
+              <span className="text-[13px] text-crt/35">X / Twitter</span>
+              <span
+                className="text-[13px] tabular-nums"
+                style={{ color: xCharCount > 260 ? '#d7a85c' : 'rgba(134,212,110,0.35)' }}
+              >
+                {xCharCount}/280
+              </span>
+              {xTruncated && (
+                <span className="text-[12px] text-[#d7a85c]/72">title truncated</span>
+              )}
+            </div>
+            <div className="border border-crt/12 bg-[rgba(4,7,5,0.8)] px-4 py-3 font-mono text-[13px] leading-relaxed text-crt/50 whitespace-pre-wrap">
+              {xPreview}
+            </div>
+          </div>
+        </div>
+
+        {/* Commit buttons */}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => onRebirth({ title, body, category, tags: parsedTags })}
+            disabled={isRebirthPending || !title.trim() || !body.trim()}
+            className="bg-[rgba(215,168,92,0.15)] border border-[#d7a85c]/50 px-8 py-3 text-[15px] font-medium text-[#d7a85c] transition-colors hover:bg-[rgba(215,168,92,0.25)] hover:border-[#d7a85c]/72 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {isRebirthPending ? '↯ Rebirthng...' : '◈ Rebirth as Thread'}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={isRebirthPending}
+            className="border border-crt/18 px-6 py-3 text-[15px] text-crt/45 transition-colors hover:border-crt/30 hover:text-crt/70 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            Cancel
+          </button>
+        </div>
+        <p className="mt-3 text-[13px] text-crt/28">
+          Thread created with author=ARCHIVIST · signal marked approved · recovered-signal tag added automatically
+        </p>
       </div>
-      <p className="mt-2.5 text-[12px] uppercase tracking-[0.10em] text-crt/25">
-        thread created with author=archivist · signal marked approved · recovered-signal tag added
-      </p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// SignalCard — terminal case-file layout, operator readability
+// SignalCard — large admin card layout
 // ---------------------------------------------------------------------------
 
 interface SignalCardProps {
@@ -441,158 +480,179 @@ function SignalCard({
   const alreadyPublished = Boolean(sig.published_thread_id) && !publishedResult;
   const busy = statusPending || isPublishing;
 
+  const leftAccent = inRebirthQueue
+    ? 'rgba(215,168,92,0.70)'
+    : `${STATUS_COLORS[sig.status]}55`;
+
   return (
     <div
-      className="terminal-card cursor-default px-6 py-6 md:px-8 md:py-7"
-      style={{
-        borderLeftColor: inRebirthQueue
-          ? 'rgba(215,168,92,0.65)'
-          : `${STATUS_COLORS[sig.status]}55`,
-        borderLeftWidth: '3px',
-      }}
+      className="border border-crt/18 bg-[rgba(4,7,5,0.97)]"
+      style={{ borderLeftColor: leftAccent, borderLeftWidth: '4px' }}
     >
-      {/* ── HEADER row ── */}
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-crt/38">
+      {/* ── TOP BAR: ID · category · source type · badges · status ── */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-crt/10 px-5 py-3 md:px-6">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <span className="font-mono text-[12px] text-crt/32">
             {sig.id.slice(0, 13).toUpperCase()}
           </span>
           <span className="text-crt/20">·</span>
-          <span className="text-[13px] uppercase tracking-[0.14em] text-crt/78">
+          <span className="text-[13px] uppercase tracking-[0.08em] text-crt/68">
             {sig.category}
           </span>
           <span className="text-crt/20">·</span>
-          <span className="text-[13px] uppercase tracking-[0.10em] text-crt/48">
+          <span className="text-[13px] text-crt/45">
             {SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}
           </span>
           {sig.submitted_publicly && (
-            <span className="border border-[#6da8ff]/38 px-2 py-0.5 text-[11px] uppercase tracking-[0.12em] text-[#6da8ff]/72">
-              ◈ public submission
+            <span
+              className="px-2 py-0.5 text-[11px] font-medium"
+              style={{ background: 'rgba(109,168,255,0.12)', border: '1px solid rgba(109,168,255,0.32)', color: '#6da8ff' }}
+            >
+              public
             </span>
           )}
           {inRebirthQueue && (
-            <span className="border border-[#d7a85c]/45 px-2 py-0.5 text-[11px] uppercase tracking-[0.12em] text-[#d7a85c]/78">
-              ◈ ready for rebirth
+            <span
+              className="px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.08em]"
+              style={{ background: 'rgba(215,168,92,0.12)', border: '1px solid rgba(215,168,92,0.40)', color: '#d7a85c' }}
+            >
+              ◈ rebirth ready
             </span>
           )}
         </div>
-        <span
-          className="shrink-0 text-[13px] uppercase tracking-[0.16em]"
-          style={{ color: STATUS_COLORS[sig.status] }}
-        >
-          ◈ {sig.status}
-        </span>
+        <StatusBadge status={sig.status} />
       </div>
 
       {/* ── TITLE ── */}
-      <div className="mb-4 text-[1.2rem] font-medium leading-[1.40] tracking-[0.02em] text-crt/92 md:text-[1.3rem]">
-        {sig.title}
+      <div className="px-5 pb-3 pt-5 md:px-6">
+        <h3 className="text-[1.5rem] font-medium leading-[1.28] tracking-[0.01em] text-crt/95 md:text-[1.6rem]">
+          {sig.title}
+        </h3>
       </div>
 
       {/* ── SUMMARY ── */}
-      <p className="mb-6 text-[17px] leading-[1.78] tracking-[0.02em] text-crt/82">
-        {sig.summary}
-      </p>
+      <div className="px-5 pb-5 md:px-6">
+        <p className="text-[17px] leading-[1.72] tracking-[0.02em] text-crt/82 md:text-[18px]">
+          {sig.summary}
+        </p>
+      </div>
+
+      {/* ── SOURCE ── */}
+      <div className="border-t border-crt/10 px-5 py-4 md:px-6">
+        <div className="mb-1.5 text-[12px] uppercase tracking-[0.12em] text-crt/38">Source</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-[15px] text-crt/75">{sig.source_name}</span>
+          <span className="text-crt/22">·</span>
+          <span className="text-[14px] uppercase tracking-[0.06em] text-crt/48">
+            {SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}
+          </span>
+          {sig.source_url && (
+            <a
+              href={sig.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[14px] text-crt/38 transition-colors hover:text-crt/65"
+            >
+              ↗ view source
+            </a>
+          )}
+        </div>
+      </div>
 
       {/* ── METADATA GRID ── */}
-      <div className="mb-5 grid grid-cols-2 gap-x-8 gap-y-5 border-t border-crt/10 pt-5 text-[13px] uppercase tracking-[0.12em] md:grid-cols-5">
-        <div>
-          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">anomaly</div>
-          <AnomalyBar score={sig.anomaly_score} />
-        </div>
-        <div>
-          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">category</div>
-          <div className="text-[14px] text-crt/72">{sig.category}</div>
-        </div>
-        <div>
-          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">source</div>
-          <div className="truncate text-[14px] text-crt/70">{sig.source_name}</div>
-        </div>
-        <div>
-          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">discovered</div>
-          <div className="text-[14px] text-crt/70">{sig.discovered_at.slice(0, 10)}</div>
-        </div>
-        <div>
-          <div className="mb-2 text-[12px] tracking-[0.16em] text-crt/38">status</div>
-          <div
-            className="text-[14px] uppercase tracking-[0.10em]"
-            style={{ color: STATUS_COLORS[sig.status] }}
-          >
-            {sig.status}
+      <div className="border-t border-crt/10 px-5 py-4 md:px-6">
+        <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
+          <div>
+            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Anomaly</div>
+            <AnomalyScore score={sig.anomaly_score} />
+          </div>
+          <div>
+            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Discovered</div>
+            <div className="text-[15px] text-crt/72">{sig.discovered_at.slice(0, 10)}</div>
+          </div>
+          <div>
+            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Approved</div>
+            <div className="text-[15px] text-crt/72">
+              {sig.approved_at ? sig.approved_at.slice(0, 10) : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-[12px] uppercase tracking-[0.12em] text-crt/38">Origin</div>
+            <div className="text-[15px] text-crt/65">
+              {sig.submitted_publicly ? 'Public submission' : 'Curator intake'}
+            </div>
           </div>
         </div>
       </div>
 
       {/* ── TAGS ── */}
       {sig.tags.length > 0 && (
-        <div className="mb-5 flex flex-wrap gap-2">
-          {sig.tags.map((tag) => (
-            <span
-              key={tag}
-              className="border border-crt/18 px-2.5 py-1 text-[12px] uppercase tracking-[0.12em] text-crt/58"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* ── SOURCE URL ── */}
-      {sig.source_url && (
-        <div className="mb-5 font-mono text-[13px] tracking-[0.05em] text-crt/48">
-          ↗ {sig.source_url}
+        <div className="border-t border-crt/10 px-5 py-4 md:px-6">
+          <div className="mb-2.5 text-[12px] uppercase tracking-[0.12em] text-crt/38">Tags</div>
+          <div className="flex flex-wrap gap-2">
+            {sig.tags.map((tag) => (
+              <span
+                key={tag}
+                className="border border-crt/20 px-2.5 py-1 text-[13px] text-crt/60"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
       {/* ── ACTIONS ── */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-crt/12 pt-5">
-        {sig.status !== 'approved' && (
-          <button
-            onClick={() => onStatusChange(sig.id, 'approved')}
-            disabled={busy || isRebirthOpen}
-            className="border border-[#86d46e]/35 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#86d46e]/72 transition-colors hover:border-[#86d46e]/60 hover:text-[#86d46e] disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
-          >
-            [ approve ]
-          </button>
-        )}
-        {sig.status !== 'archived' && (
-          <button
-            onClick={() => onStatusChange(sig.id, 'archived')}
-            disabled={busy || isRebirthOpen}
-            className="border border-[#6da8ff]/30 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#6da8ff]/65 transition-colors hover:border-[#6da8ff]/55 hover:text-[#6da8ff] disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
-          >
-            [ archive ]
-          </button>
-        )}
-        {sig.status !== 'rejected' && (
-          <button
-            onClick={() => onStatusChange(sig.id, 'rejected')}
-            disabled={busy || isRebirthOpen}
-            className="border border-[#ff6b6b]/25 px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] text-[#ff6b6b]/55 transition-colors hover:border-[#ff6b6b]/45 hover:text-[#ff6b6b]/85 disabled:cursor-not-allowed disabled:opacity-25 md:py-3"
-          >
-            [ reject ]
-          </button>
-        )}
+      <div className="border-t border-crt/12 px-5 py-4 md:px-6">
+        <div className="flex flex-wrap items-center gap-3">
 
-        {/* Rebirth button — right-aligned */}
-        <div className="ml-auto">
-          {publishedResult ? null : alreadyPublished ? (
-            <span className="text-[13px] uppercase tracking-[0.16em] text-crt/25">
-              ◈ already reborn
-            </span>
-          ) : isRebirthOpen ? null : (
+          {/* Status actions */}
+          {sig.status !== 'approved' && (
             <button
-              onClick={() => onRequestRebirth(sig)}
-              disabled={busy}
-              className={`border px-5 py-2.5 text-[13px] uppercase tracking-[0.16em] transition-colors disabled:cursor-not-allowed disabled:opacity-25 md:py-3 ${
-                inRebirthQueue
-                  ? 'border-[#d7a85c]/45 text-[#d7a85c]/75 hover:border-[#d7a85c]/70 hover:text-[#d7a85c]'
-                  : 'border-crt/25 text-crt/55 hover:border-crt/40 hover:text-crt/80'
-              }`}
+              onClick={() => onStatusChange(sig.id, 'approved')}
+              disabled={busy || isRebirthOpen}
+              className="border border-[#86d46e]/38 bg-[rgba(134,212,110,0.08)] px-5 py-2.5 text-[14px] font-medium text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.16)] hover:border-[#86d46e]/60 disabled:cursor-not-allowed disabled:opacity-30"
             >
-              [ prepare rebirth ]
+              Approve
             </button>
           )}
+          {sig.status !== 'archived' && (
+            <button
+              onClick={() => onStatusChange(sig.id, 'archived')}
+              disabled={busy || isRebirthOpen}
+              className="border border-[#6da8ff]/32 bg-[rgba(109,168,255,0.07)] px-5 py-2.5 text-[14px] font-medium text-[#6da8ff]/82 transition-colors hover:bg-[rgba(109,168,255,0.14)] hover:border-[#6da8ff]/55 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Archive
+            </button>
+          )}
+          {sig.status !== 'rejected' && (
+            <button
+              onClick={() => onStatusChange(sig.id, 'rejected')}
+              disabled={busy || isRebirthOpen}
+              className="border border-[#ff6b6b]/25 bg-[rgba(255,107,107,0.05)] px-5 py-2.5 text-[14px] font-medium text-[#ff6b6b]/62 transition-colors hover:bg-[rgba(255,107,107,0.12)] hover:border-[#ff6b6b]/45 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Reject
+            </button>
+          )}
+
+          {/* Rebirth — right-aligned */}
+          <div className="ml-auto">
+            {publishedResult ? null : alreadyPublished ? (
+              <span className="text-[14px] text-crt/28">◈ Already reborn</span>
+            ) : isRebirthOpen ? null : (
+              <button
+                onClick={() => onRequestRebirth(sig)}
+                disabled={busy}
+                className={`border px-5 py-2.5 text-[14px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
+                  inRebirthQueue
+                    ? 'border-[#d7a85c]/50 bg-[rgba(215,168,92,0.10)] text-[#d7a85c] hover:bg-[rgba(215,168,92,0.20)] hover:border-[#d7a85c]/72'
+                    : 'border-crt/25 bg-[rgba(134,212,110,0.04)] text-crt/58 hover:border-crt/38 hover:text-crt/80'
+                }`}
+              >
+                ◈ Prepare Rebirth
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -606,14 +666,96 @@ function SignalCard({
         />
       )}
 
-      {/* ── Share package — shown after successful rebirth ── */}
+      {/* ── Share package ── */}
       {publishedResult && <SharePackagePanel result={publishedResult} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// SignalQueueClient
+// QueueStats — sidebar widget
+// ---------------------------------------------------------------------------
+
+function QueueStats({
+  counts,
+  rebirthQueueCount,
+}: {
+  counts:            Record<RecoveredSignalStatus | 'all', number>;
+  rebirthQueueCount: number;
+}) {
+  return (
+    <div className="border border-crt/15 bg-[rgba(4,7,5,0.97)] p-5">
+      <h3 className="mb-4 text-[12px] uppercase tracking-[0.16em] text-crt/42">
+        Queue Status
+      </h3>
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[14px] text-crt/52">Total</span>
+          <span className="font-mono text-[15px] font-medium text-crt/80">{counts.all}</span>
+        </div>
+        {(Object.entries({
+          pending:  { label: 'Pending',  color: STATUS_COLORS.pending  },
+          approved: { label: 'Approved', color: STATUS_COLORS.approved },
+          archived: { label: 'Archived', color: STATUS_COLORS.archived },
+          rejected: { label: 'Rejected', color: STATUS_COLORS.rejected },
+        }) as Array<[RecoveredSignalStatus, { label: string; color: string }]>).map(([key, { label, color }]) => (
+          <div key={key} className="flex items-center justify-between">
+            <span className="text-[14px]" style={{ color: `${color}88` }}>{label}</span>
+            <span className="font-mono text-[15px] font-medium" style={{ color }}>{counts[key]}</span>
+          </div>
+        ))}
+
+        {rebirthQueueCount > 0 && (
+          <div className="border-t border-crt/10 pt-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[14px] text-[#d7a85c]/72">Rebirth ready</span>
+              <span className="font-mono text-[15px] font-medium text-[#d7a85c]">
+                {rebirthQueueCount}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AIScannerPanel — sidebar widget (placeholder, non-functional)
+// ---------------------------------------------------------------------------
+
+function AIScannerPanel() {
+  return (
+    <div className="border border-crt/15 bg-[rgba(4,7,5,0.97)] p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <span className="h-1.5 w-1.5 bg-crt/25" />
+        <h3 className="text-[12px] uppercase tracking-[0.16em] text-crt/42">
+          AI Scanner
+        </h3>
+      </div>
+      <p className="mb-4 text-[12px] text-crt/28">future phase — not active</p>
+
+      <div className="space-y-2">
+        {AI_SCANNER_ROWS.map(({ label, value, dim }) => (
+          <div key={label} className="flex items-baseline justify-between gap-3">
+            <span className="text-[13px] text-crt/42">{label}</span>
+            <span className={`text-[13px] font-medium ${dim ? 'text-crt/28' : 'text-crt/65'}`}>
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-4 text-[12px] leading-relaxed text-crt/30">
+        Automated signal recovery planned for a future phase.
+        Current intake is manual curator workflow only.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SignalQueueClient — main console
 // ---------------------------------------------------------------------------
 
 export interface SignalQueueClientProps {
@@ -632,21 +774,27 @@ export function SignalQueueClient({
   const router = useRouter();
   const [isStatusPending, startStatusTransition] = useTransition();
 
+  // Toolbar state
   const [activeTab,        setActiveTab]        = useState<RecoveredSignalStatus | 'all'>('pending');
+  const [searchQuery,      setSearchQuery]      = useState('');
   const [filterCategory,   setFilterCategory]   = useState('');
   const [filterSourceType, setFilterSourceType] = useState('');
   const [sortScore,        setSortScore]        = useState<'desc' | 'asc' | null>(null);
 
+  // Intake form
   const [showIntake, setShowIntake] = useState(false);
 
+  // Optimistic status overrides
   const [overrides, setOverrides] = useState<Record<string, RecoveredSignalStatus>>({});
 
+  // Rebirth state
   const [publishingId,     setPublishingId]     = useState<string | null>(null);
   const [rebirthOpenId,    setRebirthOpenId]    = useState<string | null>(null);
   const [publishedResults, setPublishedResults] = useState<Record<string, PublishResult>>({});
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Merge + apply optimistic overrides
   const allSignals = [
     ...initialPending,
     ...initialApproved,
@@ -665,23 +813,39 @@ export function SignalQueueClient({
     rejected: allSignals.filter((s) => s.status === 'rejected').length,
   };
 
+  // Tab filter
   let visibleSignals =
     activeTab === 'all'
       ? allSignals
       : allSignals.filter((s) => s.status === activeTab);
 
+  // Search filter
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase();
+    visibleSignals = visibleSignals.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.summary.toLowerCase().includes(q) ||
+        s.source_name.toLowerCase().includes(q),
+    );
+  }
+
+  // Category / source type filters
   if (filterCategory)   visibleSignals = visibleSignals.filter((s) => s.category === filterCategory);
   if (filterSourceType) visibleSignals = visibleSignals.filter((s) => s.source_type === filterSourceType);
 
+  // Sort
   if (sortScore === 'desc') visibleSignals = [...visibleSignals].sort((a, b) => b.anomaly_score - a.anomaly_score);
   if (sortScore === 'asc')  visibleSignals = [...visibleSignals].sort((a, b) => a.anomaly_score - b.anomaly_score);
 
+  // Grouped for "all" tab
   const groupedByStatus: Record<RecoveredSignalStatus, DbRecoveredSignal[]> =
     STATUS_SECTION_ORDER.reduce(
       (acc, s) => { acc[s] = visibleSignals.filter((sig) => sig.status === s); return acc; },
       {} as Record<RecoveredSignalStatus, DbRecoveredSignal[]>,
     );
 
+  // Rebirth queue split
   const rebirthQueueSignals  = visibleSignals.filter(
     (s) => s.status === 'pending' && s.anomaly_score >= REBIRTH_SCORE_THRESHOLD,
   );
@@ -690,7 +854,14 @@ export function SignalQueueClient({
     (s) => s.status === 'pending' && !rebirthQueueIds.has(s.id),
   );
 
-  const hasActiveFilter = Boolean(filterCategory || filterSourceType || sortScore);
+  const hasActiveFilter = Boolean(searchQuery.trim() || filterCategory || filterSourceType || sortScore);
+
+  function clearFilters() {
+    setSearchQuery('');
+    setFilterCategory('');
+    setFilterSourceType('');
+    setSortScore(null);
+  }
 
   function showError(msg: string) {
     setErrorMsg(msg);
@@ -705,7 +876,7 @@ export function SignalQueueClient({
       const result = await updateSignalStatusAction({ id, status });
       if ('error' in result) {
         if (prev) setOverrides((o) => ({ ...o, [id]: prev }));
-        showError(`signal lost — ${result.error}`);
+        showError(`Status update failed — ${result.error}`);
       } else {
         router.refresh();
       }
@@ -735,7 +906,7 @@ export function SignalQueueClient({
       });
 
       if ('error' in result) {
-        showError(`rebirth failed — ${result.error}`);
+        showError(`Rebirth failed — ${result.error}`);
         setRebirthOpenId(null);
         return;
       }
@@ -787,190 +958,164 @@ export function SignalQueueClient({
   }
 
   return (
-    <div className="relative min-h-screen pb-[72px] pt-[80px] md:pb-12 md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.12]" />
+    <div className="relative min-h-screen pb-16 pt-[80px] md:pt-[100px]">
+      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.10]" />
 
-      <div className="relative z-10 mx-auto max-w-5xl px-4 md:px-6">
+      {/* ── Sticky toolbar ── */}
+      <div className="sticky top-[72px] z-20 border-b border-crt/15 bg-[rgba(2,3,3,0.98)] backdrop-blur-sm md:top-[80px]">
 
-        {/* ── Header panel — no overflow-hidden so sticky toolbar works ── */}
-        <div className="forum-shell">
-
-          {/* Header */}
-          <div className="border-b border-crt/12 px-6 py-7 md:px-10 md:py-9">
-            <div className="mb-2 flex items-start justify-between gap-4">
-              <div className="text-[12px] uppercase tracking-[0.26em] text-crt/40">
-                swim · internal · curator access only
+        {/* Title bar */}
+        <div className="border-b border-crt/10 px-4 py-3 md:px-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-crt/35">
+                swim · curator console · restricted access
               </div>
+              <h1 className="text-[1.5rem] font-semibold tracking-[0.05em] text-crt/92 md:text-[1.7rem]">
+                Signal Queue
+              </h1>
+            </div>
+            <button
+              onClick={() => setShowIntake((v) => !v)}
+              className={`border px-4 py-2 text-[13px] font-medium transition-colors ${
+                showIntake
+                  ? 'border-crt/30 text-crt/65 hover:border-crt/18 hover:text-crt/40'
+                  : 'border-crt/22 text-crt/48 hover:border-crt/38 hover:text-crt/72'
+              }`}
+            >
+              {showIntake ? '− Close Intake' : '+ New Signal'}
+            </button>
+          </div>
+        </div>
+
+        {/* Status tabs */}
+        <div className="border-b border-crt/8 px-4 md:px-8">
+          <div className="flex gap-0 overflow-x-auto">
+            {STATUS_TABS.map(({ key, label }) => (
               <button
-                onClick={() => setShowIntake((v) => !v)}
-                className={`shrink-0 border px-4 py-2 text-[12px] uppercase tracking-[0.18em] transition-colors ${
-                  showIntake
-                    ? 'border-crt/32 text-crt/65 hover:border-crt/18 hover:text-crt/38'
-                    : 'border-crt/22 text-crt/45 hover:border-crt/38 hover:text-crt/68'
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`border-b-2 px-5 py-3 text-[14px] font-medium transition-colors whitespace-nowrap ${
+                  activeTab === key
+                    ? 'border-crt/60 text-crt/88'
+                    : 'border-transparent text-crt/38 hover:text-crt/65'
                 }`}
               >
-                {showIntake ? '[ − close intake ]' : '[ + intake signal ]'}
-              </button>
-            </div>
-            <h1 className="text-[1.9rem] tracking-[0.10em] text-crt md:text-[2.3rem]">
-              SIGNAL QUEUE
-            </h1>
-            <p className="mt-2 text-[14px] uppercase tracking-[0.12em] text-crt/48">
-              dead signals recovered · curator review required · human approval only
-            </p>
-          </div>
-
-          {/* Manual intake form */}
-          {showIntake && (
-            <IntakeFormClient onSuccess={() => setShowIntake(false)} />
-          )}
-
-          {/* Status counts */}
-          <div className="border-b border-crt/10 bg-[rgba(134,212,110,0.018)] px-6 py-4 md:px-10">
-            <div className="flex flex-wrap gap-x-8 gap-y-2.5 text-[13px] uppercase tracking-[0.16em]">
-              <span className="text-crt/52">
-                <span className="text-crt/32">total</span>
-                <span className="mx-2 text-crt/20">//</span>
-                {counts.all}
-              </span>
-              {STATUS_SECTION_ORDER.map((s) => (
-                <span key={s} style={{ color: `${STATUS_COLORS[s]}92` }}>
-                  <span className="text-crt/32">{s}</span>
-                  <span className="mx-2 text-crt/20">//</span>
-                  {counts[s]}
-                </span>
-              ))}
-              {counts.pending > 0 && rebirthQueueSignals.length > 0 && (
-                <span style={{ color: 'rgba(215,168,92,0.82)' }}>
-                  <span className="text-crt/32">rebirth ready</span>
-                  <span className="mx-2 text-crt/20">//</span>
-                  {rebirthQueueSignals.length}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* ── Sticky tab + filter toolbar ──
-              overflow is NOT set on forum-shell, so sticky works here. */}
-          <div className="sticky top-[72px] z-20 border-b border-crt/12 bg-[rgba(2,3,3,0.97)] backdrop-blur-sm md:top-[80px]">
-
-            {/* Status filter tabs */}
-            <div className="border-b border-crt/10 px-6 md:px-10">
-              <div className="flex gap-0 overflow-x-auto">
-                {STATUS_TABS.map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => setActiveTab(key)}
-                    className={`border-b-2 px-5 py-4 text-[12px] uppercase tracking-[0.20em] transition-colors whitespace-nowrap ${
-                      activeTab === key
-                        ? 'border-crt/60 text-crt/85'
-                        : 'border-transparent text-crt/35 hover:text-crt/60'
-                    }`}
-                  >
-                    {label}
-                    {key !== 'all' && (
-                      <span className="ml-2 text-[12px] text-crt/32">
-                        {counts[key as RecoveredSignalStatus]}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Secondary filters */}
-            <div className="px-6 py-3 md:px-10">
-              <div className="flex flex-wrap items-center gap-5">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">category</span>
-                  <select
-                    value={filterCategory}
-                    onChange={(e) => setFilterCategory(e.target.value)}
-                    className="border border-crt/18 bg-transparent px-2.5 py-1.5 font-mono text-[13px] tracking-[0.06em] text-crt/62 focus:border-crt/35 focus:outline-none"
-                  >
-                    <option value="">all</option>
-                    {uniqueCategories.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">source</span>
-                  <select
-                    value={filterSourceType}
-                    onChange={(e) => setFilterSourceType(e.target.value)}
-                    className="border border-crt/18 bg-transparent px-2.5 py-1.5 font-mono text-[13px] tracking-[0.06em] text-crt/62 focus:border-crt/35 focus:outline-none"
-                  >
-                    <option value="">all</option>
-                    {uniqueSourceTypes.map((t) => (
-                      <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <span className="text-[12px] uppercase tracking-[0.16em] text-crt/35">score</span>
-                  <button
-                    onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
-                    className={`border px-3 py-1.5 text-[12px] uppercase tracking-[0.12em] transition-colors ${
-                      sortScore
-                        ? 'border-crt/32 text-crt/65 hover:border-crt/20 hover:text-crt/42'
-                        : 'border-crt/15 text-crt/35 hover:border-crt/25 hover:text-crt/55'
-                    }`}
-                  >
-                    {sortScore === 'desc' ? '↓ high first' : sortScore === 'asc' ? '↑ low first' : '— default'}
-                  </button>
-                </div>
-
-                {hasActiveFilter && (
-                  <>
-                    <button
-                      onClick={() => { setFilterCategory(''); setFilterSourceType(''); setSortScore(null); }}
-                      className="ml-auto text-[12px] uppercase tracking-[0.16em] text-crt/32 transition-colors hover:text-crt/58"
-                    >
-                      × clear
-                    </button>
-                    <span className="text-[12px] uppercase tracking-[0.12em] text-crt/28">
-                      {visibleSignals.length} shown
-                    </span>
-                  </>
+                {label}
+                {key !== 'all' && (
+                  <span className={`ml-2 text-[13px] ${activeTab === key ? 'text-crt/50' : 'text-crt/28'}`}>
+                    {counts[key as RecoveredSignalStatus]}
+                  </span>
                 )}
-              </div>
-            </div>
+              </button>
+            ))}
           </div>
+        </div>
 
-          {/* Error banner */}
-          {errorMsg && (
-            <div className="border-b border-red-900/45 bg-[rgba(40,10,10,0.65)] px-6 py-3.5 text-[13px] uppercase tracking-[0.16em] text-red-400/85 md:px-10">
-              › {errorMsg}
+        {/* Filter row */}
+        <div className="px-4 py-2.5 md:px-8">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Search */}
+            <div className="min-w-[160px] flex-1 max-w-xs">
+              <input
+                type="search"
+                placeholder="Search title / summary / source…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full border border-crt/18 bg-transparent px-3 py-1.5 text-[14px] text-crt/72 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
+              />
             </div>
-          )}
 
-          {/* Signal list */}
-          <div className="px-6 py-8 md:px-10 md:py-10">
+            {/* Category */}
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="border border-crt/18 bg-transparent px-3 py-1.5 text-[13px] text-crt/62 focus:border-crt/32 focus:outline-none"
+            >
+              <option value="">All categories</option>
+              {uniqueCategories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            {/* Source type */}
+            <select
+              value={filterSourceType}
+              onChange={(e) => setFilterSourceType(e.target.value)}
+              className="border border-crt/18 bg-transparent px-3 py-1.5 text-[13px] text-crt/62 focus:border-crt/32 focus:outline-none"
+            >
+              <option value="">All sources</option>
+              {uniqueSourceTypes.map((t) => (
+                <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+
+            {/* Score sort */}
+            <button
+              onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
+              className={`border px-3 py-1.5 text-[13px] transition-colors ${
+                sortScore
+                  ? 'border-crt/30 text-crt/65 hover:border-crt/18 hover:text-crt/42'
+                  : 'border-crt/15 text-crt/38 hover:border-crt/25 hover:text-crt/58'
+              }`}
+            >
+              Score {sortScore === 'desc' ? '↓' : sortScore === 'asc' ? '↑' : '—'}
+            </button>
+
+            {/* Clear */}
+            {hasActiveFilter && (
+              <button
+                onClick={clearFilters}
+                className="ml-auto text-[13px] text-crt/35 transition-colors hover:text-crt/62"
+              >
+                × Clear filters
+                <span className="ml-2 text-crt/25">({visibleSignals.length} shown)</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Main layout ── */}
+      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-8">
+
+        {/* Intake form */}
+        {showIntake && (
+          <div className="mb-6 border border-crt/18 bg-[rgba(4,7,5,0.97)]">
+            <IntakeFormClient onSuccess={() => setShowIntake(false)} />
+          </div>
+        )}
+
+        {/* Error */}
+        {errorMsg && (
+          <div className="mb-5 border border-red-900/45 bg-[rgba(40,10,10,0.65)] px-5 py-3 text-[14px] text-red-400/85">
+            › {errorMsg}
+          </div>
+        )}
+
+        {/* Two-column */}
+        <div className="flex flex-col gap-6 md:flex-row md:items-start lg:gap-8">
+
+          {/* ── Signal cards (main column) ── */}
+          <div className="min-w-0 flex-1">
             {visibleSignals.length === 0 ? (
-              <div className="py-20 text-center text-[14px] uppercase tracking-[0.20em] text-crt/32">
-                {hasActiveFilter ? 'no signals match current filters' : 'no signals in this state'}
+              <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] py-20 text-center text-[15px] text-crt/35">
+                {hasActiveFilter ? 'No signals match the current filters.' : 'No signals in this state.'}
               </div>
 
             ) : activeTab === 'pending' ? (
-              <div>
-                {/* Rebirth Queue callout */}
+              <div className="space-y-6">
+                {/* Rebirth Queue */}
                 {rebirthQueueSignals.length > 0 && (
-                  <div className="mb-10">
-                    <div className="mb-6 border border-[#d7a85c]/22 bg-[rgba(215,168,92,0.045)] px-6 py-5">
-                      <div className="mb-1.5 flex items-center gap-3">
-                        <span className="h-2 w-2 bg-[#d7a85c]/70" aria-hidden="true" />
-                        <span className="text-[13px] uppercase tracking-[0.28em] text-[#d7a85c]/88">
-                          ◈ rebirth queue
-                        </span>
-                      </div>
-                      <p className="text-[14px] uppercase tracking-[0.14em] text-[#d7a85c]/58">
-                        {rebirthQueueSignals.length} dead signal{rebirthQueueSignals.length !== 1 ? 's' : ''} with anomaly score ≥ {REBIRTH_SCORE_THRESHOLD} — ready for archive
-                      </p>
+                  <div>
+                    <div className="mb-3 flex items-center gap-3">
+                      <div className="h-px flex-1 bg-[rgba(215,168,92,0.22)]" />
+                      <span className="shrink-0 text-[13px] uppercase tracking-[0.14em] text-[#d7a85c]/80">
+                        ◈ Rebirth Queue — {rebirthQueueSignals.length} signal{rebirthQueueSignals.length !== 1 ? 's' : ''} · anomaly ≥ {REBIRTH_SCORE_THRESHOLD}
+                      </span>
+                      <div className="h-px flex-1 bg-[rgba(215,168,92,0.22)]" />
                     </div>
-                    <div className="terminal-card-grid">
+                    <div className="space-y-4">
                       {rebirthQueueSignals.map(renderCard)}
                     </div>
                   </div>
@@ -980,15 +1125,15 @@ export function SignalQueueClient({
                 {regularPendingSignals.length > 0 && (
                   <div>
                     {rebirthQueueSignals.length > 0 && (
-                      <div className="mb-6 flex items-center gap-4">
+                      <div className="mb-3 flex items-center gap-3">
                         <div className="h-px flex-1 bg-crt/10" />
-                        <span className="shrink-0 text-[12px] uppercase tracking-[0.22em] text-crt/32">
-                          remaining · {regularPendingSignals.length}
+                        <span className="shrink-0 text-[13px] text-crt/35">
+                          Remaining · {regularPendingSignals.length}
                         </span>
                         <div className="h-px flex-1 bg-crt/10" />
                       </div>
                     )}
-                    <div className="terminal-card-grid">
+                    <div className="space-y-4">
                       {regularPendingSignals.map(renderCard)}
                     </div>
                   </div>
@@ -996,23 +1141,23 @@ export function SignalQueueClient({
               </div>
 
             ) : activeTab === 'all' ? (
-              <div className="space-y-12">
+              <div className="space-y-10">
                 {STATUS_SECTION_ORDER.map((status) => {
                   const sigs = groupedByStatus[status];
                   if (sigs.length === 0) return null;
                   return (
                     <div key={status}>
-                      <div className="mb-5 flex items-center gap-4">
-                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}25` }} />
+                      <div className="mb-4 flex items-center gap-3">
+                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
                         <span
-                          className="shrink-0 text-[12px] uppercase tracking-[0.24em]"
+                          className="shrink-0 text-[13px] uppercase tracking-[0.12em]"
                           style={{ color: `${STATUS_COLORS[status]}90` }}
                         >
                           {SECTION_LABELS[status]} · {sigs.length}
                         </span>
-                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}25` }} />
+                        <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
                       </div>
-                      <div className="terminal-card-grid">
+                      <div className="space-y-4">
                         {sigs.map(renderCard)}
                       </div>
                     </div>
@@ -1021,15 +1166,21 @@ export function SignalQueueClient({
               </div>
 
             ) : (
-              <div className="terminal-card-grid">
+              <div className="space-y-4">
                 {visibleSignals.map(renderCard)}
               </div>
             )}
           </div>
 
-          {/* Footer */}
-          <div className="border-t border-crt/10 px-6 py-5 text-center text-[12px] uppercase tracking-[0.16em] text-crt/28 md:px-10">
-            curator queue · service role key required · not accessible to public users
+          {/* ── Sidebar ── */}
+          <div className="w-full shrink-0 space-y-4 md:w-[268px] lg:w-[288px]">
+            <QueueStats counts={counts} rebirthQueueCount={rebirthQueueSignals.length} />
+            <AIScannerPanel />
+
+            {/* Footer note */}
+            <p className="text-center text-[12px] text-crt/22">
+              Service role key required · Not accessible to public users
+            </p>
           </div>
 
         </div>
