@@ -307,7 +307,7 @@ function PipelineBar({
                 className="h-2 w-2 rounded-full"
                 style={{ background: dotColor, boxShadow: isCurrent ? `0 0 6px ${dotColor}` : 'none' }}
               />
-              <span className="whitespace-nowrap text-[10px] font-semibold" style={{ color: textColor }}>
+              <span className="whitespace-nowrap text-xs font-medium" style={{ color: textColor }}>
                 {stage.label}
               </span>
             </div>
@@ -336,11 +336,9 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
   return (
     <div className="border-t border-crt/12">
       {/* Section header */}
-      <div className="flex items-center justify-between bg-[rgba(2,3,3,0.35)] px-5 py-2.5 md:px-6">
-        <span className="text-xs font-semibold uppercase tracking-wider text-crt/38">
-          Original Evidence
-        </span>
-        <span className="text-xs text-crt/25">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</span>
+      <div className="flex items-center justify-between bg-[rgba(2,3,3,0.35)] px-5 py-3 md:px-6">
+        <span className="text-base font-semibold text-crt/55">Original Evidence</span>
+        <span className="text-sm text-crt/32">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</span>
       </div>
 
       <div className="px-5 py-4 md:px-6">
@@ -348,18 +346,18 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
         <div className="mb-4 flex flex-wrap items-start gap-3">
           {/* Source name block */}
           <div className="flex-1 min-w-[160px] border border-crt/14 bg-[rgba(4,7,5,0.55)] px-4 py-3">
-            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-crt/30">Source</p>
-            <p className="text-base font-medium text-crt/85">{sig.source_name}</p>
-            <p className="mt-0.5 text-sm text-crt/45">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</p>
+            <p className="mb-1 text-xs font-semibold text-crt/38">Source</p>
+            <p className="text-lg font-semibold text-crt/88">{sig.source_name}</p>
+            <p className="mt-0.5 text-sm text-crt/48">{SOURCE_TYPE_LABELS[sig.source_type] ?? sig.source_type}</p>
           </div>
           {/* Metadata block */}
           <div className="flex-1 min-w-[140px] border border-crt/14 bg-[rgba(4,7,5,0.55)] px-4 py-3">
-            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-crt/30">Metadata</p>
-            <p className="text-sm text-crt/65">Discovered: {sig.discovered_at.slice(0, 10)}</p>
+            <p className="mb-1 text-xs font-semibold text-crt/38">Metadata</p>
+            <p className="text-base text-crt/68">Discovered: {sig.discovered_at.slice(0, 10)}</p>
             {sig.approved_at && (
-              <p className="text-sm text-crt/50">Approved: {sig.approved_at.slice(0, 10)}</p>
+              <p className="text-base text-crt/52">Approved: {sig.approved_at.slice(0, 10)}</p>
             )}
-            <p className="mt-0.5 text-xs text-crt/35">
+            <p className="mt-0.5 text-sm text-crt/38">
               {sig.submitted_publicly ? 'Public submission' : 'Curator intake'}
             </p>
           </div>
@@ -367,15 +365,15 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
 
         {/* Source URL card */}
         {sig.source_url && (
-          <div className="mb-4 flex items-center justify-between gap-3 border border-crt/18 bg-[rgba(134,212,110,0.03)] px-4 py-3">
-            <span className="min-w-0 truncate text-sm text-crt/50 font-mono">{sig.source_url}</span>
+          <div className="mb-4 border border-crt/18 bg-[rgba(134,212,110,0.03)] px-4 py-3">
+            <span className="mb-2 block font-mono text-xs text-crt/40 truncate">{sig.source_url}</span>
             <a
               href={sig.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="shrink-0 border border-crt/25 bg-[rgba(134,212,110,0.06)] px-3 py-1.5 text-sm font-medium text-crt/70 transition-colors hover:border-crt/40 hover:text-crt/90"
+              className="admin-btn admin-btn-primary inline-flex"
             >
-              View Source ↗
+              View Original Source ↗
             </a>
           </div>
         )}
@@ -401,17 +399,17 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
         {/* Media / screenshot frame */}
         {sig.source_image_url ? (
           <div className="overflow-hidden border-2 border-crt/15">
-            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/30">Screenshot / Capture</span>
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-2">
+              <span className="text-sm text-crt/42">Screenshot / Capture</span>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={sig.source_image_url} alt="Source capture" className="max-h-72 w-full object-cover" />
           </div>
         ) : sig.media_url ? (
           <div className="border-2 border-crt/15">
-            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/30">
-                Attached Media — {sig.media_type ?? 'file'}
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-2">
+              <span className="text-sm text-crt/42">
+                Media — {sig.media_type ?? 'file'}
               </span>
               <a
                 href={sig.media_url}
@@ -426,8 +424,8 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
           </div>
         ) : (
           <div className="border-2 border-dashed border-crt/10">
-            <div className="flex items-center bg-[rgba(2,3,3,0.35)] px-3 py-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-crt/22">Media Frame</span>
+            <div className="flex items-center bg-[rgba(2,3,3,0.35)] px-3 py-2">
+              <span className="text-sm text-crt/28">No media attached</span>
             </div>
             <div className="px-5 py-5 text-center">
               <p className="text-sm text-crt/30">No media attached</p>
@@ -495,7 +493,7 @@ function BigCopyButton({
       <div className="px-4 py-3">
         <button
           onClick={handleCopy}
-          className="flex w-full items-center justify-center gap-2 border-2 py-3 text-base font-bold transition-all sm:w-auto sm:px-8"
+          className="flex min-h-[52px] w-full items-center justify-center gap-2 border-2 text-lg font-bold transition-all sm:w-auto sm:px-10"
           style={{
             borderColor: copied ? `${accentColor}80` : `${accentColor}55`,
             background:  copied ? accentBg.replace('0.10', '0.18') : accentBg,
@@ -534,7 +532,7 @@ function RebirthSuccessPanel({ result }: { result: PublishResult }) {
           href={`/threads/${result.threadSlug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.10)] px-5 py-3 text-base font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.18)]"
+          className="inline-flex min-h-[52px] items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.10)] px-6 text-lg font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.18)]"
         >
           Open Thread ↗
         </Link>
@@ -634,15 +632,13 @@ function RebirthPanel({
   return (
     <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(2,3,3,0.70)]">
       {/* Header */}
-      <div className="border-b border-crt/12 px-5 py-5 md:px-6">
-        <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-[#c084fc]/70">
-          Rebirth as Thread
-        </div>
-        <p className="text-lg font-medium text-crt/88">
-          This will create a public SWIM thread in:{' '}
+      <div className="border-b border-crt/12 px-5 py-6 md:px-6">
+        <div className="mb-2 text-base font-semibold text-[#c084fc]/78">Rebirth as Thread</div>
+        <p className="text-xl font-bold text-crt/90">
+          Publishing to:{' '}
           <span className="text-[#c084fc]">{category}</span>
         </p>
-        <p className="mt-1 text-sm text-crt/50">
+        <p className="mt-2 text-base text-crt/52">
           Edit the content below, complete the checklist, then click Publish.
           Remove the curator note from the body before publishing.
         </p>
@@ -795,22 +791,22 @@ function RebirthPanel({
           <button
             onClick={() => onRebirth({ title, body, category, tags: parsedTags })}
             disabled={isRebirthPending || !title.trim() || !body.trim() || !allChecked}
-            className="w-full border border-[#c084fc]/50 bg-[rgba(192,132,252,0.12)] px-6 py-3.5 text-base font-semibold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.22)] hover:border-[#c084fc]/72 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
+            className="flex min-h-[56px] w-full items-center justify-center border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.12)] px-8 text-xl font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.22)] hover:border-[#c084fc]/78 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
           >
-            {isRebirthPending ? 'Publishing…' : 'Publish Thread'}
+            {isRebirthPending ? 'Publishing…' : '✦ Publish Recovered Thread'}
           </button>
           <button
             onClick={onCancel}
             disabled={isRebirthPending}
-            className="w-full border border-crt/18 px-6 py-3.5 text-base text-crt/55 transition-colors hover:border-crt/32 hover:text-crt/75 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
+            className="flex min-h-[44px] w-full items-center justify-center border border-crt/18 px-6 text-base text-crt/55 transition-colors hover:border-crt/32 hover:text-crt/75 disabled:cursor-not-allowed disabled:opacity-30 sm:w-auto"
           >
             Cancel
           </button>
           {!allChecked && (
-            <p className="text-sm text-crt/35 sm:ml-2">Complete the checklist to publish</p>
+            <p className="text-base text-crt/38 sm:ml-2">Complete the checklist to publish</p>
           )}
         </div>
-        <p className="mt-3 text-xs text-crt/28">
+        <p className="mt-3 text-sm text-crt/32">
           Author will be set to ARCHIVIST · "recovered-signal" tag added automatically
         </p>
       </div>
@@ -845,7 +841,7 @@ function CuratorNotesField({ signalId, initialNotes }: { signalId: string; initi
         className="flex w-full items-center justify-between bg-[rgba(2,3,3,0.35)] px-5 py-2.5 text-left transition-colors hover:bg-[rgba(2,3,3,0.55)] md:px-6"
       >
         <div className="flex items-center gap-2.5">
-          <span className="text-xs font-semibold uppercase tracking-wider text-crt/38">Curator Notes</span>
+          <span className="text-sm font-medium text-crt/50">Curator Notes</span>
           <span
             className="px-1.5 py-0.5 text-[11px] font-medium"
             style={{ background: 'rgba(109,168,255,0.10)', border: '1px solid rgba(109,168,255,0.22)', color: 'rgba(109,168,255,0.60)' }}
@@ -1069,10 +1065,10 @@ const WORKFLOW_STEPS: Partial<Record<RecoveredSignalStatus, {
   hint:  string;
   color: string;
 }>> = {
-  pending:         { num: 1, label: 'Review Evidence',  hint: 'Read the signal, verify the source, check for red flags — then click Review',        color: STATUS_COLORS.pending         },
-  reviewing:       { num: 2, label: 'Prepare Rebirth',  hint: 'Satisfied with quality? Click Prepare Rebirth — or Approve/Archive/Reject below',  color: STATUS_COLORS.reviewing       },
-  'rebirth-ready': { num: 3, label: 'Publish Thread',   hint: 'Open the editor, review the thread body, complete the checklist, then publish',      color: STATUS_COLORS['rebirth-ready'] },
-  approved:        { num: 3, label: 'Publish Thread',   hint: 'Signal approved — open the rebirth editor to publish it as a public thread',         color: STATUS_COLORS.approved        },
+  pending:         { num: 1, label: 'Review Evidence',      hint: 'Read the signal, verify the source, check for red flags — then click Start Review',        color: STATUS_COLORS.pending         },
+  reviewing:       { num: 2, label: 'Mark Rebirth Ready',  hint: 'Satisfied with quality? Click Mark Rebirth Ready — or Approve/Archive/Reject below',       color: STATUS_COLORS.reviewing       },
+  'rebirth-ready': { num: 3, label: 'Open Rebirth Editor', hint: 'Open the editor, review the thread body, complete the checklist, then publish',              color: STATUS_COLORS['rebirth-ready'] },
+  approved:        { num: 3, label: 'Open Rebirth Editor', hint: 'Signal approved — open the rebirth editor to publish it as a public thread',                color: STATUS_COLORS.approved        },
 };
 
 function WorkflowStepBanner({
@@ -1084,12 +1080,10 @@ function WorkflowStepBanner({
 }) {
   if (isReborn) {
     return (
-      <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(192,132,252,0.06)] px-5 py-4 md:px-6">
-        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-[#c084fc]/55">
-          Step 4
-        </p>
-        <p className="text-lg font-semibold text-[#c084fc]/85">Copy Social Posts</p>
-        <p className="mt-0.5 text-sm text-crt/48">Thread is live — use the copy buttons below</p>
+      <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(192,132,252,0.06)] px-5 py-5 md:px-6">
+        <p className="mb-1 text-sm font-medium text-[#c084fc]/60">Step 4 of 4</p>
+        <p className="text-xl font-bold text-[#c084fc]/88">Copy Social Posts</p>
+        <p className="mt-1 text-base text-crt/50">Thread is live — use the copy buttons below</p>
       </div>
     );
   }
@@ -1099,19 +1093,16 @@ function WorkflowStepBanner({
 
   return (
     <div
-      className="border-t-2 px-5 py-4 md:px-6"
+      className="border-t-2 px-5 py-5 md:px-6"
       style={{ borderTopColor: `${step.color}45`, background: `${step.color}07` }}
     >
-      <p
-        className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider"
-        style={{ color: `${step.color}88` }}
-      >
-        Step {step.num}
+      <p className="mb-1 text-sm font-medium" style={{ color: `${step.color}70` }}>
+        Step {step.num} of 4
       </p>
-      <p className="text-lg font-semibold" style={{ color: `${step.color}cc` }}>
+      <p className="text-xl font-bold" style={{ color: `${step.color}cc` }}>
         {step.label}
       </p>
-      <p className="mt-0.5 text-sm text-crt/48">{step.hint}</p>
+      <p className="mt-1 text-base text-crt/50">{step.hint}</p>
     </div>
   );
 }
@@ -1281,34 +1272,34 @@ function SignalCard({
               <button
                 onClick={() => onStatusChange(sig.id, 'reviewing')}
                 disabled={busy}
-                className="flex w-full items-center justify-between border-2 border-[#4db8c8]/55 bg-[rgba(77,184,200,0.10)] px-5 py-3.5 text-base font-bold text-[#4db8c8] transition-colors hover:bg-[rgba(77,184,200,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#4db8c8]/55 bg-[rgba(77,184,200,0.10)] px-6 text-lg font-bold text-[#4db8c8] transition-colors hover:bg-[rgba(77,184,200,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
-                <span>Review →</span>
+                <span>Start Review →</span>
               </button>
             )}
             {sig.status === 'reviewing' && (
               <button
                 onClick={() => onStatusChange(sig.id, 'rebirth-ready')}
                 disabled={busy}
-                className="flex w-full items-center justify-between border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-5 py-3.5 text-base font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
-                <span>Prepare Rebirth →</span>
+                <span>Mark Rebirth Ready →</span>
               </button>
             )}
             {(sig.status === 'rebirth-ready' || (sig.status === 'approved' && !sig.published_thread_id)) && (
               <button
                 onClick={() => onRequestRebirth(sig)}
                 disabled={busy}
-                className="flex w-full items-center justify-between border-2 border-[#c084fc]/70 bg-[rgba(192,132,252,0.14)] px-5 py-3.5 text-base font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.24)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#c084fc]/70 bg-[rgba(192,132,252,0.14)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.24)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
-                <span>Publish Thread →</span>
+                <span>Open Rebirth Editor →</span>
               </button>
             )}
             {alreadyPublished && (
               <Link
                 href={`/threads/${sig.published_thread_id}`}
                 target="_blank"
-                className="inline-flex items-center gap-2 border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-5 py-3.5 text-base font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.20)]"
+                className="inline-flex min-h-[52px] items-center gap-2 border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.20)]"
               >
                 Open Published Thread ↗
               </Link>
@@ -1316,12 +1307,12 @@ function SignalCard({
           </div>
 
           {/* Secondary actions */}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2.5">
             {sig.status !== 'approved' && sig.status !== 'rebirth-ready' && (
               <button
                 onClick={() => onStatusChange(sig.id, 'approved')}
                 disabled={busy}
-                className="border border-[#86d46e]/38 px-4 py-2 text-sm font-medium text-[#86d46e]/78 transition-colors hover:bg-[rgba(134,212,110,0.08)] disabled:cursor-not-allowed disabled:opacity-30"
+                className="min-h-[44px] border border-[#86d46e]/40 px-5 py-2.5 text-base font-medium text-[#86d46e]/80 transition-colors hover:bg-[rgba(134,212,110,0.08)] disabled:cursor-not-allowed disabled:opacity-30"
               >
                 Approve
               </button>
@@ -1330,7 +1321,7 @@ function SignalCard({
               <button
                 onClick={() => onStatusChange(sig.id, 'archived')}
                 disabled={busy}
-                className="border border-[#6da8ff]/28 px-4 py-2 text-sm font-medium text-[#6da8ff]/62 transition-colors hover:bg-[rgba(109,168,255,0.07)] disabled:cursor-not-allowed disabled:opacity-30"
+                className="min-h-[44px] border border-[#6da8ff]/30 px-5 py-2.5 text-base font-medium text-[#6da8ff]/65 transition-colors hover:bg-[rgba(109,168,255,0.07)] disabled:cursor-not-allowed disabled:opacity-30"
               >
                 Archive
               </button>
@@ -1339,7 +1330,7 @@ function SignalCard({
               <button
                 onClick={() => onStatusChange(sig.id, 'rejected')}
                 disabled={busy}
-                className="border border-[#ff6b6b]/20 px-4 py-2 text-sm font-medium text-[#ff6b6b]/52 transition-colors hover:bg-[rgba(255,107,107,0.07)] disabled:cursor-not-allowed disabled:opacity-30"
+                className="min-h-[44px] border border-[#ff6b6b]/22 px-5 py-2.5 text-base font-medium text-[#ff6b6b]/55 transition-colors hover:bg-[rgba(255,107,107,0.07)] disabled:cursor-not-allowed disabled:opacity-30"
               >
                 Reject
               </button>
@@ -1369,8 +1360,8 @@ function SignalCard({
           <>
             {sig.tags.length > 0 && (
               <div className="border-t border-crt/10">
-                <div className="bg-[rgba(2,3,3,0.35)] px-5 py-2 md:px-6">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-crt/32">Tags</span>
+                <div className="bg-[rgba(2,3,3,0.35)] px-5 py-2.5 md:px-6">
+                  <span className="text-sm font-medium text-crt/45">Tags</span>
                 </div>
                 <div className="flex flex-wrap gap-2 px-5 py-3 md:px-6">
                   {sig.tags.map((tag) => (
@@ -1465,10 +1456,10 @@ function QueueStats({
   return (
     <div className="border border-crt/14 bg-[rgba(4,7,5,0.97)]" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}>
       <div className="border-b border-crt/10 px-4 py-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-crt/45">Queue</h3>
+        <h3 className="text-sm font-semibold text-crt/55">Queue</h3>
         <div className="mt-1 flex items-baseline gap-2">
-          <span className="font-mono text-2xl font-bold text-crt/85">{counts.all}</span>
-          <span className="text-sm text-crt/35">signals total</span>
+          <span className="font-mono text-3xl font-bold text-crt/88">{counts.all}</span>
+          <span className="text-sm text-crt/38">signals total</span>
         </div>
       </div>
       <div className="p-4 space-y-2">
@@ -1521,7 +1512,7 @@ function OperationsPanel({
       <div className="border-b border-crt/10 px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full" style={{ background: '#4db8c8', boxShadow: '0 0 5px #4db8c880' }} />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-crt/45">Operations</h3>
+          <h3 className="text-sm font-semibold text-crt/55">Operations</h3>
         </div>
       </div>
 
@@ -1562,7 +1553,7 @@ function OperationsPanel({
           </span>
         </div>
         <div className="px-4 py-3">
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-crt/30">Latest Reborn</p>
+          <p className="mb-1.5 text-xs font-semibold text-crt/38">Latest Reborn</p>
           {latestPublishedTitle ? (
             <p className="text-sm leading-snug text-crt/55 line-clamp-2">{latestPublishedTitle}</p>
           ) : (
@@ -1572,7 +1563,7 @@ function OperationsPanel({
       </div>
 
       <div className="border-t border-crt/8 px-4 py-3">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-crt/25">Scanner</p>
+        <p className="mb-2 text-xs font-semibold text-crt/32">Scanner</p>
         <div className="space-y-1">
           {AI_SCANNER_ROWS.map(({ label, value, dim }) => (
             <div key={label} className="flex items-baseline justify-between gap-2">
@@ -1810,10 +1801,10 @@ export function SignalQueueClient({
             </div>
             <button
               onClick={() => setShowIntake((v) => !v)}
-              className={`border px-4 py-2 text-[15px] font-medium transition-colors ${
+              className={`min-h-[44px] border px-5 py-2.5 text-base font-semibold transition-colors ${
                 showIntake
                   ? 'border-crt/28 text-crt/60 hover:border-crt/15 hover:text-crt/40'
-                  : 'border-crt/22 text-crt/50 hover:border-crt/38 hover:text-crt/75'
+                  : 'border-crt/25 text-crt/55 hover:border-crt/42 hover:text-crt/80'
               }`}
             >
               {showIntake ? '− Close Intake' : '+ Add Signal'}
