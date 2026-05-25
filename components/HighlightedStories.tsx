@@ -33,17 +33,17 @@ export function HighlightedStories({ threads }: Props) {
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-crt/12 px-3 py-2.5 md:px-4">
         <span className="h-1.5 w-1.5 animate-pulse-glow bg-crt/65" aria-hidden="true" />
-        <span className="text-[12px] uppercase tracking-[0.3em] text-crt">
+        <span className="text-[14px] uppercase tracking-[0.28em] text-crt">
           RECOVERED FILES
         </span>
         <div className="h-px flex-1 bg-crt/10" />
-        <span className="text-[9px] uppercase tracking-[0.2em] text-crt/22">
+        <span className="text-[12px] uppercase tracking-[0.18em] text-crt/42">
           verified by no one
         </span>
       </div>
 
       {/* Story grid */}
-      <div className="grid gap-px bg-crt/[0.04] sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
         {threads.map((thread) => {
           const color = CATEGORY_COLORS[thread.category] ?? '#86d46e';
           const badgeClass = thread.badge ? BADGE_CLASS[thread.badge] : '';
@@ -63,7 +63,7 @@ export function HighlightedStories({ threads }: Props) {
                   </span>
                 )}
                 <span
-                  className="category-chip ml-auto shrink-0 px-1.5 py-0.5 text-[9px]"
+                  className="category-chip ml-auto shrink-0 px-1.5 py-0.5 text-[11px]"
                   style={{ ['--category' as string]: color }}
                 >
                   {thread.category}
@@ -94,7 +94,7 @@ export function HighlightedStories({ threads }: Props) {
                   </div>
                 )}
                 {thread.archiveId && (
-                  <span className="text-[9px] uppercase tracking-[0.14em] text-crt/18 ml-auto">
+                  <span className="text-[11px] uppercase tracking-[0.12em] text-crt/38 ml-auto">
                     {thread.archiveId}
                   </span>
                 )}
@@ -105,7 +105,7 @@ export function HighlightedStories({ threads }: Props) {
       </div>
 
       {/* Footer archivist voice */}
-      <div className="border-t border-crt/8 px-3 py-2 text-center text-[9px] uppercase tracking-[0.24em] text-crt/18">
+      <div className="border-t border-crt/8 px-4 py-3 text-center text-[12px] uppercase tracking-[0.22em] text-crt/42">
         recovered from dead nodes · speculation archive · verify nothing · archive everything
       </div>
     </div>

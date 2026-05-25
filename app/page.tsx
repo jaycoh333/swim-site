@@ -1,19 +1,8 @@
-import { getHighlightedThreads, getHotThreads } from '@/lib/supabase/repository';
 import { HomeClient } from '@/components/HomeClient';
 
-// Always SSR so freshly posted threads appear immediately.
+// Always SSR so any future dynamic data appears immediately.
 export const dynamic = 'force-dynamic';
 
-export default async function HomePage() {
-  const [initialHighlightedThreads, initialHotThreads] = await Promise.all([
-    getHighlightedThreads(),
-    getHotThreads(),
-  ]);
-
-  return (
-    <HomeClient
-      initialHighlightedThreads={initialHighlightedThreads}
-      initialHotThreads={initialHotThreads}
-    />
-  );
+export default function HomePage() {
+  return <HomeClient />;
 }

@@ -14,11 +14,11 @@ interface ThreadPostProps {
 }
 
 const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: string }> = [
-  { key: 'echo',    glyph: '~', label: 'echo'    },
-  { key: 'dive',    glyph: 'v', label: 'dive'    },
-  { key: 'ripple',  glyph: '*', label: 'ripple'  },
-  { key: 'witness', glyph: '+', label: 'witness' },
-  { key: 'signal',  glyph: '>', label: 'signal'  },
+  { key: 'echo',    glyph: '~', label: 'ECHO'     },
+  { key: 'witness', glyph: '+', label: 'WITNESSED' },
+  { key: 'signal',  glyph: '▸', label: 'SIGNAL'   },
+  { key: 'ripple',  glyph: '◻', label: 'ARCHIVED'  },
+  { key: 'dive',    glyph: '↯', label: 'GLITCH'   },
 ];
 
 function renderBody(body: string) {

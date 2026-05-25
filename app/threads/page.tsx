@@ -1,4 +1,4 @@
-import { getThreads } from '@/lib/supabase/repository';
+import { getThreads, getHotThreads } from '@/lib/supabase/repository';
 import { mockDb } from '@/lib/mock-db';
 import { ThreadsClient } from '@/components/ThreadsClient';
 
@@ -17,8 +17,9 @@ export default async function ThreadsPage({
     typeof sp.category === 'string' ? sp.category : null;
   const initialCompose = sp.compose === 'true';
 
-  const [threads, ghost, draft, categories] = await Promise.all([
+  const [threads, hotThreads, ghost, draft, categories] = await Promise.all([
     getThreads('ALL'),
+    getHotThreads(),
     Promise.resolve(mockDb.getGhostIdentity()),
     Promise.resolve(mockDb.getCreateThreadDraft()),
     Promise.resolve(mockDb.getSeededCategories()),
@@ -27,6 +28,7 @@ export default async function ThreadsPage({
   return (
     <ThreadsClient
       initialThreads={threads}
+      initialHotThreads={hotThreads}
       initialCategory={initialCategory}
       initialCompose={initialCompose}
       ghost={ghost}

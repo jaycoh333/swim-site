@@ -46,34 +46,34 @@ export function Navigation() {
   }, []);
 
   return (
-    <header className="fixed left-0 right-0 top-0 z-[9990] border-b border-crt/10 bg-[rgba(3,5,4,.97)]">
+    <header className="fixed left-0 right-0 top-0 z-[9990] border-b border-crt/12 bg-[rgba(3,5,4,.98)]">
 
-      {/* ── Main row — plain flex, no absolute positioning ── */}
-      <div className="mx-auto flex min-h-[64px] max-w-7xl items-center justify-between px-5 py-2 md:min-h-[72px] md:px-8">
+      {/* ── Main row ── */}
+      <div className="mx-auto flex min-h-[76px] max-w-7xl items-center justify-between gap-6 px-6 py-4 md:min-h-[96px] md:px-12">
 
-        {/* Brand — left-aligned, flex-shrink-0 so it never compresses */}
+        {/* Brand */}
         <Link
           href="/"
           aria-label="SWIM home"
-          className="flex flex-shrink-0 items-center gap-3 text-crt/85 transition-colors hover:text-crt"
+          className="flex flex-shrink-0 items-center gap-4 text-crt/88 transition-colors hover:text-crt"
         >
           <Image
             src="/images/swim-sigil-logo.jpg"
             alt=""
-            width={56}
-            height={56}
+            width={64}
+            height={64}
             className="nav-sigil flex-shrink-0"
           />
-          <span className="font-mono text-[1.15rem] tracking-[0.24em] md:text-[1.32rem]">$SWIM</span>
+          <span className="font-mono text-[1.4rem] tracking-[0.20em] md:text-[1.75rem]">$SWIM</span>
         </Link>
 
-        {/* Desktop nav links — center section */}
-        <nav className="hidden items-center gap-2 md:flex" aria-label="Main navigation">
+        {/* Desktop nav links */}
+        <nav className="hidden items-center gap-4 md:flex" aria-label="Main navigation">
           {NAV_LINKS.map(({ href, label }) => (
             <Link
               key={href}
               href={href}
-              className={`nav-link forum-tab px-4 py-2 text-[13px] tracking-[0.18em] ${
+              className={`nav-link forum-tab px-5 py-3 text-[18px] tracking-[0.16em] ${
                 !href.includes('?') && pathname === href ? 'active border-crt/35 text-crt' : ''
               }`}
             >
@@ -82,46 +82,37 @@ export function Navigation() {
           ))}
         </nav>
 
-        {/* Right — status ticker + blip (desktop only) + mobile hamburger */}
-        <div className="flex flex-shrink-0 items-center gap-3">
-          {/* Status + blip — desktop only */}
+        {/* Right — status blip (desktop) + hamburger (mobile) */}
+        <div className="flex flex-shrink-0 items-center gap-4">
+          {/* Live status — desktop only */}
           <div className="hidden items-center gap-3 md:flex">
             <AnimatePresence mode="wait">
               <motion.span
                 key={statusIdx}
-                initial={{ opacity: 0, y: 4 }}
+                initial={{ opacity: 0, y: 3 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.25 }}
-                className="text-[9px] uppercase tracking-[0.2em] text-crt/28"
+                exit={{ opacity: 0, y: -3 }}
+                transition={{ duration: 0.22 }}
+                className="text-[13px] uppercase tracking-[0.16em] text-crt/52"
               >
                 {STATUS_LINES[statusIdx]}
               </motion.span>
             </AnimatePresence>
-            <span className="h-1.5 w-1.5 bg-crt/55 animate-pulse-glow" aria-hidden="true" />
+            <span className="h-2 w-2 animate-pulse-glow bg-crt/55" aria-hidden="true" />
           </div>
 
           {/* Hamburger — mobile only */}
           <button
             onClick={() => setOpen((v) => !v)}
-            className="forum-tab flex flex-col gap-1.5 px-3 py-2.5 md:hidden"
+            className="forum-tab flex flex-col gap-[5px] px-3.5 py-3 md:hidden"
             aria-label="Toggle navigation"
             aria-expanded={open}
           >
-            <span className={`h-px w-5 bg-crt transition-transform ${open ? 'translate-y-[6px] rotate-45' : ''}`} />
-            <span className={`h-px w-5 bg-crt transition-opacity ${open ? 'opacity-0' : ''}`} />
-            <span className={`h-px w-5 bg-crt transition-transform ${open ? '-translate-y-[6px] -rotate-45' : ''}`} />
+            <span className={`h-px w-6 bg-crt transition-transform ${open ? 'translate-y-[9px] rotate-45' : ''}`} />
+            <span className={`h-px w-6 bg-crt transition-opacity ${open ? 'opacity-0' : ''}`} />
+            <span className={`h-px w-6 bg-crt transition-transform ${open ? '-translate-y-[5px] -rotate-45' : ''}`} />
           </button>
         </div>
-      </div>
-
-      {/* ── BBS status bar (desktop only) ── */}
-      <div className="nav-status-bar hidden items-center gap-5 overflow-hidden px-8 py-0.5 text-[9px] uppercase tracking-[0.26em] text-crt/20 md:flex">
-        <span className="signal-bar text-crt/30">SIG:■■■□□</span>
-        <span>ver: 2001.5.15</span>
-        <span>nodes: 247</span>
-        <span>archive: sealed</span>
-        <span className="truncate text-crt/12">| ghost mode active | no identity required | swim protocol v0.1</span>
       </div>
 
       {/* ── Mobile dropdown ── */}
@@ -135,18 +126,18 @@ export function Navigation() {
             className="overflow-hidden border-t border-crt/10 bg-[rgba(4,7,5,.985)] md:hidden"
             aria-label="Mobile navigation"
           >
-            <div className="px-4 py-2">
-              <div className="mb-2 px-2 pt-1 text-[9px] uppercase tracking-[0.26em] text-crt/25">
+            <div className="px-6 py-3">
+              <div className="mb-3 text-[13px] uppercase tracking-[0.20em] text-crt/48">
                 {STATUS_LINES[statusIdx]}
-                <span className="ml-2 blink text-crt/35">█</span>
+                <span className="ml-2 blink text-crt/45">█</span>
               </div>
               {MOBILE_NAV_LINKS.map(({ href, label }) => (
                 <Link
                   key={href}
                   href={href}
                   onClick={() => setOpen(false)}
-                  className={`block border-b border-crt/10 px-2 py-3.5 text-[15px] tracking-[0.2em] last:border-b-0 ${
-                    pathname === href ? 'text-crt' : 'text-crt/55'
+                  className={`block border-b border-crt/10 px-2 py-4 text-[18px] tracking-[0.18em] last:border-b-0 ${
+                    pathname === href ? 'text-crt' : 'text-crt/72'
                   }`}
                 >
                   &gt; {label}
