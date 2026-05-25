@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ReactionSet, Reply, ThreadContent } from '@/lib/forum-types';
 import { addReactionAction } from '@/app/actions';
 import { getFingerprint } from '@/lib/identity';
+import { ReportModal } from '@/components/ReportModal';
 
 type Post = ThreadContent | Reply;
 
@@ -65,6 +66,7 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
   const [reacted, setReacted] = useState<Record<string, boolean>>({});
   const [counts, setCounts] = useState<ReactionSet>({ ...post.reactions });
   const [reactionError, setReactionError] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   function toggleReaction(key: keyof ReactionSet) {
     const wasReacted = reacted[key];
@@ -159,12 +161,29 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
         </div>
       )}
 
-      {/* Post permalink (imageboard style) */}
-      <div className="post-permalink">
+      {/* Post footer: permalink + report */}
+      <div className="post-permalink flex items-center justify-between">
         <a href={`#post-${postNumber}`} className="post-permalink-link">
           &gt;&gt;{postNumber}
         </a>
+        <button
+          onClick={() => setReportOpen(true)}
+          className="text-[11px] uppercase tracking-[0.16em] text-crt/25 transition-colors hover:text-crt/52"
+          title="Report this post"
+        >
+          [ report ]
+        </button>
       </div>
+
+      {/* Report modal */}
+      {reportOpen && (
+        <ReportModal
+          targetType={isOP ? 'thread' : 'reply'}
+          targetId={resolveTargetId(post, isOP)}
+          postNumber={postNumber}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -13,9 +13,11 @@ import {
   createThread,
   createReply,
   addReaction,
+  reportContent,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
+  type ReportContentInput,
 } from '@/lib/supabase/repository';
 
 export async function createThreadAction(
@@ -34,4 +36,12 @@ export async function addReactionAction(
   input: AddReactionInput,
 ): Promise<{ ok: true } | { error: string }> {
   return addReaction(input);
+}
+
+// Reports are stored anonymously — no reporter identity is recorded.
+// Admin review UI is a future phase; for now reports are visible directly in Supabase.
+export async function reportContentAction(
+  input: ReportContentInput,
+): Promise<{ ok: true } | { error: string }> {
+  return reportContent(input);
 }
