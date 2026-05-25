@@ -838,6 +838,50 @@ export interface UpdateScannerSourceInput {
   attribution_rules?: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate detection — used by the manual fetch pipeline before inserting
+// a new candidate signal. Checks both exact URL match and title similarity.
+// ---------------------------------------------------------------------------
+
+export async function checkSignalDuplicates(
+  sourceUrl: string,
+  title:     string,
+): Promise<Array<{ id: string; title: string; source_url: string | null; status: string }>> {
+  if (!hasSupabase) return [];
+
+  const db = getDb()!;
+  type Row = { id: string; title: string; source_url: string | null; status: string };
+  const seen = new Set<string>();
+  const results: Row[] = [];
+
+  // 1. Exact URL match
+  if (sourceUrl) {
+    const { data: urlRows } = await db
+      .from('recovered_signals')
+      .select('id, title, source_url, status')
+      .eq('source_url', sourceUrl)
+      .limit(5);
+    for (const row of (urlRows ?? []) as Row[]) {
+      if (!seen.has(row.id)) { seen.add(row.id); results.push(row); }
+    }
+  }
+
+  // 2. Title similarity — first 40 chars, case-insensitive
+  const fragment = title.trim().slice(0, 40);
+  if (fragment.length >= 10) {
+    const { data: titleRows } = await db
+      .from('recovered_signals')
+      .select('id, title, source_url, status')
+      .ilike('title', `%${fragment}%`)
+      .limit(5);
+    for (const row of (titleRows ?? []) as Row[]) {
+      if (!seen.has(row.id)) { seen.add(row.id); results.push(row); }
+    }
+  }
+
+  return results;
+}
+
 export async function getScannerSource(id: string): Promise<DbScannerSource | undefined> {
   if (!hasSupabase) return SCANNER_SOURCES_SEED.find((s) => s.id === id);
 

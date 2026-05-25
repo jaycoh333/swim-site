@@ -25,6 +25,7 @@ import {
   updateScannerSource,
   toggleScannerSource,
   updateScannerSourceLastScanned,
+  checkSignalDuplicates,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
@@ -35,6 +36,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
+import type { FetchedCandidate, SignalDuplicate } from '@/lib/scanner-fetch-types';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -158,13 +160,19 @@ export async function toggleScannerSourceAction(
 // ---------------------------------------------------------------------------
 // Manual fetch prototype — safe, single-page, curator-supervised.
 //
-// STRICT LIMITS (see docs/manual-fetch-prototype.md):
+// TWO-PHASE FLOW (see docs/manual-fetch-prototype.md):
+//   Phase 1 — fetchScannerSourcePreviewAction:
+//     Fetches the page, extracts metadata, returns a FetchedCandidate.
+//     Nothing is written to the database. Curator reviews + edits.
+//   Phase 2 — queueFetchedCandidateAction:
+//     Duplicate check → if clean, insert recovered_signal (status='pending').
+//     Curator must then approve in /scanner/queue before anything goes public.
+//
+// STRICT LIMITS:
 //   - One URL fetched per call — base_url only, no link following
-//   - Extracts title, meta description, canonical URL, ~400-char text snippet
-//   - Raw HTML is NEVER stored — only extracted metadata goes to the DB
-//   - Source must be explicitly enabled by a curator before fetch is allowed
-//   - Creates a recovered_signals row with status='pending'
-//   - Curator must approve before any content goes public
+//   - Raw HTML is NEVER stored — only extracted metadata is used
+//   - Source must be explicitly enabled in the registry
+//   - Curator must click [ queue candidate ] for any DB write to occur
 // ---------------------------------------------------------------------------
 
 interface ExtractedPageData {
@@ -188,20 +196,19 @@ function decodeHtmlEntities(str: string): string {
 }
 
 function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
-  // Limit processing to first 100KB — avoids large-page memory issues
   const h = html.slice(0, 100_000);
 
-  // Title — prefer og:title, fallback to <title> tag
-  const ogTitle   = h.match(/<meta[^>]{0,300}property=["']og:title["'][^>]{0,300}content=["']([^"']{1,300})["']/i)
-                 ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,300})["'][^>]{0,300}property=["']og:title["']/i);
-  const tagTitle  = h.match(/<title[^>]{0,50}>([^<]{1,300})<\/title>/i);
-  const title     = decodeHtmlEntities(ogTitle?.[1] ?? tagTitle?.[1] ?? '');
+  // Title — prefer og:title, fallback to <title>
+  const ogTitle  = h.match(/<meta[^>]{0,300}property=["']og:title["'][^>]{0,300}content=["']([^"']{1,300})["']/i)
+                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,300})["'][^>]{0,300}property=["']og:title["']/i);
+  const tagTitle = h.match(/<title[^>]{0,50}>([^<]{1,300})<\/title>/i);
+  const title    = decodeHtmlEntities(ogTitle?.[1] ?? tagTitle?.[1] ?? '');
 
   // Description — prefer og:description, fallback to meta[name=description]
-  const ogDesc    = h.match(/<meta[^>]{0,300}property=["']og:description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
-                 ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}property=["']og:description["']/i);
-  const metaDesc  = h.match(/<meta[^>]{0,300}name=["']description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
-                 ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']description["']/i);
+  const ogDesc   = h.match(/<meta[^>]{0,300}property=["']og:description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}property=["']og:description["']/i);
+  const metaDesc = h.match(/<meta[^>]{0,300}name=["']description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']description["']/i);
   const description = decodeHtmlEntities(ogDesc?.[1] ?? metaDesc?.[1] ?? '');
 
   // Canonical URL
@@ -209,7 +216,7 @@ function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
                  ?? h.match(/<link[^>]{0,300}href=["']([^"']{1,500})["'][^>]{0,300}rel=["']canonical["']/i);
   const canonicalUrl = canonical?.[1]?.trim() ?? fallbackUrl;
 
-  // Readable text snippet — strip scripts/styles/comments/tags, collapse whitespace
+  // Readable text snippet — strip scripts/styles/comments/tags
   const snippet = h
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
@@ -222,34 +229,60 @@ function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
   return { title, description, canonicalUrl, snippet };
 }
 
-function toSignalSourceType(
-  scannerType: string,
-): import('@/lib/supabase/types').SignalSourceType {
+function cleanTitle(raw: string): string {
+  let t = decodeHtmlEntities(raw).trim();
+  // Strip common " | Site Name" / " — Site Name" / " · Site Name" suffixes
+  for (const sep of [' | ', ' — ', ' · ']) {
+    const idx = t.lastIndexOf(sep);
+    if (idx >= 15) {
+      const suffix = t.slice(idx + sep.length).trim();
+      if (suffix.length <= 60) { t = t.slice(0, idx).trim(); break; }
+    }
+  }
+  return t.slice(0, 200);
+}
+
+function buildSummary(description: string, snippet: string, sourceName: string, sourceUrl: string): string {
+  const desc = description.trim();
+  const snip = snippet.trim();
+  const attr = `Source: ${sourceName} — ${sourceUrl}`;
+
+  if (desc.length >= 60)  return `${desc}\n\n${attr}`.slice(0, 2000);
+  if (desc.length > 0)    return `${desc}\n\n${snip ? snip + '\n\n' : ''}${attr}`.slice(0, 2000);
+  if (snip.length >= 40)  return `${snip}\n\n${attr}`.slice(0, 2000);
+  return `Manual scan of ${sourceUrl}. ${attr}`;
+}
+
+function buildCategoryNote(categoryFocus: string[], title: string, description: string): string {
+  if (!categoryFocus.length) return 'no category focus defined — set manually';
+  const text = `${title} ${description}`.toLowerCase();
+  const matched = categoryFocus.filter((cat) =>
+    cat.toLowerCase().split(/\s+/).some((w) => w.length >= 4 && text.includes(w))
+  );
+  if (!matched.length) return `${categoryFocus[0]} (no keyword match — verify category)`;
+  if (matched.length === 1) return `${matched[0]} (1 category match)`;
+  return `${matched[0]} (matched ${matched.length}: ${matched.slice(0, 3).join(', ')})`;
+}
+
+function toSignalSourceType(scannerType: string): import('@/lib/supabase/types').SignalSourceType {
   const map: Record<string, import('@/lib/supabase/types').SignalSourceType> = {
-    archive:    'wayback',
-    forum:      'forum',
-    reddit:     'reddit',
-    imageboard: 'imageboard',
-    bbs:        'other',
-    pastebin:   'pastebin',
-    irc:        'irc',
-    other:      'other',
+    archive: 'wayback', forum: 'forum', reddit: 'reddit',
+    imageboard: 'imageboard', bbs: 'other', pastebin: 'pastebin',
+    irc: 'irc', other: 'other',
   };
   return map[scannerType] ?? 'other';
 }
 
-// Manual fetch prototype — single page, curator supervised.
-// See docs/manual-fetch-prototype.md for protocol and limits.
-export async function fetchScannerSourceAction(
+// Phase 1 — fetch page and return candidate preview for curator review.
+// No database writes. Curator must call queueFetchedCandidateAction to insert.
+export async function fetchScannerSourcePreviewAction(
   sourceId: string,
-): Promise<{ signalId: string; title: string; url: string; scannedAt: string } | { error: string }> {
-  // 1. Load source from registry
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
   const source = await getScannerSource(sourceId);
-  if (!source)             return { error: 'source not found in registry' };
-  if (!source.enabled)     return { error: 'source must be enabled before fetching — toggle in registry' };
-  if (!source.base_url)    return { error: 'source has no base URL configured' };
+  if (!source)          return { error: 'source not found in registry' };
+  if (!source.enabled)  return { error: 'source must be enabled before fetching' };
+  if (!source.base_url) return { error: 'source has no base URL configured' };
 
-  // 2. Fetch the page server-side (no CORS restriction at server)
   let html: string;
   try {
     const response = await fetch(source.base_url, {
@@ -260,10 +293,7 @@ export async function fetchScannerSourceAction(
       },
       signal: AbortSignal.timeout(12_000),
     });
-
-    if (!response.ok) {
-      return { error: `HTTP ${response.status} — ${response.statusText}` };
-    }
+    if (!response.ok) return { error: `HTTP ${response.status} — ${response.statusText}` };
     const ct = response.headers.get('content-type') ?? '';
     if (!ct.includes('text/html') && !ct.includes('xhtml')) {
       return { error: `expected HTML, got ${ct.split(';')[0].trim()}` };
@@ -274,37 +304,76 @@ export async function fetchScannerSourceAction(
     return { error: `network error — ${msg}` };
   }
 
-  // 3. Extract metadata — raw HTML is discarded immediately after extraction
+  // Extract metadata — raw HTML discarded after this point
   const extracted = extractPageData(html, source.base_url);
+  const title     = cleanTitle(extracted.title) || source.name;
+  const summary   = buildSummary(extracted.description, extracted.snippet, source.name, extracted.canonicalUrl || source.base_url);
 
-  // 4. Build signal fields
-  const signalTitle   = (extracted.title || source.name).slice(0, 200);
-  const signalSummary = (
-    extracted.description ||
-    extracted.snippet ||
-    `Manual scan of ${source.base_url}`
-  ).slice(0, 2000);
-  const signalUrl     = extracted.canonicalUrl || source.base_url;
-
-  // 5. Create pending signal candidate — status='pending', curator must review
-  const signalResult = await createRecoveredSignal({
-    title:        signalTitle,
-    summary:      signalSummary,
-    sourceName:   source.name,
-    sourceUrl:    signalUrl,
-    sourceType:   toSignalSourceType(source.source_type),
+  const candidate: FetchedCandidate = {
+    title:        title.slice(0, 200),
+    summary:      summary.slice(0, 2000),
+    sourceUrl:    extracted.canonicalUrl || source.base_url,
     category:     source.category_focus[0] ?? 'Internet Lore',
-    anomalyScore: 5,
     tags:         ['scanner-source', source.source_type],
+    anomalyScore: 5,
+    categoryNote: buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+  };
+
+  return { candidate };
+}
+
+// Phase 2 — duplicate check then insert. Curator has reviewed + edited the preview.
+// Returns duplicateWarning if duplicates found (unless overrideDuplicate=true).
+export async function queueFetchedCandidateAction(input: {
+  sourceId:          string;
+  title:             string;
+  summary:           string;
+  sourceUrl:         string;
+  category:          string;
+  tags:              string[];
+  anomalyScore:      number;
+  overrideDuplicate?: boolean;
+}): Promise<
+  | { signalId: string; title: string; url: string; scannedAt: string }
+  | { duplicateWarning: true; duplicates: SignalDuplicate[] }
+  | { error: string }
+> {
+  const source = await getScannerSource(input.sourceId);
+  if (!source) return { error: 'source not found' };
+
+  // Duplicate check — skip if curator has explicitly overridden
+  if (!input.overrideDuplicate) {
+    const dupes = await checkSignalDuplicates(input.sourceUrl, input.title);
+    if (dupes.length > 0) {
+      return {
+        duplicateWarning: true,
+        duplicates: dupes.map((d) => ({
+          id:        d.id,
+          title:     d.title,
+          sourceUrl: d.source_url,
+          status:    d.status,
+        })),
+      };
+    }
+  }
+
+  const signalResult = await createRecoveredSignal({
+    title:        input.title,
+    summary:      input.summary,
+    sourceName:   source.name,
+    sourceUrl:    input.sourceUrl,
+    sourceType:   toSignalSourceType(source.source_type),
+    category:     input.category,
+    anomalyScore: input.anomalyScore,
+    tags:         input.tags,
   });
 
   if ('error' in signalResult) return { error: signalResult.error };
 
-  // 6. Update last_scanned_at (non-fatal)
   const scannedAt = new Date().toISOString();
   await updateScannerSourceLastScanned(source.id);
 
-  return { signalId: signalResult.id, title: signalTitle, url: signalUrl, scannedAt };
+  return { signalId: signalResult.id, title: input.title, url: input.sourceUrl, scannedAt };
 }
 
 // Curator action — rebirth a recovered signal as a SWIM thread using
