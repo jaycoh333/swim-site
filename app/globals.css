@@ -333,7 +333,8 @@ body::after {
 /* ── TERMINAL CARD SYSTEM ────────────────────────────────── */
 
 .terminal-card {
-  border: 1px solid rgba(134, 212, 110, 0.15);
+  border: 1px solid rgba(134, 212, 110, 0.18);
+  border-left-width: 2px;
   background: rgba(4, 7, 5, 0.96);
   box-shadow: 0 0 0 1px rgba(134, 212, 110, 0.022), inset 0 0 18px rgba(134, 212, 110, 0.012);
   text-decoration: none;

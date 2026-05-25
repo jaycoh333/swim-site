@@ -102,7 +102,7 @@ export function ThreadsClient({
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-20" />
 
-      <div className="relative z-10 mx-auto max-w-7xl px-4 py-4 md:px-6 md:py-6">
+      <div className="relative z-10 mx-auto max-w-6xl px-4 py-4 md:px-6 md:py-6">
 
         {/* ── Board header ── */}
         <div className="mb-3">
@@ -241,17 +241,16 @@ export function ThreadsClient({
                       key={thread.id}
                       href={`/threads/${thread.id}`}
                       className="terminal-card group px-5 py-5 md:px-7 md:py-6"
+                      style={{ borderLeftColor: `${color}55` }}
                     >
                       {/* Top row: category chip + status markers */}
                       <div className="mb-2.5 flex flex-wrap items-center gap-2">
-                        {!activeCategory && (
-                          <span
-                            className="category-chip inline-flex px-2.5 py-0.5 text-[11px] uppercase tracking-[0.16em]"
-                            style={{ ['--category' as string]: color }}
-                          >
-                            {thread.category}
-                          </span>
-                        )}
+                        <span
+                          className={`category-chip inline-flex px-2.5 py-0.5 text-[11px] uppercase tracking-[0.16em]${activeCategory ? ' opacity-60' : ''}`}
+                          style={{ ['--category' as string]: color }}
+                        >
+                          {thread.category}
+                        </span>
                         {thread.pinned && (
                           <span className="thread-marker-pin">■ pinned</span>
                         )}
@@ -274,12 +273,10 @@ export function ThreadsClient({
                       {/* Metadata */}
                       <div className="mt-3 text-[13px] uppercase tracking-[0.14em] text-crt/42">
                         {thread.replyCount} replies
-                        {totalReactions > 0 && (
-                          <>
-                            <span className="mx-2 text-crt/22">·</span>
-                            {totalReactions} echoes
-                          </>
-                        )}
+                        <span className="mx-2 text-crt/22">·</span>
+                        {totalReactions} echoes
+                        <span className="mx-2 text-crt/22">·</span>
+                        {thread.viewCount} views
                         <span className="mx-2 text-crt/22">·</span>
                         {thread.lastActivityAt}
                       </div>
