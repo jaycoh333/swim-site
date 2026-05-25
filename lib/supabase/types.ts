@@ -106,6 +106,7 @@ export interface DbRecoveredSignal {
   discovered_at:        string;
   approved_at:          string | null;
   published_thread_id:  string | null;
+  submitted_publicly?:  boolean;
 }
 
 export type DbRecoveredSignalInsert = Omit<DbRecoveredSignal,

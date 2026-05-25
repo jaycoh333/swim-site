@@ -41,8 +41,12 @@ CREATE TABLE IF NOT EXISTS recovered_signals (
   tags                TEXT[]      NOT NULL DEFAULT '{}',
   discovered_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   approved_at         TIMESTAMPTZ,
-  published_thread_id UUID        REFERENCES threads(id) ON DELETE SET NULL
+  published_thread_id UUID        REFERENCES threads(id) ON DELETE SET NULL,
+  submitted_publicly  BOOLEAN     NOT NULL DEFAULT false
 );
+
+-- Migration: if the table already exists, add the column manually:
+-- ALTER TABLE recovered_signals ADD COLUMN IF NOT EXISTS submitted_publicly BOOLEAN NOT NULL DEFAULT false;
 
 
 -- ---------------------------------------------------------------------------

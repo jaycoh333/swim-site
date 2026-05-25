@@ -503,15 +503,16 @@ export async function updateSignalStatus(
 }
 
 export interface CreateRecoveredSignalInput {
-  category:      string;
-  title:         string;
-  summary:       string;
-  sourceName:    string;
-  sourceUrl?:    string;
-  sourceType:    SignalSourceType;
-  anomalyScore:  number;
-  tags?:         string[];
-  discoveredAt?: string;
+  category:           string;
+  title:              string;
+  summary:            string;
+  sourceName:         string;
+  sourceUrl?:         string;
+  sourceType:         SignalSourceType;
+  anomalyScore:       number;
+  tags?:              string[];
+  discoveredAt?:      string;
+  submittedPublicly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -644,10 +645,11 @@ export async function createRecoveredSignal(
       source_name:   input.sourceName,
       source_url:    input.sourceUrl ?? null,
       source_type:   input.sourceType,
-      status:        'pending',
-      anomaly_score: input.anomalyScore,
-      tags:          input.tags ?? [],
-      discovered_at: input.discoveredAt ?? new Date().toISOString(),
+      status:             'pending',
+      anomaly_score:      input.anomalyScore,
+      tags:               input.tags ?? [],
+      discovered_at:      input.discoveredAt ?? new Date().toISOString(),
+      submitted_publicly: input.submittedPublicly ?? false,
     })
     .select('id')
     .single();

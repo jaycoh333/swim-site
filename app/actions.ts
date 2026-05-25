@@ -84,7 +84,7 @@ export async function createPublicSignalAction(input: {
   if (input._hp) return { ok: true };
 
   const { _hp: _ignored, ...rest } = input;
-  const result = await createRecoveredSignal({ ...rest, anomalyScore: 5 });
+  const result = await createRecoveredSignal({ ...rest, anomalyScore: 5, submittedPublicly: true });
   if ('error' in result) return { error: result.error };
   return { ok: true };
 }
