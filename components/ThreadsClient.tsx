@@ -18,6 +18,22 @@ const ALL_THREAD_CATEGORIES = [
   'Conspiracy Theory', 'Hidden History',
 ] as const;
 
+const CATEGORY_PROMPTS: Partial<Record<string, string>> = {
+  'UFOs':               'what did you see in the sky?',
+  'Dreams':             'what room keeps appearing?',
+  'Confessions':        'leave an anonymous fragment',
+  'Paranormal':         'describe what was there',
+  'Stories':            'what happened that you cannot explain?',
+  'Lost Media':         'what have you been searching for?',
+  'Simulation Theory':  'what broke the pattern?',
+  'Surveillance State': 'what were you not supposed to notice?',
+  'Psyops':             'what do you remember that no one else does?',
+  'Hidden History':     'what did the record leave out?',
+  'Occult Archives':    'what should not have been there?',
+  'Crypto Trench':      'what did the ledger reveal?',
+  'Spirituality':       'what stayed with you?',
+};
+
 // Atmospheric lore lines per category — mirrors CategoryPortalGrid descriptions
 const CATEGORY_LORE: Record<string, string> = {
   Stories:             'first-person accounts · confessions · impossible events · true or not',
@@ -218,7 +234,7 @@ export function ThreadsClient({
                 </div>
                 {activeCategory && (
                   <div className="text-[13px] uppercase tracking-[0.18em] text-crt/30">
-                    be the first to transmit in {activeCategory}
+                    {CATEGORY_PROMPTS[activeCategory] ?? `be the first to transmit in ${activeCategory}`}
                   </div>
                 )}
                 <button
