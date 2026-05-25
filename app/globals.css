@@ -330,6 +330,20 @@ body::after {
   border-left-color: rgba(134, 212, 110, 0.35);
 }
 
+/* ── THREAD CARD — MOBILE READABILITY ─────────────────────── */
+
+@media (max-width: 639px) {
+  .forum-row {
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+
+  .thread-title {
+    font-size: 1.18rem;
+    line-height: 1.3;
+  }
+}
+
 .terminal-dim {
   color: var(--text-dim);
 }
@@ -639,18 +653,14 @@ body::after {
    live HTML — atmospheric art (mushrooms, sigils, giant lettering) remains
    visible as intended. 1px blur dissolves fine text; large silhouettes survive. */
 .swim-header-bg-layer img {
-  filter: blur(1px) brightness(0.70) saturate(0.82);
-  /* scale(1.02) prevents white edge artifacts from the 1px blur */
-  transform: scale(1.02);
+  filter: brightness(0.88) saturate(0.85);
   transform-origin: center top;
 }
 
 .swim-header-dim {
   position: absolute;
   inset: 0;
-  /* Moderate overlay: 0.70 image × 0.44 visible = ~31% effective brightness.
-     Large art reads as ghosted atmosphere; live HTML text stays fully bright. */
-  background: rgba(2, 3, 3, 0.56);
+  background: rgba(2, 3, 3, 0.38);
 }
 
 .swim-header-scanlines {
@@ -746,18 +756,22 @@ body::after {
   outline-offset: -2px;
 }
 
-/* Eyebrow — hidden on mobile, shown sm+ */
+/* Eyebrow — dim on mobile (nav handles identity), fuller on desktop */
 .swim-header-eyebrow {
   margin: 0 0 5px;
-  font-size: 10px;
+  font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.46em;
-  color: rgba(134, 212, 110, 0.38);
-  display: none;
+  letter-spacing: 0.38em;
+  color: rgba(134, 212, 110, 0.22);
+  display: block;
 }
 
 @media (min-width: 640px) {
-  .swim-header-eyebrow { display: block; }
+  .swim-header-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.46em;
+    color: rgba(134, 212, 110, 0.38);
+  }
 }
 
 .swim-header-logo {
@@ -819,35 +833,123 @@ body::after {
    faint giant lettering on small screens while keeping the HTML logo readable. */
 
 @media (max-width: 639px) {
-  /* Slightly taller on mobile — enough breathing room without dominating the fold */
   .swim-header {
-    height: 185px;
+    height: 162px;
   }
 
-  /* More brightness on mobile: mushrooms/sigils/lettering need to punch through on a small screen.
-     At phone scale the baked art is compressed and small enough that no blur is needed to suppress it. */
   .swim-header-bg-layer img {
-    filter: blur(0px) brightness(0.90) saturate(0.94);
+    filter: blur(0.5px) brightness(0.85) saturate(0.88);
   }
 
-  /* Much lighter overlay — roughly 0.90 × (1 - 0.30) ≈ 63% effective image visibility on mobile */
   .swim-header-dim {
-    background: rgba(2, 3, 3, 0.30);
+    background: rgba(2, 3, 3, 0.38);
   }
 
-  /* Very soft vignette — on a narrow phone a heavy ellipse wipes out the center art */
   .swim-header-vignette {
     background: radial-gradient(ellipse at 50% 42%, transparent 22%, rgba(0, 0, 0, 0.30) 100%);
   }
 
-  /* Shorter bottom fade so the bottom of the art isn't swallowed */
   .swim-header-bottom-fade {
     height: 30px;
   }
 
-  /* A little more vertical padding so the $SWIM logo isn't pressed against the edges */
   .swim-header-masthead {
-    padding: 10px 16px;
+    padding: 8px 16px;
+  }
+}
+
+/* ── NAV SIGIL ───────────────────────────────────────────── */
+
+/* Small circular sigil mark integrated into the nav identity pill */
+.nav-sigil {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  filter: saturate(0.80) brightness(0.94);
+  border: 1px solid rgba(134, 212, 110, 0.28);
+  flex-shrink: 0;
+}
+
+@media (min-width: 768px) {
+  .nav-sigil {
+    width: 56px;
+    height: 56px;
+  }
+}
+
+/* ── SWIM SIGIL MARK ─────────────────────────────────────── */
+
+/* Primary identity sigil in the header on mobile */
+.swim-sigil-mark {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(134, 212, 110, 0.22);
+  filter: saturate(0.72) brightness(0.92);
+  box-shadow:
+    0 0 18px rgba(134, 212, 110, 0.12),
+    0 0 4px rgba(134, 212, 110, 0.06),
+    inset 0 0 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Smaller sigil in boot sequence */
+.boot-sigil-mark {
+  object-fit: cover;
+  filter: saturate(0.55) brightness(0.80);
+  opacity: 0.65;
+}
+
+/* ── COMPOSE TEXTAREA — ADAPTIVE HEIGHT ──────────────────── */
+
+/* Starts compact on mobile; expands when focused; always full-size on desktop */
+.composer-textarea-adaptive {
+  width: 100%;
+  resize: none;
+  border: 1px solid rgba(134, 212, 110, 0.16);
+  background: rgba(4, 8, 6, 0.95);
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--crt);
+  outline: none;
+  min-height: 72px;
+  transition: min-height 0.18s ease;
+  font-family: inherit;
+}
+
+.composer-textarea-adaptive::placeholder {
+  color: rgba(134, 212, 110, 0.20);
+}
+
+.composer-textarea-adaptive:focus {
+  min-height: 148px;
+}
+
+@media (min-width: 640px) {
+  .composer-textarea-adaptive {
+    min-height: 148px;
+  }
+}
+
+/* ── CATEGORY PORTAL — MOBILE READABILITY ────────────────── */
+
+@media (max-width: 639px) {
+  .category-portal {
+    min-width: 72px;
+    min-height: 62px;
+    padding: 9px 10px;
+  }
+
+  .category-glyph {
+    font-size: 1.55rem;
+    color: rgba(192, 238, 176, 0.52);
+  }
+
+  .category-name {
+    font-size: 12px;
+    color: rgba(192, 238, 176, 0.60);
   }
 }
 
@@ -914,11 +1016,11 @@ body::after {
 }
 
 .category-name {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   white-space: nowrap;
-  color: rgba(192, 238, 176, 0.32);
+  color: rgba(192, 238, 176, 0.35);
   font-weight: 600;
   transition: color 0.14s;
 }
@@ -1338,7 +1440,7 @@ body::after {
 
 .story-card {
   display: block;
-  padding: 14px 16px 14px;
+  padding: 20px 20px 18px;
   background: rgba(4, 7, 5, 0.97);
   border-left: 2px solid transparent;
   text-decoration: none;
@@ -1372,17 +1474,17 @@ body::after {
 .story-badge-signal     { color: var(--crt); border-color: rgba(134, 212, 110, 0.5); text-shadow: 0 0 5px rgba(134, 212, 110, 0.15); }
 
 .story-title {
-  font-size: 1.22rem;
-  line-height: 1.26;
+  font-size: 1.32rem;
+  line-height: 1.28;
   color: var(--crt);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-weight: 400;
   transition: text-shadow 0.14s;
 }
 
 @media (min-width: 768px) {
   .story-title {
-    font-size: 1.3rem;
+    font-size: 1.45rem;
   }
 }
 
@@ -1391,10 +1493,10 @@ body::after {
 }
 
 .story-excerpt {
-  font-size: 0.94rem;
-  line-height: 1.52;
-  color: rgba(134, 212, 110, 0.42);
-  margin: 0 0 10px;
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: rgba(134, 212, 110, 0.45);
+  margin: 0 0 12px;
 }
 
 .story-stats {
@@ -1458,5 +1560,46 @@ body::after {
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .mobile-bar-safe {
     padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+
+/* ── MOBILE READABILITY IMPROVEMENTS ────────────────────── */
+
+@media (max-width: 639px) {
+  /* More breathing room in post bodies on mobile */
+  .post-body {
+    font-size: 1.08rem;
+    line-height: 1.7;
+  }
+
+  .post-body-line {
+    line-height: 1.7;
+  }
+
+  /* Reply composer textarea — starts compact, expands on focus */
+  .composer-textarea {
+    min-height: 72px;
+    transition: min-height 0.18s ease;
+    font-size: 1rem;
+    padding: 10px 12px;
+  }
+
+  .composer-textarea:focus {
+    min-height: 120px;
+  }
+
+  /* Reduce thread post padding slightly to fit more on screen */
+  .thread-post {
+    padding: 16px 13px 12px;
+  }
+
+  .thread-post-op {
+    padding: 18px 13px 14px;
+  }
+
+  /* Reaction buttons slightly larger tap target on mobile */
+  .reaction-btn {
+    padding: 6px 11px;
+    font-size: 10px;
   }
 }

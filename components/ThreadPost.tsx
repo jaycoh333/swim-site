@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { ReactionSet, Reply, ThreadContent } from '@/lib/forum-types';
+import type { ReactionSet, Reply, ThreadContent } from '@/lib/forum-types';
+import { addReactionAction } from '@/app/actions';
+import { getFingerprint } from '@/lib/identity';
 
 type Post = ThreadContent | Reply;
 
@@ -42,17 +44,51 @@ function getAuthorMode(post: Post): 'anon' | 'ghost' {
   return 'ghost';
 }
 
+/**
+ * Resolve the DB UUID for the reaction target.
+ *
+ * ThreadContent:  id = slug (for routing), authorId = real UUID
+ * Reply:          id = UUID directly from DB
+ *
+ * In mock mode the IDs are fake strings; addReactionAction returns {ok:true}
+ * immediately without using them, so the mismatch is harmless.
+ */
+function resolveTargetId(post: Post, isOP: boolean): string {
+  if (isOP) {
+    const thread = post as ThreadContent;
+    return thread.authorId ?? thread.id;
+  }
+  return post.id;
+}
+
 export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) {
   const [reacted, setReacted] = useState<Record<string, boolean>>({});
   const [counts, setCounts] = useState<ReactionSet>({ ...post.reactions });
 
   function toggleReaction(key: keyof ReactionSet) {
     const wasReacted = reacted[key];
+
+    // Optimistic update — UI responds immediately
     setReacted((prev) => ({ ...prev, [key]: !wasReacted }));
     setCounts((prev) => ({
       ...prev,
       [key]: wasReacted ? Math.max(0, prev[key] - 1) : prev[key] + 1,
     }));
+
+    // Persist the addition (not removal — schema has no delete for reactions)
+    if (!wasReacted) {
+      const targetType = isOP ? 'thread' : 'reply';
+      const targetId   = resolveTargetId(post, isOP);
+      // Fire-and-forget — UI is already updated optimistically
+      addReactionAction({
+        targetType,
+        targetId,
+        reactionType:    key,
+        anonFingerprint: getFingerprint(),
+      }).catch((err) => {
+        console.error('[reaction]', err);
+      });
+    }
   }
 
   const mode = getAuthorMode(post);
@@ -103,7 +139,7 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
         ))}
       </div>
 
-      {/* Post number anchor link (imageboard style) */}
+      {/* Post permalink (imageboard style) */}
       <div className="post-permalink">
         <a href={`#post-${postNumber}`} className="post-permalink-link">
           &gt;&gt;{postNumber}

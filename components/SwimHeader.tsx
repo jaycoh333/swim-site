@@ -69,8 +69,12 @@ export function SwimHeader({
 
         {/* Masthead — entire area is a clickable home link */}
         <Link href="/" className="swim-header-masthead" aria-label="SWIM home">
+          {/* Eyebrow — visible on all sizes but dim on mobile (art carries the header) */}
           <p className="swim-header-eyebrow">someone who isn&apos;t me</p>
-          <h1 className="swim-header-logo">$SWIM</h1>
+
+          {/* Text logo — desktop only; nav sigil+$SWIM handles mobile identity */}
+          <h1 className="swim-header-logo hidden sm:block">$SWIM</h1>
+
           <p className="swim-header-subline">
             no accounts&nbsp;·&nbsp;no ids&nbsp;·&nbsp;no tracking
           </p>

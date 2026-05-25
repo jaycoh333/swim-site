@@ -28,6 +28,10 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: 'SWIM - Someone Who Isn\'t Me',
   description: 'An anonymous archive. A hidden network. Someone who isn\'t you was here.',
+  icons: {
+    icon: '/images/swim-sigil-logo.jpg',
+    apple: '/images/swim-sigil-logo.jpg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

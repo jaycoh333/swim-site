@@ -136,7 +136,12 @@ export async function getThreads(
   if (!hasSupabase) return mockDb.getThreads(category);
 
   const db = getDb()!;
-  let q = db.from('threads').select('*').order('last_activity_at', { ascending: false });
+  let q = db
+    .from('threads')
+    .select('*')
+    .order('is_pinned', { ascending: false })
+    .order('last_activity_at', { ascending: false })
+    .order('created_at', { ascending: false });
   if (category !== 'ALL') q = q.eq('category', category);
 
   const { data, error } = await q;

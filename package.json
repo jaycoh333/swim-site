@@ -25,6 +25,8 @@
     "typescript": "latest"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.0"
+    "@tailwindcss/postcss": "^4.3.0",
+    "dotenv-cli": "^11.0.0",
+    "tsx": "^4.22.3"
   }
 }

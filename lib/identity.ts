@@ -54,6 +54,28 @@ export function loadStoredIdentity(): SwimIdentity | null {
   }
 }
 
+/**
+ * Returns a stable device fingerprint stored in localStorage.
+ * Used as anon_fingerprint for reaction deduplication — never tied to identity.
+ * Regenerates only if localStorage is cleared (acceptable UX).
+ */
+export function getFingerprint(): string {
+  try {
+    const KEY = 'swim-fp';
+    const stored = localStorage.getItem(KEY);
+    if (stored) return stored;
+    // crypto.getRandomValues is available in all modern browsers
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const fp = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem(KEY, fp);
+    return fp;
+  } catch {
+    // Storage blocked (private mode, etc.) — ephemeral fallback
+    return Math.random().toString(36).slice(2, 18) + Date.now().toString(36);
+  }
+}
+
 export function useIdentity() {
   const [identity, setIdentityState] = useState<SwimIdentity | null>(null);
 

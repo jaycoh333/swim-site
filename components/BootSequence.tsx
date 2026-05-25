@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type LineType = 'system' | 'success' | 'warn' | 'data' | 'em' | 'gap';
@@ -97,6 +98,16 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
 
             {/* Panel header */}
             <div className="mb-5 sm:mb-8">
+              {/* Sigil mark — mobile only */}
+              <div className="mb-3 flex justify-center sm:hidden">
+                <Image
+                  src="/images/swim-sigil-logo.jpg"
+                  alt=""
+                  width={52}
+                  height={52}
+                  className="rounded-full border border-crt/18 boot-sigil-mark"
+                />
+              </div>
               <div className="text-center text-[10px] uppercase tracking-[0.32em] text-crt/38">
                 SWIM NETWORK // CLASSIFIED ACCESS
               </div>
