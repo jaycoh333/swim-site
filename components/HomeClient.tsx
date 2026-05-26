@@ -185,12 +185,12 @@ export function HomeClient({
 
               <SwimAiTerminal entries={feed} stats={terminalStats} />
 
-              <div className="mt-5 text-center">
-                <Link
-                  href="/scanner"
-                  className="text-[12px] uppercase tracking-[0.22em] text-crt/35 transition-colors hover:text-crt/65"
-                >
-                  view full scanner →
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+                <Link href="/scanner" className="homepage-cta-primary">
+                  [ VIEW SCANNER ]
+                </Link>
+                <Link href="/threads?compose=true" className="homepage-cta-secondary">
+                  [ SUBMIT SIGNAL ]
                 </Link>
               </div>
             </div>

@@ -26,6 +26,7 @@ import {
   toggleScannerSource,
   updateScannerSourceLastScanned,
   checkSignalDuplicates,
+  getExistingSignalUrls,
   type CreateThreadInput,
   type CreateReplyInput,
   type AddReactionInput,
@@ -49,6 +50,7 @@ import {
   extractNarrative,
   scoreStoryHeuristics,
 } from '@/lib/story-intelligence';
+import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -401,6 +403,71 @@ function blockedFetchError(status: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Reddit comment corroboration — scan top-level comments for witness patterns
+// ---------------------------------------------------------------------------
+
+const CORROBORATION_PATTERNS: Array<{ re: RegExp; label: string; pts: number }> = [
+  { re: /same thing happened to me/i,                       label: '"same thing happened to me"', pts: 8 },
+  { re: /i (saw|experienced|witnessed) (this|something similar|the same)/i, label: 'first-person witness', pts: 7 },
+  { re: /this happened to me|happened to me too/i,          label: '"this happened to me"',      pts: 7 },
+  { re: /multiple people|several people|others have reported/i, label: 'multiple witnesses',     pts: 6 },
+  { re: /i can confirm|can verify|confirmed by/i,           label: 'corroboration claim',        pts: 6 },
+  { re: /not the only one|others (also|too|experienced)/i,  label: '"not the only one"',         pts: 5 },
+  { re: /my (friend|partner|family|spouse|colleague) (saw|experienced|witnessed)/i, label: 'secondhand witness', pts: 4 },
+];
+
+async function fetchRedditCommentCorroboration(
+  postUrl: string,
+): Promise<{ corroborationScore: number; corroborationNotes: string[] }> {
+  const idMatch = postUrl.match(/\/comments\/([a-z0-9]+)\//i);
+  if (!idMatch) return { corroborationScore: 0, corroborationNotes: [] };
+
+  const postId = idMatch[1];
+  const apiUrl = `https://www.reddit.com/comments/${postId}.json?limit=100&depth=1&sort=top`;
+
+  let data: unknown;
+  try {
+    const res = await fetch(apiUrl, {
+      cache:   'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'application/json',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return { corroborationScore: 0, corroborationNotes: [] };
+    data = await res.json();
+  } catch {
+    return { corroborationScore: 0, corroborationNotes: [] };
+  }
+
+  type RComment = { data: { body?: string; score?: number } };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comments: RComment[] = (data as any)?.[1]?.data?.children ?? [];
+
+  let totalScore = 0;
+  const notes: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { data: { body } } of comments) {
+    if (!body || body === '[deleted]' || body === '[removed]') continue;
+    for (const { re, label, pts } of CORROBORATION_PATTERNS) {
+      if (!seen.has(label) && re.test(body)) {
+        seen.add(label);
+        totalScore += pts;
+        notes.push(label);
+      }
+    }
+    if (totalScore >= 30) break;
+  }
+
+  // High comment engagement bonus (many people engaged = signal)
+  if (comments.length > 50) totalScore = Math.min(totalScore + 3, 30);
+
+  return { corroborationScore: Math.min(totalScore, 30), corroborationNotes: notes };
+}
+
+// ---------------------------------------------------------------------------
 // Reddit source preview — JSON API, one best-matching post
 // ---------------------------------------------------------------------------
 
@@ -610,7 +677,7 @@ async function fetchRedditMultipleCandidates(
   });
   scored.sort((a, b) => b.totalScore - a.totalScore);
 
-  const candidates: FetchedCandidate[] = scored.slice(0, 10).map(({ p, narrative, heuristics, totalScore }) => {
+  const rawCandidates: FetchedCandidate[] = scored.slice(0, 10).map(({ p, narrative, heuristics, totalScore }) => {
     const qualityResult = scoreRedditQuality({
       title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
       url: p.url, score: p.score, num_comments: p.num_comments,
@@ -654,6 +721,35 @@ async function fetchRedditMultipleCandidates(
       storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
     };
   });
+
+  // Corroboration — fetch comment trees for the top 3 strong candidates
+  const candidates: FetchedCandidate[] = [];
+  let corrobCount = 0;
+  for (const cand of rawCandidates) {
+    if (
+      corrobCount < 3 &&
+      !cand.badCandidateReason &&
+      (cand.storyScore ?? 0) > 15
+    ) {
+      const corrob = await fetchRedditCommentCorroboration(cand.sourceUrl);
+      const finalPriority = computeFinalPriorityScore(cand.storyScore ?? 0, {
+        corroborationScore: corrob.corroborationScore,
+        isArchived:         false,
+      });
+      candidates.push({
+        ...cand,
+        corroborationScore: corrob.corroborationScore > 0 ? corrob.corroborationScore : undefined,
+        corroborationNotes: corrob.corroborationNotes.length > 0 ? corrob.corroborationNotes : undefined,
+        finalPriorityScore: finalPriority,
+      });
+      corrobCount++;
+    } else {
+      candidates.push({
+        ...cand,
+        finalPriorityScore: computeFinalPriorityScore(cand.storyScore ?? 0),
+      });
+    }
+  }
 
   return { candidates };
 }
@@ -1047,7 +1143,30 @@ export async function runFetchSessionAction(
   const allSources = await getScannerSources();
   const sourceMap  = new Map(allSources.map((s) => [s.id, s]));
 
+  // Freshness: load all known source URLs in one batch query so we can skip
+  // already-archived candidates without N individual round trips.
+  const existingUrls = await getExistingSignalUrls();
+
+  // Session-level dedup: URLs pushed in this run (catches cross-source dupes).
+  const seenThisSession = new Set<string>();
+
+  // Diversity cap: max 3 results per source (excludes errors).
+  const perSourceCount = new Map<string, number>();
+
   const results: SessionSourceResult[] = [];
+
+  // Helper: check freshness before attempting checkSignalDuplicates.
+  function isAlreadyArchived(url: string): boolean {
+    return existingUrls.has(url) || seenThisSession.has(url);
+  }
+
+  function trackResult(sourceId: string, r: SessionSourceResult) {
+    if (r.status !== 'error') {
+      seenThisSession.add((r as { candidate: { sourceUrl: string } }).candidate.sourceUrl);
+      perSourceCount.set(sourceId, (perSourceCount.get(sourceId) ?? 0) + 1);
+    }
+    results.push(r);
+  }
 
   for (const sourceId of sourceIds) {
     const source = sourceMap.get(sourceId);
@@ -1073,14 +1192,20 @@ export async function runFetchSessionAction(
         continue;
       }
       let erowidFetched = 0;
-      for (const link of erowidDisc.links.slice(0, 10)) {
+      for (const link of erowidDisc.links.slice(0, 8)) {
+        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
         if ('error' in fr) continue;
-        const dupes = await checkSignalDuplicates(fr.candidate.sourceUrl, fr.candidate.title);
-        if (dupes.length > 0) {
-          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        const url = fr.candidate.sourceUrl;
+        if (isAlreadyArchived(url)) {
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });
         } else {
-          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+          const dupes = await checkSignalDuplicates(url, fr.candidate.title);
+          if (dupes.length > 0) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          } else {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+          }
         }
         erowidFetched++;
       }
@@ -1103,14 +1228,20 @@ export async function runFetchSessionAction(
         continue;
       }
       let waybackFetched = 0;
-      for (const link of waybackDisc.links.slice(0, 10)) {
+      for (const link of waybackDisc.links.slice(0, 8)) {
+        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchWaybackPagePreview(source, link.url);
         if ('error' in fr) continue;
-        const dupes = await checkSignalDuplicates(fr.candidate.sourceUrl, fr.candidate.title);
-        if (dupes.length > 0) {
-          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        const url = fr.candidate.sourceUrl;
+        if (isAlreadyArchived(url)) {
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });
         } else {
-          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+          const dupes = await checkSignalDuplicates(url, fr.candidate.title);
+          if (dupes.length > 0) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          } else {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+          }
         }
         waybackFetched++;
       }
@@ -1127,11 +1258,17 @@ export async function runFetchSessionAction(
         results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
         for (const candidate of multiResult.candidates) {
-          const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+          if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+          const url = candidate.sourceUrl;
+          if (isAlreadyArchived(url)) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
+            continue;
+          }
+          const dupes = await checkSignalDuplicates(url, candidate.title);
           if (dupes.length > 0) {
-            results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
           } else {
-            results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
           }
         }
       }
@@ -1144,11 +1281,17 @@ export async function runFetchSessionAction(
         results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
         for (const candidate of multiResult.candidates) {
-          const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+          if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+          const url = candidate.sourceUrl;
+          if (isAlreadyArchived(url)) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
+            continue;
+          }
+          const dupes = await checkSignalDuplicates(url, candidate.title);
           if (dupes.length > 0) {
-            results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
           } else {
-            results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
           }
         }
       }
@@ -1235,13 +1378,18 @@ export async function runFetchSessionAction(
         captureNotes:         'Source index page — no story-quality links found via keyword scan. Raw HTML not stored.',
         storyScore:           heur.storyScore,
         storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+        finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad || isIndexPage }),
       };
 
-      const fallbackDupes = await checkSignalDuplicates(fallbackCand.sourceUrl, fallbackCand.title);
-      if (fallbackDupes.length > 0) {
-        results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fallbackCand, duplicates: fallbackDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+      if (isAlreadyArchived(fallbackCand.sourceUrl)) {
+        trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fallbackCand, badCandidateReason: 'Already in archive — already queued or published' } });
       } else {
-        results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fallbackCand });
+        const fallbackDupes = await checkSignalDuplicates(fallbackCand.sourceUrl, fallbackCand.title);
+        if (fallbackDupes.length > 0) {
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: fallbackCand, duplicates: fallbackDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        } else {
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: fallbackCand });
+        }
       }
     } else {
       // Fetch each story-quality link individually and build candidates
@@ -1290,13 +1438,20 @@ export async function runFetchSessionAction(
           captureNotes:         `Discovered via homepage link scan of ${source.name}. Raw HTML not stored.`,
           storyScore:           heur.storyScore,
           storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+          finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad }),
         };
 
-        const linkDupes = await checkSignalDuplicates(linkCand.sourceUrl, linkCand.title);
+        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+        const linkUrl2 = linkCand.sourceUrl;
+        if (isAlreadyArchived(linkUrl2)) {
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...linkCand, badCandidateReason: 'Already in archive — already queued or published' } });
+          continue;
+        }
+        const linkDupes = await checkSignalDuplicates(linkUrl2, linkCand.title);
         if (linkDupes.length > 0) {
-          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: linkCand, duplicates: linkDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: linkCand, duplicates: linkDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
         } else {
-          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: linkCand });
+          trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: linkCand });
         }
       }
     }
@@ -1629,6 +1784,7 @@ async function fetchWaybackPagePreview(
     originalDomain,
     storyScore:           waybackScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    finalPriorityScore:   computeFinalPriorityScore(waybackScore, { isArchived: true, isBadCandidate: badCheck.bad }),
   };
 
   return { candidate };
@@ -1701,6 +1857,7 @@ async function fetchMediaWikiPagePreview(
     captureNotes:         `MediaWiki article: "${article.title}". Plain-text extract only — raw wiki markup not stored.`,
     storyScore:           heuristics.storyScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    finalPriorityScore:   computeFinalPriorityScore(heuristics.storyScore, { isBadCandidate: badCheck.bad }),
   };
 
   return { candidate };
@@ -1906,6 +2063,7 @@ async function fetchErowidExperiencePreview(
     captureNotes:         'Summary extracted from an individual Erowid report page. Full report text not stored.',
     storyScore:           heuristics.storyScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    finalPriorityScore:   computeFinalPriorityScore(heuristics.storyScore, { isErowid: true, isBadCandidate: bad.bad }),
   };
 
   return { candidate };

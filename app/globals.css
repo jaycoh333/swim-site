@@ -1338,6 +1338,27 @@ body::after {
 
 /* ── SWIM AI TERMINAL ────────────────────────────────────── */
 
+/* Status module progress bar — sweeping shimmer left → right */
+@keyframes terminal-bar-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.terminal-status-bar {
+  width: 40%;
+  animation: terminal-bar-sweep linear infinite;
+}
+
+/* Radar pulse ring in terminal header */
+@keyframes terminal-radar-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(0.8); }
+  50%       { opacity: 0.2; transform: scale(1.3); }
+}
+
+.terminal-radar-ring {
+  animation: terminal-radar-pulse 2.4s ease-in-out infinite;
+}
+
 .swim-ai-terminal {
   border: 1px solid rgba(134, 212, 110, 0.22);
   background: rgba(2, 4, 3, 0.94);

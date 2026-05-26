@@ -43,6 +43,10 @@ const TYPE_STYLE: Record<string, {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Scan phrases — primary rotating status line
+// ---------------------------------------------------------------------------
+
 const SCAN_PHRASES = [
   'scanning forgotten forums…',
   'parsing archived fragments…',
@@ -53,12 +57,37 @@ const SCAN_PHRASES = [
   'detecting orphaned threads…',
 ];
 
+// Secondary "currently analyzing" phrases — rotates faster
+const ANALYZING_PHRASES = [
+  'analyzing r/HighStrangeness…',
+  'scoring anomaly vectors…',
+  'checking corroboration…',
+  'querying Wayback CDX…',
+  'filtering duplicate signals…',
+  'extracting narrative fragments…',
+  'probing archived domains…',
+  'running quality heuristics…',
+  'analyzing r/Glitch_in_the_Matrix…',
+  'cross-referencing source data…',
+];
+
 function formatRel(iso: string): string {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
   if (d < 1)   return 'today';
   if (d === 1) return 'yesterday';
   if (d < 30)  return `${d}d ago`;
   return `${Math.floor(d / 30)}mo ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Status modules — 4 animated scan state tiles
+// ---------------------------------------------------------------------------
+
+interface StatusModule {
+  label:   string;
+  value:   string;
+  barDuration: string;  // CSS animation-duration for the progress bar
+  accent:  string;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,11 +120,13 @@ export function SwimAiTerminal({
 }: SwimAiTerminalProps) {
   const PAGE = compact ? 4 : 5;
 
-  const [page,         setPage]         = useState(0);
-  const [cursor,       setCursor]       = useState(true);
-  const [paused,       setPaused]       = useState(false);
-  const [phraseIdx,    setPhraseIdx]    = useState(0);
-  const [phraseFading, setPhraseFading] = useState(false);
+  const [page,           setPage]           = useState(0);
+  const [cursor,         setCursor]         = useState(true);
+  const [paused,         setPaused]         = useState(false);
+  const [phraseIdx,      setPhraseIdx]      = useState(0);
+  const [phraseFading,   setPhraseFading]   = useState(false);
+  const [analyzeIdx,     setAnalyzeIdx]     = useState(0);
+  const [analyzeFading,  setAnalyzeFading]  = useState(false);
 
   // Blinking cursor
   useEffect(() => {
@@ -111,21 +142,61 @@ export function SwimAiTerminal({
     return () => clearInterval(id);
   }, [paused, entries.length, PAGE, maxPage]);
 
-  // Cycle scan phrases with fade transition
+  // Cycle primary scan phrase
   useEffect(() => {
     const id = setInterval(() => {
       setPhraseFading(true);
       setTimeout(() => {
         setPhraseIdx((i) => (i + 1) % SCAN_PHRASES.length);
         setPhraseFading(false);
-      }, 420);
+      }, 380);
     }, 3600);
+    return () => clearInterval(id);
+  }, []);
+
+  // Cycle "analyzing" phrase — faster
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAnalyzeFading(true);
+      setTimeout(() => {
+        setAnalyzeIdx((i) => (i + 1) % ANALYZING_PHRASES.length);
+        setAnalyzeFading(false);
+      }, 300);
+    }, 2200);
     return () => clearInterval(id);
   }, []);
 
   const visible    = entries.slice(page, page + PAGE);
   const pageCount  = Math.min(Math.ceil(entries.length / PAGE), 8);
   const activePage = Math.floor(page / PAGE);
+
+  // Build status modules from stats or use atmospheric defaults
+  const statusModules: StatusModule[] = [
+    {
+      label:       'SOURCE SWEEP',
+      value:       `${stats?.sourcesMonitored ?? 8} active`,
+      barDuration: '7s',
+      accent:      'rgba(134,212,110,0.55)',
+    },
+    {
+      label:       'ANOMALY CHECK',
+      value:       'RUNNING',
+      barDuration: '11.4s',
+      accent:      'rgba(134,212,110,0.42)',
+    },
+    {
+      label:       'DUP. FILTER',
+      value:       'ACTIVE',
+      barDuration: '5.2s',
+      accent:      'rgba(109,168,255,0.50)',
+    },
+    {
+      label:       'REVIEW QUEUE',
+      value:       stats?.pendingReview != null ? `${stats.pendingReview} pending` : 'LIVE',
+      barDuration: '14s',
+      accent:      stats?.pendingReview ? 'rgba(215,168,92,0.65)' : 'rgba(134,212,110,0.35)',
+    },
+  ];
 
   return (
     <div
@@ -148,8 +219,12 @@ export function SwimAiTerminal({
           {/* Title row */}
           <div className="mb-2.5 flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
-              <span className="h-2 w-2 shrink-0 bg-crt/70" aria-hidden="true" />
-              <span className="text-[13px] font-bold uppercase tracking-[0.24em] text-crt/88">
+              {/* Radar pulse ring */}
+              <span className="relative flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+                <span className="terminal-radar-ring absolute inset-0 rounded-full border border-crt/30" />
+                <span className="h-1.5 w-1.5 rounded-full bg-crt/70" />
+              </span>
+              <span className="terminal-title-main text-[13px] font-bold uppercase tracking-[0.24em] text-crt/88">
                 SWIM AI // SIGNAL SCANNER
               </span>
             </div>
@@ -188,29 +263,80 @@ export function SwimAiTerminal({
           </div>
         </div>
 
-        {/* ── Active scan line ── */}
+        {/* ── Status modules row ── */}
         <div
-          className="flex items-center gap-2 border-b border-crt/[0.06] px-5 py-2"
+          className="grid grid-cols-2 gap-px border-b border-crt/[0.07] sm:grid-cols-4"
+          style={{ background: 'rgba(134,212,110,0.006)' }}
+        >
+          {statusModules.map((mod) => (
+            <div
+              key={mod.label}
+              className="relative overflow-hidden px-3 py-2.5"
+              style={{ borderRight: '1px solid rgba(134,212,110,0.06)' }}
+            >
+              <div className="mb-1 text-[9px] uppercase tracking-[0.22em] text-crt/22">
+                {mod.label}
+              </div>
+              <div
+                className="text-[11px] font-bold uppercase tracking-[0.10em]"
+                style={{ color: mod.accent }}
+              >
+                {mod.value}
+              </div>
+              {/* Animated progress bar */}
+              <div className="mt-2 h-[2px] w-full overflow-hidden rounded-full" style={{ background: 'rgba(134,212,110,0.06)' }}>
+                <div
+                  className="terminal-status-bar h-full rounded-full"
+                  style={{
+                    background: `linear-gradient(90deg, transparent, ${mod.accent}, transparent)`,
+                    animationDuration: mod.barDuration,
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Active scan lines ── */}
+        <div
+          className="border-b border-crt/[0.06] px-5 py-2"
           style={{ background: 'rgba(134,212,110,0.014)' }}
         >
-          <span className="shrink-0 text-[11px] text-crt/22 select-none" aria-hidden="true">▶</span>
-          <span
-            className="text-[11px] tracking-[0.06em]"
-            style={{
-              color:      'rgba(134,212,110,0.45)',
-              opacity:    phraseFading ? 0 : 1,
-              transition: 'opacity 0.4s ease',
-            }}
-          >
-            {SCAN_PHRASES[phraseIdx]}
-          </span>
-          <span
-            className="text-[11px] text-crt/28 transition-opacity duration-100"
-            style={{ opacity: cursor ? 1 : 0 }}
-            aria-hidden="true"
-          >
-            _
-          </span>
+          {/* Primary scan phrase */}
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-[11px] text-crt/22 select-none" aria-hidden="true">▶</span>
+            <span
+              className="text-[11px] tracking-[0.06em]"
+              style={{
+                color:      'rgba(134,212,110,0.45)',
+                opacity:    phraseFading ? 0 : 1,
+                transition: 'opacity 0.38s ease',
+              }}
+            >
+              {SCAN_PHRASES[phraseIdx]}
+            </span>
+            <span
+              className="text-[11px] text-crt/28 transition-opacity duration-100"
+              style={{ opacity: cursor ? 1 : 0 }}
+              aria-hidden="true"
+            >
+              _
+            </span>
+          </div>
+          {/* Secondary "currently analyzing" phrase */}
+          <div className="mt-0.5 flex items-center gap-2">
+            <span className="shrink-0 text-[10px] text-crt/12 select-none" aria-hidden="true">◈</span>
+            <span
+              className="text-[10px] tracking-[0.04em]"
+              style={{
+                color:      'rgba(134,212,110,0.28)',
+                opacity:    analyzeFading ? 0 : 1,
+                transition: 'opacity 0.3s ease',
+              }}
+            >
+              {ANALYZING_PHRASES[analyzeIdx]}
+            </span>
+          </div>
         </div>
 
         {/* ── Feed ── */}
@@ -223,13 +349,13 @@ export function SwimAiTerminal({
             </div>
           ) : (
             visible.map((entry) => {
-              const style      = TYPE_STYLE[entry.type] ?? TYPE_STYLE['SIGNAL RECOVERED'];
+              const style       = TYPE_STYLE[entry.type] ?? TYPE_STYLE['SIGNAL RECOVERED'];
               const isHighlight = entry.severity === 'highlight';
               const isWarning   = entry.severity === 'warning';
               return (
                 <div
                   key={entry.id}
-                  className="border-b border-crt/[0.055] px-5 py-4 transition-all duration-300"
+                  className="border-b border-crt/[0.055] px-4 py-4 transition-all duration-300 sm:px-5 sm:py-5"
                   style={{
                     borderLeft: `3px solid ${style.border}`,
                     background: style.bg,
@@ -239,7 +365,7 @@ export function SwimAiTerminal({
                   }}
                 >
                   {/* Badge row: type + category + timestamp */}
-                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
                     <span
                       className="rounded-sm px-2 py-[3px] text-[10px] font-bold uppercase tracking-[0.12em]"
                       style={{
@@ -264,18 +390,18 @@ export function SwimAiTerminal({
                     </span>
                   </div>
 
-                  {/* Title */}
+                  {/* Title — slightly larger on mobile */}
                   {entry.url ? (
                     <a
                       href={entry.url}
-                      className="mb-1.5 block text-[17px] font-bold leading-snug tracking-[0.01em] text-crt/88 transition-colors hover:text-crt md:text-[18px]"
+                      className="mb-2 block text-[18px] font-bold leading-snug tracking-[0.01em] text-crt/88 transition-colors hover:text-crt sm:text-[19px]"
                       style={{ textShadow: isHighlight ? `0 0 14px ${style.glow}` : 'none' }}
                     >
                       {entry.title}
                     </a>
                   ) : (
                     <p
-                      className="mb-1.5 text-[17px] font-bold leading-snug tracking-[0.01em] text-crt/88 md:text-[18px]"
+                      className="mb-2 text-[18px] font-bold leading-snug tracking-[0.01em] text-crt/88 sm:text-[19px]"
                       style={{ textShadow: isHighlight ? `0 0 14px ${style.glow}` : 'none' }}
                     >
                       {entry.title}
@@ -283,7 +409,7 @@ export function SwimAiTerminal({
                   )}
 
                   {/* Source */}
-                  <p className="text-[11px] tracking-[0.05em] text-crt/28">
+                  <p className="text-[12px] tracking-[0.05em] text-crt/30">
                     ↳ {entry.source}
                   </p>
                 </div>
@@ -295,7 +421,7 @@ export function SwimAiTerminal({
         {/* ── Pagination dots ── */}
         {pageCount > 1 && (
           <div
-            className="flex items-center justify-center gap-2 border-t border-crt/[0.07] py-2"
+            className="flex items-center justify-center gap-2 border-t border-crt/[0.07] py-2.5"
             style={{ background: 'rgba(0,0,0,0.30)' }}
           >
             {Array.from({ length: pageCount }).map((_, i) => (
@@ -314,13 +440,13 @@ export function SwimAiTerminal({
         {/* ── Telemetry bar ── */}
         {stats && (
           <div
-            className="border-t border-crt/12 px-5 pb-5 pt-4"
+            className="border-t border-crt/12 px-5 pb-6 pt-4"
             style={{ background: 'rgba(134,212,110,0.014)' }}
           >
             <div className="mb-3 text-[9px] uppercase tracking-[0.36em] text-crt/20">
               ◈ SYSTEM TELEMETRY
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
               {[
                 { label: 'SIGNALS RECOVERED', value: stats.recoveredToday,   accent: '#86d46e' },
                 { label: 'PENDING REVIEW',    value: stats.pendingReview,    accent: '#d7a85c' },

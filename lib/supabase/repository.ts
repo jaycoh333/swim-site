@@ -882,6 +882,28 @@ export async function checkSignalDuplicates(
   return results;
 }
 
+/**
+ * Batch freshness check — returns the set of all source_url values already in
+ * recovered_signals (any status). Used to pre-filter candidates before attempting
+ * individual duplicate checks.
+ */
+export async function getExistingSignalUrls(): Promise<Set<string>> {
+  if (!hasSupabase) return new Set();
+
+  const db = getDb()!;
+  type Row = { source_url: string | null };
+  const { data } = await db
+    .from('recovered_signals')
+    .select('source_url')
+    .not('source_url', 'is', null);
+
+  const urls = new Set<string>();
+  for (const row of (data ?? []) as Row[]) {
+    if (row.source_url) urls.add(row.source_url);
+  }
+  return urls;
+}
+
 export async function getScannerSource(id: string): Promise<DbScannerSource | undefined> {
   if (!hasSupabase) return SCANNER_SOURCES_SEED.find((s) => s.id === id);
 

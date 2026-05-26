@@ -12,6 +12,8 @@ import { getSourceRecommendation } from '@/lib/source-utils';
 import { SCAN_PRESETS, PRESET_ALL, type ScanPreset } from '@/lib/scan-presets';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
+import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
+import { detectClusters, type ClusterResult } from '@/lib/cluster-detection';
 import type { DbScannerSource, DbRecoveredSignal } from '@/lib/supabase/types';
 import type { SessionSourceResult, FetchedCandidate } from '@/lib/scanner-fetch-types';
 
@@ -221,6 +223,9 @@ export function ScannerConsoleClient({
   // Key = candidate.sourceUrl (supports multiple candidates from same source)
   const [candStates,     setCandStates]     = useState<Map<string, CandidateState>>(new Map());
   const [queueToast,     setQueueToast]     = useState<string | null>(null);
+  // Source health + cluster analysis (computed after each scan)
+  const [healthMap,      setHealthMap]      = useState<Map<string, SourceHealth>>(new Map());
+  const [clusterList,    setClusterList]    = useState<ClusterResult[]>([]);
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
@@ -284,6 +289,12 @@ export function ScannerConsoleClient({
     }
     setScanResults(res.results);
     setScanPhase('done');
+    // Health + cluster analysis
+    setHealthMap(computeSourceHealthMap(res.results));
+    const allCandidates = res.results
+      .filter((r) => r.status !== 'error')
+      .map((r) => r.candidate);
+    setClusterList(detectClusters(allCandidates));
   }
 
   async function handleQueueCandidate(result: SessionSourceResult) {
@@ -412,6 +423,15 @@ export function ScannerConsoleClient({
     await navigator.clipboard.writeText(text);
     setCopied(which);
     setTimeout(() => setCopied(null), 2500);
+  }
+
+  // ── Derived from cluster list ────────────────────────────────────────────
+
+  const clusterMap = new Map<string, string>();
+  for (const cluster of clusterList) {
+    for (const url of cluster.candidateUrls) {
+      clusterMap.set(url, cluster.label);
+    }
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -577,7 +597,8 @@ export function ScannerConsoleClient({
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {activeScanSources.map((s) => {
-                      const rec = getSourceRecommendation(s);
+                      const rec    = getSourceRecommendation(s);
+                      const health = healthMap.get(s.id);
                       return (
                         <div key={s.id}>
                           <div className="flex items-center gap-2">
@@ -585,6 +606,11 @@ export function ScannerConsoleClient({
                               {s.source_type}
                             </span>
                             <span className="text-[13px] text-slate-300">{s.name}</span>
+                            {health && health.status !== 'unknown' && (
+                              <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(health.status)}`}>
+                                {HEALTH_LABELS[health.status]}
+                              </span>
+                            )}
                           </div>
                           {rec && (
                             <p className="mt-1 text-[11px] leading-relaxed text-amber-400/55">{rec}</p>
@@ -720,6 +746,12 @@ export function ScannerConsoleClient({
                             ? 'Index pages only — no stories extracted. Try Discover Links or choose another preset.'
                             : 'All results were weak, index pages, or blocked. Try a different preset or add more sources.'}
                       </p>
+                      <a
+                        href="/scanner/sources"
+                        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-4 py-2 text-[12px] font-semibold uppercase tracking-widest text-emerald-400 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/14"
+                      >
+                        + Add more sources
+                      </a>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-3">
@@ -765,6 +797,16 @@ export function ScannerConsoleClient({
                                 <span className="text-[13px] font-semibold text-slate-400">
                                   {result.sourceName}
                                 </span>
+                                {/* Source health badge */}
+                                {(() => {
+                                  const h = healthMap.get(result.sourceId);
+                                  if (!h || h.status === 'unknown') return null;
+                                  return (
+                                    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(h.status)}`}>
+                                      {HEALTH_LABELS[h.status]}
+                                    </span>
+                                  );
+                                })()}
                                 {result.candidate.passReason && (
                                   <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-0.5 text-[11px] text-emerald-400/70">
                                     ✓ {result.candidate.passReason}
@@ -775,11 +817,19 @@ export function ScannerConsoleClient({
                                     ⚠ duplicate
                                   </span>
                                 )}
-                                {result.candidate.storyScore != null && (
-                                  <span className="ml-auto rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
-                                    {result.candidate.storyScore}pts
-                                  </span>
-                                )}
+                                {/* Priority + story score */}
+                                <div className="ml-auto flex items-center gap-1.5">
+                                  {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
+                                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score (story + corroboration + source bonus)">
+                                      P{result.candidate.finalPriorityScore}
+                                    </span>
+                                  )}
+                                  {result.candidate.storyScore != null && (
+                                    <span className="rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
+                                      {result.candidate.storyScore}pts
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
                               {/* Title — large */}
@@ -787,10 +837,12 @@ export function ScannerConsoleClient({
                                 {result.candidate.title}
                               </p>
 
-                              {/* Story signal badges */}
-                              {result.candidate.storySignals && result.candidate.storySignals.length > 0 && (
+                              {/* Story signal badges + cluster + corroboration */}
+                              {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
+                                clusterMap.has(result.candidate.sourceUrl) ||
+                                (result.candidate.corroborationScore ?? 0) > 0) && (
                                 <div className="mb-3 flex flex-wrap gap-1">
-                                  {result.candidate.storySignals.map((sig) => (
+                                  {result.candidate.storySignals?.map((sig) => (
                                     <span
                                       key={sig}
                                       className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65"
@@ -798,6 +850,21 @@ export function ScannerConsoleClient({
                                       {sig}
                                     </span>
                                   ))}
+                                  {/* Cluster badge */}
+                                  {clusterMap.get(result.candidate.sourceUrl) && (
+                                    <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">
+                                      ⬡ {clusterMap.get(result.candidate.sourceUrl)}
+                                    </span>
+                                  )}
+                                  {/* Corroboration indicator */}
+                                  {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
+                                    <span
+                                      className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80"
+                                      title={result.candidate.corroborationNotes?.join(', ')}
+                                    >
+                                      ⟳ {result.candidate.corroborationScore} corroboration
+                                    </span>
+                                  )}
                                 </div>
                               )}
 

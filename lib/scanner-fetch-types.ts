@@ -38,6 +38,11 @@ export interface FetchedCandidate {
   // Story intelligence scoring (populated by server-side heuristics — no AI)
   storyScore?:          number;    // 0–100 combined story quality score
   storySignals?:        string[];  // detected signals: ['eyewitness', 'corroborated', ...]
+  // Corroboration (Reddit comment tree analysis — only populated for strong Reddit candidates)
+  corroborationScore?:  number;    // 0–30 from comment pattern analysis
+  corroborationNotes?:  string[];  // detected patterns: ['"same thing happened to me"', ...]
+  // Composite priority (story + corroboration + archive/source bonus)
+  finalPriorityScore?:  number;    // 0–100 composite score for curator triage
 }
 
 export interface SignalDuplicate {

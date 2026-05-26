@@ -124,6 +124,70 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     created_at: '2024-01-01T00:00:00Z',
   },
   {
+    id: 'src-009',
+    name: 'r/HighStrangeness',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/HighStrangeness/',
+    description:
+      'Curated accounts of high-strangeness phenomena: cryptids, UAPs, dimensional anomalies, telepathy, precognition, and unexplained encounters that resist simple explanation.',
+    category_focus: ['Paranormal', 'UFOs', 'Weird Encounters', 'Consciousness'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/HighStrangeness with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-010',
+    name: 'r/Paranormal',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/Paranormal/',
+    description:
+      'Personal paranormal experiences: ghost sightings, shadow figures, poltergeist activity, haunted locations, and unexplained phenomena shared by ordinary people.',
+    category_focus: ['Paranormal', 'Weird Encounters', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/Paranormal with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-011',
+    name: 'r/LostMedia',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/lostmedia/',
+    description:
+      'Community searching for lost, forgotten, and unrecovered media: rare recordings, missing footage, suppressed broadcasts, and internet media that vanished.',
+    category_focus: ['Lost Media', 'Internet Mysteries', 'Censored History'],
+    risk_level: 'low',
+    refresh_cadence: 'weekly',
+    attribution_rules:
+      'Credit u/[handle] on r/lostmedia with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-012',
+    name: 'r/UnresolvedMysteries',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/UnresolvedMysteries/',
+    description:
+      'In-depth discussions of unsolved disappearances, unexplained deaths, cold cases, and real-world mysteries that remain unresolved. High signal density for conspiracy and hidden history categories.',
+    category_focus: ['Conspiracy Theory', 'Hidden History', 'Paranormal', 'Whistleblower Files'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/UnresolvedMysteries with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
     id: 'src-008',
     name: 'GodLike Productions',
     source_type: 'forum',
