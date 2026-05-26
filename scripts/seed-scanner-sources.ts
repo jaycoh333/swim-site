@@ -115,7 +115,7 @@ async function run() {
         risk_level:        source.risk_level,
         refresh_cadence:   source.refresh_cadence ?? null,
         attribution_rules: source.attribution_rules ?? null,
-        enabled:           false,
+        enabled:           source.enabled ?? false,
         last_scanned_at:   null,
       });
 

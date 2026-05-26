@@ -71,14 +71,14 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'daily',
     attribution_rules:
       'Credit u/[handle] on r/Glitch_in_the_Matrix with post date. Summarize — do not reproduce full post text. Link to archived version if available.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
   {
     id: 'src-005',
     name: 'Lost Media Wiki',
-    source_type: 'archive',
+    source_type: 'mediawiki',
     base_url: 'https://www.lostmediawiki.com/',
     description:
       'Community-maintained encyclopedia of lost, destroyed, or buried media: missing TV episodes, unreleased films, deleted recordings, suppressed games. Strong source for media anomalies and cultural erasure signals.',
@@ -87,7 +87,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'weekly',
     attribution_rules:
       'Credit "Lost Media Wiki" with article title and page URL. Note when recovery status changed (found / still lost).',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },

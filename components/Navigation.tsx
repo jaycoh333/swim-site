@@ -51,13 +51,13 @@ export function Navigation() {
     <header className="fixed left-0 right-0 top-0 z-[9990] border-b border-crt/12 bg-[rgba(3,5,4,.98)]">
 
       {/* ── Main row ── */}
-      <div className="mx-auto flex min-h-[76px] max-w-7xl items-center justify-between gap-6 px-6 py-4 md:min-h-[96px] md:px-12">
+      <div className="mx-auto flex min-h-[76px] max-w-7xl items-center justify-between gap-3 px-6 py-4 md:min-h-[96px] md:gap-6 md:px-12">
 
         {/* Brand */}
         <Link
           href="/"
           aria-label="SWIM home"
-          className="flex flex-shrink-0 items-center gap-4 text-crt/88 transition-colors hover:text-crt"
+          className="flex flex-shrink-0 items-center gap-2 text-crt/88 transition-colors hover:text-crt md:gap-4"
         >
           <Image
             src="/images/swim-sigil-logo.jpg"
@@ -66,7 +66,7 @@ export function Navigation() {
             height={64}
             className="nav-sigil flex-shrink-0"
           />
-          <span className="font-mono text-[1.4rem] tracking-[0.20em] md:text-[1.75rem]">$SWIM</span>
+          <span className="font-mono text-[1.15rem] tracking-[0.14em] md:text-[1.75rem] md:tracking-[0.20em]">$SWIM</span>
         </Link>
 
         {/* Desktop nav links */}

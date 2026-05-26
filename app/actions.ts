@@ -376,6 +376,25 @@ function isMediaWikiHost(url: string): boolean {
   );
 }
 
+/** Returns true when a source is Erowid Experience Vaults (by URL or name). */
+function isErowidSource(source: { name: string; base_url: string | null }): boolean {
+  const url  = (source.base_url ?? '').toLowerCase();
+  const name = source.name.toLowerCase();
+  return url.includes('erowid.org') || name.includes('erowid');
+}
+
+/**
+ * Returns true ONLY for individual Erowid experience report URLs.
+ * Format: https://erowid.org/experiences/exp.php?ID=XXXXX
+ * Index/category/listing URLs return false.
+ */
+function isErowidReportUrl(url: string): boolean {
+  try {
+    const p = new URL(url);
+    return p.hostname.includes('erowid.org') && p.pathname.toLowerCase().includes('/exp.php');
+  } catch { return false; }
+}
+
 /** Human-readable error for sources that block direct HTML fetches. */
 function blockedFetchError(status: number): string {
   return `HTTP ${status} — source blocked direct fetch. Use Discover Links or switch source type to Reddit/MediaWiki.`;
@@ -586,6 +605,17 @@ function detectBadCandidate(
   const lcTitle   = title.toLowerCase();
   const lcSummary = summary.toLowerCase();
 
+  // Erowid index/category/listing pages — only individual reports (exp.php?ID=) are allowed
+  try {
+    const p = new URL(url);
+    if (p.hostname.includes('erowid.org') && !p.pathname.toLowerCase().includes('/exp.php')) {
+      return {
+        bad:    true,
+        reason: 'Erowid index/category page — choose an individual experience report (exp.php?ID=...)',
+      };
+    }
+  } catch { /* ignore */ }
+
   // Wayback homepage
   try {
     const parsed = new URL(url);
@@ -660,6 +690,14 @@ export async function fetchScannerSourcePreviewAction(
   // Source-level guardrail — catch obviously bad source URLs before fetching
   const srcWarning = sourceUrlWarning(source);
   if (srcWarning) return { error: srcWarning };
+
+  // Erowid — homepage is never a useful candidate; redirect curator to Discover Links
+  if (isErowidSource(source)) {
+    return {
+      error:
+        'Erowid homepage skipped — use Discover Links to find individual experience reports.',
+    };
+  }
 
   // Route to API connectors — avoids HTML fetches that get blocked or return garbage
   if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
@@ -835,6 +873,17 @@ export async function runFetchSessionAction(
     }
     if (!source.base_url) {
       results.push({ sourceId, sourceName: source.name, status: 'error', error: 'no base URL configured' });
+      continue;
+    }
+
+    // Erowid — homepage produces no story candidates; tell curator to use Discover Links
+    if (isErowidSource(source)) {
+      results.push({
+        sourceId,
+        sourceName: source.name,
+        status:     'error',
+        error:      'Erowid homepage skipped — use Discover Links to find individual experience reports.',
+      });
       continue;
     }
 
@@ -1344,6 +1393,211 @@ async function fetchMediaWikiPagePreview(
   return { candidate };
 }
 
+// ---------------------------------------------------------------------------
+// Erowid Experience Vaults connector
+//
+// Erowid publishes individual experience reports at:
+//   https://erowid.org/experiences/exp.php?ID=XXXXX
+//
+// Discovery fetches the Erowid index page and extracts links to individual
+// reports only — index/category/listing pages are never surfaced.
+//
+// Fetch extracts only the first excerpt of a report — full text is NOT stored.
+// Attribution is always credited back to Erowid Experience Vaults.
+// ---------------------------------------------------------------------------
+
+async function discoverErowidExperienceLinks(
+  source: DbScannerSource,
+): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+  const fetchUrl = source.base_url ?? 'https://erowid.org/experiences/';
+
+  let html: string;
+  try {
+    const res = await fetch(fetchUrl, {
+      cache:   'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'text/html,application/xhtml+xml;q=0.9',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return { error: `Erowid fetch HTTP ${res.status} — ${res.statusText}` };
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+      return { error: `Erowid returned non-HTML: ${ct.split(';')[0].trim()}` };
+    }
+    html = await res.text();
+  } catch (err) {
+    return { error: `Erowid fetch — ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const anchors   = extractAnchors(html.slice(0, 200_000), fetchUrl);
+  const seen      = new Set<string>();
+  const links: DiscoveredLink[] = [];
+
+  for (const { href, text } of anchors) {
+    if (links.length >= DISCOVERY_MAX_LINKS) break;
+
+    // Only individual experience report URLs — must have /exp.php in the path
+    const lc = href.toLowerCase();
+    if (!lc.includes('/exp.php')) continue;
+
+    // Must include a report ID
+    try {
+      const p = new URL(href);
+      if (!p.searchParams.get('ID') && !p.search.match(/[?&]ID=\d+/i)) continue;
+    } catch { continue; }
+
+    if (seen.has(href)) continue;
+    seen.add(href);
+
+    const linkText = text.replace(/\s+/g, ' ').trim() || 'Erowid experience report';
+    links.push({
+      url:         href,
+      linkText:    linkText.slice(0, 200),
+      matchReason: 'Erowid experience report',
+    });
+  }
+
+  if (links.length === 0) {
+    return {
+      error:
+        'No individual experience report links found on this Erowid page. ' +
+        'The page may require a more specific URL — try a substance category page like erowid.org/experiences/subs/exp_DMT.shtml',
+    };
+  }
+
+  return { links };
+}
+
+// Erowid connector — fetch one individual experience report and produce a candidate.
+// Only exp.php?ID= URLs are accepted; index/category pages return an error.
+async function fetchErowidExperiencePreview(
+  source: DbScannerSource,
+  url:    string,
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
+  if (!isErowidReportUrl(url)) {
+    return {
+      error:
+        'Erowid index/category page — choose an individual experience report ' +
+        '(URL must contain /exp.php?ID=...).',
+    };
+  }
+
+  let html: string;
+  try {
+    const res = await fetch(url, {
+      cache:   'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'text/html,application/xhtml+xml;q=0.9',
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return { error: `Erowid report fetch HTTP ${res.status}` };
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+      return { error: `expected HTML, got ${ct.split(';')[0].trim()}` };
+    }
+    html = await res.text();
+  } catch (err) {
+    return { error: `Erowid report fetch — ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // Standard metadata extraction (title, description, og:image)
+  const extracted = extractPageData(html, url);
+
+  // Erowid titles often include the substance: "DMT: First Encounter — Erowid Exp. Vaults"
+  // Clean the title, then try to infer substance from it.
+  const rawTitle = extracted.title;
+  let title = cleanTitle(rawTitle) || 'Erowid Experience Report';
+
+  // Detect substance prefix: "SUBSTANCE: Report Title" or "A / B: Report Title"
+  let substanceHint = '';
+  const subMatch = rawTitle.match(/^([A-Z][A-Za-z0-9&/\s]{1,35}):\s+(.{8,})/);
+  if (subMatch) {
+    substanceHint = subMatch[1].trim();
+  }
+
+  // Erowid-specific content extraction — try to pull the report body text.
+  // Erowid uses various class names for the report text block across page generations.
+  let reportExcerpt = '';
+  const slicedHtml = html.slice(0, 300_000);
+
+  // Strategy 1: div with a class containing "report", "exp", or "experience" in the name
+  const reportDivMatch = slicedHtml.match(
+    /class=["'][^"']*(?:report[_-]?text|exp[_-]?report|experience[_-]?text|report[_-]?body)[^"']*["'][^>]*>([\s\S]{80,6000}?)<\/div>/i,
+  );
+  if (reportDivMatch) {
+    reportExcerpt = decodeHtmlEntities(
+      reportDivMatch[1]
+        .replace(/<[^>]{0,1000}>/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+        .slice(0, 1000),
+    );
+  }
+
+  // Strategy 2: <main> or <article> semantic block
+  if (reportExcerpt.length < 80) {
+    const mainMatch = slicedHtml.match(/<(?:main|article)[^>]*>([\s\S]{100,8000}?)<\/(?:main|article)>/i);
+    if (mainMatch) {
+      reportExcerpt = decodeHtmlEntities(
+        mainMatch[1]
+          .replace(/<(nav|header|footer|aside|script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+          .replace(/<[^>]{0,1000}>/g, ' ')
+          .replace(/\s{2,}/g, ' ')
+          .trim()
+          .slice(0, 1000),
+      );
+    }
+  }
+
+  const summary = reportExcerpt.length >= 80
+    ? reportExcerpt.slice(0, 1500)
+    : buildSummary(extracted.description, extracted.snippet);
+
+  if (summary.trim().length < 40) {
+    return {
+      error:
+        'Could not extract report content from this Erowid page — ' +
+        'it may be a listing or category page rather than an individual report.',
+    };
+  }
+
+  const conf       = scoreExtractionConfidence(title, summary);
+  const bad        = detectBadCandidate(url, title, summary);
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+
+  const categoryNote = substanceHint
+    ? `${source.category_focus[0] ?? 'Psychedelics'} · substance: ${substanceHint}`
+    : buildCategoryNote(source.category_focus, title, summary);
+
+  const candidate: FetchedCandidate = {
+    title:                title.slice(0, 200),
+    summary:              summary.slice(0, 2000),
+    sourceUrl:            url,
+    category:             source.category_focus[0] ?? 'Psychedelics',
+    tags:                 ['scanner-source', 'erowid', 'experience-report', 'archive'],
+    anomalyScore:         5,
+    categoryNote,
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
+    sourceType:           'archive',
+    isArchived:           false,
+    passReason:           'Individual Erowid experience report',
+    badCandidateReason:   bad.bad ? bad.reason : undefined,
+    sourceImageUrl:       extracted.imageUrl || undefined,
+    mediaType:            'webpage',
+    attributionText:      'Recovered from Erowid Experience Vaults',
+    captureNotes:         'Summary extracted from an individual Erowid report page. Full report text not stored.',
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+  };
+
+  return { candidate };
+}
+
 export async function discoverSourceLinksAction(
   sourceId: string,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
@@ -1351,6 +1605,11 @@ export async function discoverSourceLinksAction(
   if (!source)          return { error: 'source not found in registry' };
   if (!source.enabled)  return { error: 'source must be enabled before discovery' };
   if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  // Erowid connector — discover individual experience report links from the vaults index
+  if (isErowidSource(source)) {
+    return discoverErowidExperienceLinks(source);
+  }
 
   // Wayback CDX connector — query Internet Archive snapshots
   if (source.source_type === 'wayback') {
@@ -1462,6 +1721,11 @@ export async function fetchDiscoveredLinkPreviewAction(
 
   if (!isArchiveType && !isMediaWikiSource && !isRedditSource && parsedUrl.hostname !== baseHostname && !REDDIT_HOST.test(parsedUrl.hostname)) {
     return { error: `cross-domain fetch blocked — ${parsedUrl.hostname} is not ${baseHostname}` };
+  }
+
+  // Erowid connector — individual report pages only; index pages return an error
+  if (isErowidSource(source) || parsedUrl.hostname.includes('erowid.org')) {
+    return fetchErowidExperiencePreview(source, url);
   }
 
   // Wayback connector — archived page via Wayback Machine URL

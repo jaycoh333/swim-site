@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS recovered_signals (
                                     'irc','forum','other'
                                   )),
   status              TEXT        NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','approved','archived','rejected')),
+                                  CHECK (status IN ('pending','reviewing','rebirth-ready','approved','archived','rejected')),
   anomaly_score       INTEGER     NOT NULL DEFAULT 5
                                   CHECK (anomaly_score BETWEEN 1 AND 10),
   tags                TEXT[]      NOT NULL DEFAULT '{}',
@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS recovered_signals (
 
 -- Migration: if the table already exists, add the column manually:
 -- ALTER TABLE recovered_signals ADD COLUMN IF NOT EXISTS submitted_publicly BOOLEAN NOT NULL DEFAULT false;
+
+-- Migration: if the table already exists, update the status CHECK constraint to include
+-- 'reviewing' and 'rebirth-ready' (required for the scanner console workflow):
+-- ALTER TABLE recovered_signals DROP CONSTRAINT IF EXISTS recovered_signals_status_check;
+-- ALTER TABLE recovered_signals ADD CONSTRAINT recovered_signals_status_check
+--   CHECK (status IN ('pending','reviewing','rebirth-ready','approved','archived','rejected'));
 
 
 -- ---------------------------------------------------------------------------

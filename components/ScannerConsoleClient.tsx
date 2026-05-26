@@ -233,15 +233,26 @@ export function ScannerConsoleClient({
 
   // ── Preset helpers ───────────────────────────────────────────────────────
 
+  // Sources whose base_url is a root/homepage are excluded from Run Scan —
+  // they produce index pages, not stories. Use Discover Links on these instead.
+  function isHomepageSource(s: DbScannerSource): boolean {
+    if (!s.base_url) return false;
+    try { const { pathname } = new URL(s.base_url); return pathname === '/' || pathname === ''; }
+    catch { return false; }
+  }
+
   function sourcesForPreset(presetId: string) {
-    if (presetId === PRESET_ALL) return enabledSources;
-    const preset = SCAN_PRESETS.find((p) => p.id === presetId);
-    if (!preset) return enabledSources;
-    return enabledSources.filter((s) => {
-      if (preset.sourceTypes.includes(s.source_type)) return true;
-      const lc = s.name.toLowerCase();
-      return preset.nameKeywords.some((kw) => lc.includes(kw));
-    });
+    const pool = (() => {
+      if (presetId === PRESET_ALL) return enabledSources;
+      const preset = SCAN_PRESETS.find((p) => p.id === presetId);
+      if (!preset) return enabledSources;
+      return enabledSources.filter((s) => {
+        if (preset.sourceTypes.includes(s.source_type)) return true;
+        const lc = s.name.toLowerCase();
+        return preset.nameKeywords.some((kw) => lc.includes(kw));
+      });
+    })();
+    return pool.filter((s) => !isHomepageSource(s));
   }
 
   const activeScanSources = sourcesForPreset(activePreset);
@@ -623,11 +634,13 @@ export function ScannerConsoleClient({
                   {/* ── Good candidates ── */}
                   {goodResults.length === 0 ? (
                     <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-8 text-center">
-                      <p className="text-[16px] font-semibold text-slate-500">No strong candidates this scan</p>
+                      <p className="text-[16px] font-semibold text-slate-500">No story candidates found</p>
                       <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
                         {blockedCnt > 0
                           ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked. Fix source types or use Discover Links.`
-                          : 'All results were weak, index pages, or blocked. Try a different preset or add more sources.'}
+                          : lowQualResults.length > 0 && lowQualResults.every((r) => r.status !== 'error' && r.candidate.isIndexPage)
+                            ? 'Index pages only — no stories extracted. Try Discover Links or choose another preset.'
+                            : 'All results were weak, index pages, or blocked. Try a different preset or add more sources.'}
                       </p>
                     </div>
                   ) : (
