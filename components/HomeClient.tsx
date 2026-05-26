@@ -11,7 +11,25 @@ import { MobileActionBar } from '@/components/MobileActionBar';
 import { NetworkFooter } from '@/components/NetworkFooter';
 import { SignalTicker } from '@/components/SignalTicker';
 import { SwimHeader } from '@/components/SwimHeader';
+import { SwimAiTerminal } from '@/components/SwimAiTerminal';
 import { mockDb } from '@/lib/mock-db';
+import { MOCK_TERMINAL_FEED } from '@/lib/terminal-feed';
+import type { TerminalEntry } from '@/lib/terminal-feed';
+import type { ScannerStats } from '@/lib/supabase/repository';
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+export interface HomeClientProps {
+  terminalFeed?: TerminalEntry[];
+  stats?:        ScannerStats;
+  isLive?:       boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function useAnimatedCounter(target: number, delay = 0, duration = 2000) {
   const [count, setCount] = useState(0);
@@ -30,11 +48,19 @@ function useAnimatedCounter(target: number, delay = 0, duration = 2000) {
   return count;
 }
 
-export function HomeClient() {
-  const [bootDone, setBootDone] = useState(false);
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function HomeClient({
+  terminalFeed,
+  stats,
+  isLive = false,
+}: HomeClientProps) {
+  const [bootDone,     setBootDone]     = useState(false);
   const [messageIndex, setMessageIndex] = useState(0);
-  const [clock, setClock] = useState('03:33:33');
-  const [onlineTick, setOnlineTick] = useState(0);
+  const [clock,        setClock]        = useState('03:33:33');
+  const [onlineTick,   setOnlineTick]   = useState(0);
 
   useEffect(() => {
     const rotate = window.setInterval(() => {
@@ -46,7 +72,7 @@ export function HomeClient() {
       setClock(
         now.toLocaleTimeString('en-US', {
           hour12: false,
-          hour: '2-digit',
+          hour:   '2-digit',
           minute: '2-digit',
           second: '2-digit',
         }),
@@ -60,6 +86,24 @@ export function HomeClient() {
 
   const onlineCount  = useAnimatedCounter(mockDb.getOnlineSnapshot(onlineTick), 250, 1600);
   const participants = bootDone ? onlineCount : 0;
+
+  // Use live feed if available, otherwise mock
+  const feed = (terminalFeed && terminalFeed.length > 0) ? terminalFeed : MOCK_TERMINAL_FEED;
+
+  // Status bar numbers
+  const terminalStats = stats
+    ? {
+        recoveredToday:   stats.totalRecovered,
+        sourcesMonitored: 8,
+        threadsReborn:    stats.threadsReborn,
+        pendingReview:    stats.pendingReview,
+      }
+    : {
+        recoveredToday:   847,
+        sourcesMonitored: 8,
+        threadsReborn:    34,
+        pendingReview:    12,
+      };
 
   return (
     <>
@@ -115,6 +159,32 @@ export function HomeClient() {
                 </Link>
                 <Link href="/threads?compose=true" className="homepage-cta-secondary">
                   [ POST SIGNAL ]
+                </Link>
+              </div>
+            </div>
+
+            {/* ── SWIM AI Terminal ── */}
+            <div className="border-t border-crt/10 px-4 pb-8 pt-8 md:px-6 md:pb-10 md:pt-10">
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <div className="mb-1 text-[11px] uppercase tracking-[0.30em] text-crt/38">
+                    swim ai signal monitor
+                  </div>
+                  <h2 className="text-[1.6rem] tracking-[0.10em] text-crt/88 md:text-[1.9rem]">
+                    SIGNAL FEED
+                  </h2>
+                </div>
+                <p className="max-w-xs text-[14px] leading-relaxed text-crt/42">
+                  Monitoring forgotten internet edges for signals worth preserving.
+                </p>
+              </div>
+              <SwimAiTerminal entries={feed} stats={terminalStats} />
+              <div className="mt-4 text-center">
+                <Link
+                  href="/scanner"
+                  className="text-[13px] uppercase tracking-[0.20em] text-crt/40 transition-colors hover:text-crt/70"
+                >
+                  view full scanner →
                 </Link>
               </div>
             </div>
