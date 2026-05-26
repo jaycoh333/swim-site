@@ -37,6 +37,7 @@ import {
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
+import type { DbScannerSource } from '@/lib/supabase/types';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -580,21 +581,25 @@ export async function runFetchSessionAction(
 //
 // TWO-STEP FLOW:
 //   Step 1 — discoverSourceLinksAction:
-//     Fetches base_url, extracts anchor hrefs, filters by keyword and domain.
-//     Returns up to 5 candidate URLs. No DB writes.
-//   Step 2 — fetchDiscoveredLinkPreviewAction:
-//     Fetches one discovered URL, extracts metadata → FetchedCandidate.
+//     Fetches base_url (or JSON API for Reddit), extracts links, filters by keyword.
+//     Returns up to 20 candidate URLs. No DB writes.
+//   Step 2 — fetchDiscoveredLinkPreviewAction / batchFetchDiscoveredLinksAction:
+//     Fetches one or many discovered URLs → FetchedCandidate(s).
 //     Feeds into the existing queueFetchedCandidateAction flow.
 //
-// STRICT LIMITS (see docs/limited-discovery-scan.md):
-//   - max 5 links returned per discovery run
+// STRICT LIMITS:
+//   - max 20 links returned per discovery run
 //   - same-domain only (unless source_type is archive/wayback)
-//   - no recursive following
+//   - no recursive following — discovery does NOT auto-fetch discovered links
 //   - no scheduling
 //   - zero DB writes until curator clicks Queue Candidate
+//
+// CONNECTORS:
+//   - reddit source_type  → JSON API (reddit.com/r/sub/new.json)
+//   - all others          → HTML anchor extraction
 // ---------------------------------------------------------------------------
 
-const DISCOVERY_MAX_LINKS = 5;
+const DISCOVERY_MAX_LINKS = 20;
 
 const DISCOVERY_KEYWORDS = [
   'story', 'experience', 'thread', 'report', 'archive', 'forum', 'sighting',
@@ -629,6 +634,112 @@ function discoveryKeywordMatch(url: string, text: string): string | null {
 
 const SKIP_EXTENSIONS = /\.(css|js|jpg|jpeg|png|gif|svg|ico|webp|woff|woff2|ttf|eot|pdf|zip|xml|json|rss|atom)(\?|$)/i;
 
+const REDDIT_HOST = /^(www\.)?reddit\.com$/;
+
+// Reddit connector — fetch new posts from a subreddit JSON listing.
+async function discoverRedditPosts(
+  source: DbScannerSource,
+): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+  const jsonUrl = source.base_url!.replace(/\/?$/, '') + '/new.json?limit=50';
+  let data: unknown;
+  try {
+    const res = await fetch(jsonUrl, {
+      cache: 'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'application/json',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return { error: `Reddit JSON HTTP ${res.status}` };
+    data = await res.json();
+  } catch (err) {
+    return { error: `Reddit fetch — ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  type RPost = { data: { title: string; permalink: string; selftext: string; score: number; num_comments: number; subreddit: string } };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const posts: RPost[] = (data as any)?.data?.children ?? [];
+
+  const links: DiscoveredLink[] = [];
+  for (const { data: p } of posts) {
+    if (links.length >= DISCOVERY_MAX_LINKS) break;
+    const combined  = `${p.title} ${p.selftext}`.toLowerCase();
+    const matched: string[] = [];
+    for (const kw of DISCOVERY_KEYWORDS) {
+      if (combined.includes(kw)) matched.push(kw);
+      if (matched.length >= 3) break;
+    }
+    if (matched.length === 0) continue;
+    links.push({
+      url:         `https://www.reddit.com${p.permalink}`,
+      linkText:    p.title,
+      matchReason: `r/${p.subreddit} · ${p.score}↑ · ${p.num_comments} comments · matched: ${matched.join(', ')}`,
+    });
+  }
+  return { links };
+}
+
+// Reddit connector — fetch a single post via JSON API for structured metadata.
+async function fetchRedditPostPreview(
+  source: DbScannerSource,
+  url: string,
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
+  const jsonUrl = url.replace(/\/?$/, '') + '.json';
+  let data: unknown;
+  try {
+    const res = await fetch(jsonUrl, {
+      cache: 'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'application/json',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return { error: `Reddit post JSON HTTP ${res.status}` };
+    data = await res.json();
+  } catch (err) {
+    return { error: `Reddit post fetch — ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  type PostData = {
+    title: string; selftext: string; author: string; score: number;
+    num_comments: number; subreddit: string; created_utc: number; url: string;
+    preview?: { images?: [{ source: { url: string } }] };
+  };
+  // Reddit JSON is [listing, comments] — post at [0].data.children[0].data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = (data as any)?.[0]?.data?.children?.[0]?.data as PostData | undefined;
+  if (!p) return { error: 'could not parse Reddit post data' };
+
+  const title   = (p.title ?? 'Untitled Reddit Post').slice(0, 200);
+  const summary = (p.selftext?.trim()
+    ? p.selftext
+    : `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
+  ).slice(0, 2000);
+  const rawImg  = p.preview?.images?.[0]?.source?.url;
+  const imageUrl = rawImg ? rawImg.replace(/&amp;/g, '&') : undefined;
+  const conf    = scoreExtractionConfidence(title, summary);
+  const postedDate = new Date(p.created_utc * 1000).toISOString().slice(0, 10);
+
+  const candidate: FetchedCandidate = {
+    title,
+    summary,
+    sourceUrl:            url,
+    category:             source.category_focus[0] ?? 'Internet Lore',
+    tags:                 ['scanner-source', 'reddit', 'discovered-link', `r-${p.subreddit}`],
+    anomalyScore:         5,
+    categoryNote:         buildCategoryNote(source.category_focus, title, summary),
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
+    sourceImageUrl:       imageUrl,
+    mediaType:            imageUrl ? 'image' : 'webpage',
+    attributionText:      `Recovered from r/${p.subreddit} · u/${p.author} · Reddit`,
+    captureNotes:         `r/${p.subreddit} · u/${p.author} · ${p.score}↑ · ${p.num_comments} comments · posted ${postedDate}. Raw content not stored.`,
+  };
+  return { candidate };
+}
+
 export async function discoverSourceLinksAction(
   sourceId: string,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
@@ -636,6 +747,11 @@ export async function discoverSourceLinksAction(
   if (!source)          return { error: 'source not found in registry' };
   if (!source.enabled)  return { error: 'source must be enabled before discovery' };
   if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  // Reddit connector — use JSON API instead of HTML scraping
+  if (source.source_type === 'reddit') {
+    return discoverRedditPosts(source);
+  }
 
   let html: string;
   try {
@@ -722,8 +838,13 @@ export async function fetchDiscoveredLinkPreviewAction(
   const isArchiveType =
     source.source_type === 'archive' ||
     baseHostname.includes('archive.org');
-  if (!isArchiveType && parsedUrl.hostname !== baseHostname) {
+  if (!isArchiveType && parsedUrl.hostname !== baseHostname && !REDDIT_HOST.test(parsedUrl.hostname)) {
     return { error: `cross-domain fetch blocked — ${parsedUrl.hostname} is not ${baseHostname}` };
+  }
+
+  // Reddit connector — use JSON API for structured post metadata
+  if (REDDIT_HOST.test(parsedUrl.hostname)) {
+    return fetchRedditPostPreview(source, url);
   }
 
   let html: string;
@@ -769,6 +890,45 @@ export async function fetchDiscoveredLinkPreviewAction(
   };
 
   return { candidate };
+}
+
+// Batch-fetch multiple discovered URLs in parallel.
+// Returns SessionSourceResult[] (same shape as runFetchSessionAction) so
+// the BatchResultsPanel can reuse SessionResultCard directly.
+// Max 20 URLs. Zero DB writes — curator must queue each candidate.
+export async function batchFetchDiscoveredLinksAction(
+  sourceId: string,
+  urls:     string[],
+): Promise<{ results: SessionSourceResult[] } | { error: string }> {
+  if (urls.length === 0) return { results: [] };
+  if (urls.length > 20)  return { error: 'batch limited to 20 URLs' };
+
+  const source = await getScannerSource(sourceId);
+  if (!source)         return { error: 'source not found in registry' };
+  if (!source.enabled) return { error: 'source must be enabled' };
+
+  const results: SessionSourceResult[] = await Promise.all(
+    urls.map(async (url): Promise<SessionSourceResult> => {
+      const fetched = await fetchDiscoveredLinkPreviewAction(sourceId, url);
+      if ('error' in fetched) {
+        return { sourceId, sourceName: url, status: 'error', error: fetched.error };
+      }
+      const { candidate } = fetched;
+      const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+      if (dupes.length > 0) {
+        return {
+          sourceId,
+          sourceName: candidate.title,
+          status:     'duplicate',
+          candidate,
+          duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })),
+        };
+      }
+      return { sourceId, sourceName: candidate.title, status: 'preview', candidate };
+    }),
+  );
+
+  return { results };
 }
 
 // Curator action — rebirth a recovered signal as a SWIM thread using

@@ -12,6 +12,7 @@ import { useState, useMemo, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AmbientGrid } from '@/components/AmbientGrid';
 import { AdminFlowBanner } from '@/components/AdminFlowBanner';
+import { AdminNav } from '@/components/AdminNav';
 import { IntakeFormClient } from '@/components/IntakeFormClient';
 import { analyzeRecoveredSignal } from '@/lib/ai-analysis';
 import type { SignalAnalysis } from '@/lib/ai-analysis';
@@ -1865,7 +1866,7 @@ export function SignalQueueClient({
 
         {/* Title bar */}
         <div className="border-b border-crt/10 px-4 py-4 md:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-[13px] font-medium text-crt/35">
                 SWIM · Curator Console
@@ -1885,6 +1886,7 @@ export function SignalQueueClient({
               {showIntake ? '− Close Intake' : '+ Add Signal'}
             </button>
           </div>
+          <AdminNav current="queue" />
         </div>
 
         {/* Status tabs */}

@@ -11,8 +11,10 @@ import {
   runFetchSessionAction,
   discoverSourceLinksAction,
   fetchDiscoveredLinkPreviewAction,
+  batchFetchDiscoveredLinksAction,
 } from '@/app/actions';
 import { AdminFlowBanner } from '@/components/AdminFlowBanner';
+import { AdminNav } from '@/components/AdminNav';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource, ScannerRiskLevel } from '@/lib/supabase/types';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
@@ -967,19 +969,38 @@ type DiscoverState =
   | null
   | { status: 'discovering' }
   | { status: 'results'; links: DiscoveredLink[] }
+  | { status: 'batch-fetching'; count: number }
+  | { status: 'batch-results'; entries: SessionEntry[] }
   | { status: 'error'; message: string };
 
 // ---------------------------------------------------------------------------
-// DiscoveryLinksPanel — shows up to 5 discovered links for curator selection
+// DiscoveryLinksPanel — multi-select discovered links for batch or single fetch
 // ---------------------------------------------------------------------------
 
 interface DiscoveryLinksPanelProps {
-  links:       DiscoveredLink[];
-  onFetchLink: (url: string) => void;
-  onClose:     () => void;
+  links:        DiscoveredLink[];
+  onFetchLink:  (url: string) => void;
+  onBatchFetch: (urls: string[]) => void;
+  onClose:      () => void;
 }
 
-function DiscoveryLinksPanel({ links, onFetchLink, onClose }: DiscoveryLinksPanelProps) {
+function DiscoveryLinksPanel({ links, onFetchLink, onBatchFetch, onClose }: DiscoveryLinksPanelProps) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggle(url: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url); else next.add(url);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(selected.size === links.length ? new Set() : new Set(links.map((l) => l.url)));
+  }
+
+  const allSelected = selected.size === links.length && links.length > 0;
+
   return (
     <div
       className="border-t border-crt/12 px-6 py-5"
@@ -992,56 +1013,199 @@ function DiscoveryLinksPanel({ links, onFetchLink, onClose }: DiscoveryLinksPane
       >
         <span className="shrink-0 text-[18px] font-bold" style={{ color: '#4db8c8' }}>◈</span>
         <p className="text-[15px] leading-relaxed text-crt/58">
-          <span className="font-semibold text-crt/82">Limited discovery scan</span>
-          {' · '}max 5 links · same-domain only · no recursive crawl ·
+          <span className="font-semibold text-crt/82">Discovery scan</span>
+          {' · '}max 20 links · same-domain only · no recursive crawl ·
           no DB writes until you click{' '}
           <span className="font-semibold text-crt/78">Queue Candidate</span>
         </p>
       </div>
 
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-[17px] font-semibold text-crt/65">
-          {links.length} candidate link{links.length !== 1 ? 's' : ''} discovered
-        </p>
+      {/* Header: count + select-all + batch button + close */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-4">
+          <p className="text-[17px] font-semibold text-crt/65">
+            {links.length} link{links.length !== 1 ? 's' : ''} discovered
+          </p>
+          <button
+            onClick={toggleAll}
+            className="text-[14px] text-crt/42 transition-colors hover:text-crt/70"
+          >
+            {allSelected ? 'Deselect All' : 'Select All'}
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          {selected.size > 0 && (
+            <button
+              onClick={() => onBatchFetch([...selected])}
+              className="min-h-[48px] border-2 px-5 py-2 text-[16px] font-black uppercase tracking-[0.04em] transition-all"
+              style={{ borderColor: 'rgba(134,212,110,0.55)', color: '#86d46e', background: 'rgba(134,212,110,0.09)' }}
+            >
+              ↯ FETCH SELECTED ({selected.size})
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-sm text-crt/35 transition-colors hover:text-crt/62"
+          >
+            × Close
+          </button>
+        </div>
+      </div>
+
+      {/* Link cards with checkboxes */}
+      <div className="space-y-2">
+        {links.map((link) => {
+          const isSelected = selected.has(link.url);
+          return (
+            <div
+              key={link.url}
+              className="border px-5 py-4 transition-colors"
+              style={{
+                borderColor: isSelected ? 'rgba(134,212,110,0.38)' : 'rgba(134,212,110,0.14)',
+                background:  isSelected ? 'rgba(134,212,110,0.055)' : 'rgba(4,7,5,0.60)',
+              }}
+            >
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggle(link.url)}
+                  className="mt-1.5 shrink-0 accent-crt"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="mb-0.5 text-[17px] font-semibold text-crt/88 leading-snug line-clamp-2">
+                    {link.linkText}
+                  </p>
+                  <p className="mb-1 truncate font-mono text-[12px] text-crt/38">{link.url}</p>
+                  <p className="text-[13px] text-crt/42">
+                    <span className="text-crt/28">match: </span>{link.matchReason}
+                  </p>
+                </div>
+              </label>
+
+              <div className="mt-3 flex flex-wrap items-center gap-3 pl-6">
+                <button
+                  onClick={() => onFetchLink(link.url)}
+                  className="min-h-[40px] border border-crt/25 bg-[rgba(134,212,110,0.05)] px-4 text-[14px] font-semibold text-crt/65 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.10)] hover:text-crt/88"
+                >
+                  ↯ Fetch Preview
+                </button>
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[13px] text-crt/35 transition-colors hover:text-crt/60"
+                >
+                  Open ↗
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Sticky batch button at bottom when multiple selected */}
+      {selected.size > 1 && (
+        <div className="mt-4 border-t border-crt/10 pt-4">
+          <button
+            onClick={() => onBatchFetch([...selected])}
+            className="min-h-[56px] w-full border-2 py-3 text-[18px] font-black uppercase tracking-[0.05em] transition-all"
+            style={{ borderColor: 'rgba(134,212,110,0.55)', color: '#86d46e', background: 'rgba(134,212,110,0.09)' }}
+          >
+            ↯ FETCH ALL SELECTED — {selected.size} links
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BatchResultsPanel — review and queue multiple batch-fetched candidates
+// ---------------------------------------------------------------------------
+
+interface BatchResultsPanelProps {
+  entries:        SessionEntry[];
+  onStatusChange: (idx: number, status: 'queued' | 'skipped') => void;
+  onClose:        () => void;
+}
+
+function BatchResultsPanel({ entries, onStatusChange, onClose }: BatchResultsPanelProps) {
+  const total   = entries.length;
+  const queued  = entries.filter((e) => e.actionStatus === 'queued').length;
+  const skipped = entries.filter((e) => e.actionStatus === 'skipped').length;
+  const failed  = entries.filter((e) => e.result.status === 'error').length;
+  const pending = entries.filter((e) => e.actionStatus === 'pending').length;
+
+  const stats = [
+    { label: 'Fetched', value: total,   color: '#86d46e'                                            },
+    { label: 'Queued',  value: queued,  color: queued  > 0 ? '#86d46e'  : 'rgba(134,212,110,0.28)' },
+    { label: 'Skipped', value: skipped, color: 'rgba(134,212,110,0.35)'                             },
+    { label: 'Failed',  value: failed,  color: failed  > 0 ? '#ff6b6b'  : 'rgba(134,212,110,0.28)' },
+  ] as const;
+
+  return (
+    <div className="border-t border-crt/12" style={{ background: 'rgba(4,7,5,0.85)' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-crt/10 px-6 py-4">
+        <div>
+          <h3 className="text-[20px] font-bold text-crt/88">Batch Discovery Results</h3>
+          <p className="mt-0.5 text-[14px] text-crt/42">
+            {total} candidate{total !== 1 ? 's' : ''} · review each before queueing · no DB writes until Queue Candidate
+          </p>
+        </div>
         <button
           onClick={onClose}
-          className="text-sm text-crt/35 transition-colors hover:text-crt/62"
+          className="min-h-[36px] border border-crt/15 px-4 py-1 text-sm text-crt/38 transition-colors hover:border-crt/28 hover:text-crt/65"
         >
-          × Close
+          Close
         </button>
       </div>
 
-      <div className="space-y-3">
-        {links.map((link) => (
-          <div
-            key={link.url}
-            className="border border-crt/14 bg-[rgba(4,7,5,0.60)] px-5 py-4"
-          >
-            <p className="mb-1 text-[17px] font-semibold text-crt/88 leading-snug line-clamp-2">
-              {link.linkText}
-            </p>
-            <p className="mb-2 truncate font-mono text-[13px] text-crt/38">{link.url}</p>
-            <p className="mb-3 text-[14px] text-crt/45">
-              <span className="text-crt/30">Match: </span>{link.matchReason}
-            </p>
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                onClick={() => onFetchLink(link.url)}
-                className="min-h-[44px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-4 text-[15px] font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92"
-              >
-                ↯ Fetch Preview
-              </button>
-              <a
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[14px] text-crt/38 transition-colors hover:text-crt/65"
-              >
-                Open ↗
-              </a>
+      {/* Stats bar */}
+      <div className="grid grid-cols-4 border-b border-crt/8 bg-[rgba(4,7,5,0.40)]">
+        {stats.map(({ label, value, color }) => (
+          <div key={label} className="px-4 py-4 text-center">
+            <div className="font-mono text-2xl font-bold tabular-nums leading-none" style={{ color: String(color) }}>
+              {value}
             </div>
+            <div className="mt-1.5 text-xs font-semibold text-crt/35">{label}</div>
           </div>
         ))}
+      </div>
+
+      {/* Result cards */}
+      <div className="divide-y divide-crt/8">
+        {entries.map((entry, idx) => (
+          <SessionResultCard
+            key={`${entry.result.sourceId}-${idx}`}
+            result={entry.result}
+            actionStatus={entry.actionStatus}
+            onStatusChange={(status) => onStatusChange(idx, status)}
+          />
+        ))}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between border-t border-crt/10 px-6 py-4">
+        <p className="text-[14px] text-crt/45">
+          {pending > 0
+            ? `${pending} candidate${pending !== 1 ? 's' : ''} pending review`
+            : 'All candidates reviewed'}
+        </p>
+        <div className="flex items-center gap-4">
+          {queued > 0 && (
+            <a href="/scanner/queue" className="admin-btn admin-btn-primary">
+              View Queue ({queued}) →
+            </a>
+          )}
+          <button
+            onClick={onClose}
+            className="text-sm text-crt/35 transition-colors hover:text-crt/60"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1155,6 +1319,32 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
     });
   }
 
+  function handleBatchFetch(urls: string[]) {
+    setDiscoverState({ status: 'batch-fetching', count: urls.length });
+    setFetchState(null);
+    startDiscover(async () => {
+      const result = await batchFetchDiscoveredLinksAction(source.id, urls);
+      if ('error' in result) {
+        setDiscoverState({ status: 'error', message: result.error });
+        return;
+      }
+      setDiscoverState({
+        status:  'batch-results',
+        entries: result.results.map((r) => ({ result: r, actionStatus: 'pending' as const })),
+      });
+    });
+  }
+
+  function handleBatchStatusChange(idx: number, status: 'queued' | 'skipped') {
+    setDiscoverState((prev) => {
+      if (prev?.status !== 'batch-results') return prev;
+      return {
+        ...prev,
+        entries: prev.entries.map((e, i) => (i === idx ? { ...e, actionStatus: status } : e)),
+      };
+    });
+  }
+
   function handleQueueCandidate(form: PreviewFormState) {
     if (fetchState?.status !== 'preview') return;
     const cand      = fetchState.candidate;
@@ -1236,66 +1426,48 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
     >
       {/* ── CARD HEADER ── */}
       {!isEditing && (
-        <div className="px-6 pt-6 pb-5">
-          {/* Name row + action buttons */}
-          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h3 className="text-[28px] font-bold text-crt/92">{source.name}</h3>
-              <TypeBadge type={source.source_type} />
-              <RiskBadge level={source.risk_level} />
-            </div>
-            <div className="flex flex-wrap items-center gap-2.5">
-              {/* Enable / Disable toggle */}
-              <button
-                onClick={handleToggle}
-                disabled={togglePending}
-                className="min-h-[56px] border px-5 py-2 text-[18px] font-bold transition-colors disabled:opacity-40"
-                style={
-                  source.enabled
-                    ? { borderColor: 'rgba(134,212,110,0.55)', color: '#86d46e', background: 'rgba(134,212,110,0.14)' }
-                    : { borderColor: 'rgba(134,212,110,0.18)', color: 'rgba(134,212,110,0.42)', background: 'transparent' }
-                }
-              >
-                {togglePending ? '···' : source.enabled ? '● Enabled' : '○ Disabled'}
-              </button>
+        <div className="px-6 pt-6 pb-6">
 
-              {/* Fetch preview */}
-              {canFetch && (
+          {/* Status pill row + secondary controls */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            {/* Status pill */}
+            <span
+              className="inline-flex items-center gap-2 px-4 py-2 text-[17px] font-black uppercase tracking-[0.10em]"
+              style={
+                source.enabled
+                  ? { color: '#86d46e', background: 'rgba(134,212,110,0.14)', border: '2px solid rgba(134,212,110,0.55)' }
+                  : { color: 'rgba(134,212,110,0.38)', background: 'rgba(4,7,5,0.60)', border: '2px solid rgba(134,212,110,0.18)' }
+              }
+            >
+              <span>{source.enabled ? '●' : '○'}</span>
+              {source.enabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+
+            {/* Small secondary controls */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {source.enabled && (
                 <button
-                  onClick={handleFetch}
-                  disabled={isBusy}
-                  title="Fetch base URL — one page, no crawl, preview before queueing"
-                  className="min-h-[56px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-5 py-2 text-[18px] font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92 disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={handleToggle}
+                  disabled={togglePending}
+                  className="min-h-[40px] border border-crt/18 px-4 py-1.5 text-[15px] text-crt/40 transition-colors hover:border-crt/30 hover:text-crt/65 disabled:opacity-40"
                 >
-                  {fetchPending || fetchState?.status === 'fetching' ? '↯ Fetching…' : '↯ Fetch Preview'}
+                  {togglePending ? '···' : 'Disable'}
                 </button>
               )}
-
-              {/* Discover links */}
-              {canFetch && (
-                <button
-                  onClick={handleDiscover}
-                  disabled={isBusy}
-                  title="Limited discovery scan — max 5 links, same-domain, no recursion"
-                  className="min-h-[56px] border px-5 py-2 text-[18px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                  style={
-                    discoverState?.status === 'results'
-                      ? { borderColor: 'rgba(77,184,200,0.55)', color: '#4db8c8', background: 'rgba(77,184,200,0.10)' }
-                      : { borderColor: 'rgba(77,184,200,0.25)', color: 'rgba(77,184,200,0.70)', background: 'transparent' }
-                  }
-                >
-                  {discoverPending || discoverState?.status === 'discovering' ? '◈ Scanning…' : '◈ Discover Links'}
-                </button>
-              )}
-
-              {/* Edit */}
               <button
                 onClick={() => { setIsEditing(true); setFetchState(null); setDiscoverState(null); }}
-                className="min-h-[56px] border border-crt/15 px-5 py-2 text-[18px] text-crt/50 transition-colors hover:border-crt/30 hover:text-crt/75"
+                className="min-h-[40px] border border-crt/15 px-4 py-1.5 text-[15px] text-crt/42 transition-colors hover:border-crt/28 hover:text-crt/68"
               >
-                Edit
+                Edit Details
               </button>
             </div>
+          </div>
+
+          {/* Source name + type + risk */}
+          <div className="mb-4 flex flex-wrap items-center gap-2.5">
+            <h3 className="text-[28px] font-bold text-crt/92">{source.name}</h3>
+            <TypeBadge type={source.source_type} />
+            <RiskBadge level={source.risk_level} />
           </div>
 
           {/* Description */}
@@ -1306,7 +1478,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           )}
 
           {/* Metadata grid */}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+          <div className="mb-5 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
             {source.base_url && (
               <div>
                 <div className="mb-1 text-[16px] font-semibold text-crt/42">URL</div>
@@ -1350,10 +1522,74 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           </div>
 
           {source.attribution_rules && (
-            <div className="mt-4 border-t border-crt/8 pt-3 text-sm leading-relaxed text-crt/32">
+            <div className="mb-5 border-t border-crt/8 pt-3 text-sm leading-relaxed text-crt/32">
               <span className="font-semibold text-crt/22">Attribution: </span>
               {source.attribution_rules.slice(0, 120)}{source.attribution_rules.length > 120 ? '…' : ''}
             </div>
+          )}
+
+          {/* Status hint */}
+          <div className="mb-5">
+            {source.enabled ? (
+              <p className="text-[17px] font-semibold" style={{ color: 'rgba(134,212,110,0.65)' }}>
+                ● Ready to scan.
+              </p>
+            ) : (
+              <p className="text-[17px] text-crt/38">
+                ○ Enable this source before scanning.
+              </p>
+            )}
+          </div>
+
+          {/* Primary action buttons */}
+          {source.enabled ? (
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Huge primary: RUN FETCH PREVIEW */}
+              <button
+                onClick={handleFetch}
+                disabled={isBusy || !source.base_url}
+                title="Fetch base URL — one page, no crawl, preview before queueing"
+                className="min-h-[64px] flex-1 border-2 px-6 py-3 text-[20px] font-black uppercase tracking-[0.05em] transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                style={{
+                  borderColor: source.base_url ? 'rgba(134,212,110,0.55)' : 'rgba(134,212,110,0.18)',
+                  color:       source.base_url ? '#86d46e'                : 'rgba(134,212,110,0.35)',
+                  background:  source.base_url ? 'rgba(134,212,110,0.09)' : 'transparent',
+                }}
+              >
+                {fetchPending || fetchState?.status === 'fetching' ? '↯ Fetching…' : '↯ RUN FETCH PREVIEW'}
+              </button>
+
+              {/* Secondary: DISCOVER LINKS */}
+              {source.base_url && (
+                <button
+                  onClick={handleDiscover}
+                  disabled={isBusy}
+                  title="Limited discovery scan — max 5 links, same-domain, no recursion"
+                  className="min-h-[64px] border px-5 py-3 text-[18px] font-bold uppercase tracking-[0.04em] transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                  style={
+                    discoverState?.status === 'results'
+                      ? { borderColor: 'rgba(77,184,200,0.55)', color: '#4db8c8',             background: 'rgba(77,184,200,0.10)' }
+                      : { borderColor: 'rgba(77,184,200,0.28)', color: 'rgba(77,184,200,0.68)', background: 'transparent' }
+                  }
+                >
+                  {discoverPending || discoverState?.status === 'discovering' ? '◈ Scanning…' : '◈ DISCOVER LINKS'}
+                </button>
+              )}
+            </div>
+          ) : (
+            /* Huge primary: ENABLE SOURCE */
+            <button
+              onClick={handleToggle}
+              disabled={togglePending}
+              className="min-h-[64px] w-full border-2 px-6 py-3 text-[20px] font-black uppercase tracking-[0.05em] transition-all disabled:cursor-not-allowed disabled:opacity-40"
+              style={{
+                borderColor: 'rgba(134,212,110,0.42)',
+                color:       'rgba(134,212,110,0.80)',
+                background:  'rgba(134,212,110,0.07)',
+              }}
+            >
+              {togglePending ? '···' : '↯ ENABLE SOURCE'}
+            </button>
           )}
         </div>
       )}
@@ -1407,7 +1643,22 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               style={{ background: '#4db8c8', boxShadow: '0 0 6px #4db8c880' }}
             />
             <span className="text-base text-crt/50">
-              Discovery scan · extracting links · max 5 · same-domain only
+              Discovery scan · extracting links · max 20 · same-domain only
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── BATCH FETCHING ── */}
+      {!isEditing && discoverState?.status === 'batch-fetching' && (
+        <div className="border-t border-crt/8 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="h-2 w-2 rounded-full shrink-0"
+              style={{ background: '#86d46e', boxShadow: '0 0 6px #86d46e80' }}
+            />
+            <span className="text-base text-crt/50">
+              Fetching {discoverState.count} link{discoverState.count !== 1 ? 's' : ''} in parallel · no crawl · raw HTML discarded
             </span>
           </div>
         </div>
@@ -1418,6 +1669,16 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
         <DiscoveryLinksPanel
           links={discoverState.links}
           onFetchLink={handleFetchDiscoveredLink}
+          onBatchFetch={handleBatchFetch}
+          onClose={() => setDiscoverState(null)}
+        />
+      )}
+
+      {/* ── BATCH RESULTS ── */}
+      {!isEditing && discoverState?.status === 'batch-results' && (
+        <BatchResultsPanel
+          entries={discoverState.entries}
+          onStatusChange={handleBatchStatusChange}
           onClose={() => setDiscoverState(null)}
         />
       )}
@@ -1672,11 +1933,8 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
                 </div>
               </div>
 
-              {/* Nav links */}
-              <div className="flex items-center gap-4 text-base text-crt/38">
-                <a href="/scanner/queue" className="hover:text-crt/65 transition-colors">← queue</a>
-                <a href="/scanner" className="hover:text-crt/65 transition-colors">scanner →</a>
-              </div>
+              {/* Admin nav */}
+              <AdminNav current="sources" />
 
               {/* Add Source */}
               {!showAddForm && (
@@ -1722,7 +1980,7 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
                 style={{ color: enabledWithUrl > 0 ? 'rgba(134,212,110,0.55)' : 'rgba(134,212,110,0.28)' }}
               >
                 {enabledWithUrl > 0
-                  ? 'One page per source · no crawl · preview before queueing'
+                  ? 'Scans enabled sources only · one page · no crawl · preview before queueing'
                   : 'Enable at least one source with a URL first'}
               </span>
             </button>
