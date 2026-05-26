@@ -4,14 +4,18 @@
  * 'use server' / 'use client' boundary at the type level.
  */
 
+export type ExtractionConfidence = 'low' | 'medium' | 'high';
+
 export interface FetchedCandidate {
-  title:        string;  // cleaned page title
-  summary:      string;  // meta description + attribution
-  sourceUrl:    string;  // canonical URL or base_url
-  category:     string;  // suggested from source.category_focus[0]
-  tags:         string[];
-  anomalyScore: number;  // always 5 — curator sets the real score
-  categoryNote: string;  // e.g. "matched 2 keywords: ufo, paranormal"
+  title:                string;  // cleaned page title
+  summary:              string;  // meta description or readable snippet
+  sourceUrl:            string;  // canonical URL or base_url
+  category:             string;  // suggested from source.category_focus[0]
+  tags:                 string[];
+  anomalyScore:         number;  // always 5 — curator sets the real score
+  categoryNote:         string;  // e.g. "matched 2 keywords: ufo, paranormal"
+  extractionConfidence: ExtractionConfidence;   // quality rating of the extracted data
+  extractionWarning?:   string;  // set when confidence is low
 }
 
 export interface SignalDuplicate {

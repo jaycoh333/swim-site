@@ -196,61 +196,124 @@ function decodeHtmlEntities(str: string): string {
 }
 
 function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
-  const h = html.slice(0, 100_000);
+  const h = html.slice(0, 120_000);
 
-  // Title — prefer og:title, fallback to <title>
+  // JSON-LD structured data — highest fidelity when present
+  let jsonLdTitle = '';
+  let jsonLdDesc  = '';
+  const jsonLdMatch = h.match(/<script[^>]{0,200}type=["']application\/ld\+json["'][^>]*>([\s\S]{1,8000}?)<\/script>/i);
+  if (jsonLdMatch) {
+    try {
+      const ldRaw: unknown = JSON.parse(jsonLdMatch[1]);
+      const ld = (Array.isArray(ldRaw) ? ldRaw[0] : ldRaw) as Record<string, unknown> | null;
+      if (ld && typeof ld === 'object') {
+        jsonLdTitle = typeof ld.headline    === 'string' ? ld.headline.slice(0, 200)
+                    : typeof ld.name        === 'string' ? ld.name.slice(0, 200)
+                    : '';
+        jsonLdDesc  = typeof ld.description  === 'string' ? ld.description.slice(0, 600)
+                    : typeof ld.articleBody  === 'string' ? ld.articleBody.slice(0, 600)
+                    : '';
+      }
+    } catch { /* ignore malformed JSON-LD */ }
+  }
+
+  // Title — JSON-LD > og:title > <title>
   const ogTitle  = h.match(/<meta[^>]{0,300}property=["']og:title["'][^>]{0,300}content=["']([^"']{1,300})["']/i)
                 ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,300})["'][^>]{0,300}property=["']og:title["']/i);
   const tagTitle = h.match(/<title[^>]{0,50}>([^<]{1,300})<\/title>/i);
-  const title    = decodeHtmlEntities(ogTitle?.[1] ?? tagTitle?.[1] ?? '');
+  const title    = decodeHtmlEntities(jsonLdTitle || ogTitle?.[1] || tagTitle?.[1] || '');
 
-  // Description — prefer og:description, fallback to meta[name=description]
-  const ogDesc   = h.match(/<meta[^>]{0,300}property=["']og:description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
-                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}property=["']og:description["']/i);
-  const metaDesc = h.match(/<meta[^>]{0,300}name=["']description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
-                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']description["']/i);
-  const description = decodeHtmlEntities(ogDesc?.[1] ?? metaDesc?.[1] ?? '');
+  // Description — JSON-LD > og:description > meta[name=description] > twitter:description
+  const ogDesc      = h.match(/<meta[^>]{0,300}property=["']og:description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                   ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}property=["']og:description["']/i);
+  const metaDesc    = h.match(/<meta[^>]{0,300}name=["']description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                   ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']description["']/i);
+  const twitterDesc = h.match(/<meta[^>]{0,300}name=["']twitter:description["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                   ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']twitter:description["']/i);
+  const description = decodeHtmlEntities(jsonLdDesc || ogDesc?.[1] || metaDesc?.[1] || twitterDesc?.[1] || '');
 
   // Canonical URL
   const canonical = h.match(/<link[^>]{0,300}rel=["']canonical["'][^>]{0,300}href=["']([^"']{1,500})["']/i)
                  ?? h.match(/<link[^>]{0,300}href=["']([^"']{1,500})["'][^>]{0,300}rel=["']canonical["']/i);
   const canonicalUrl = canonical?.[1]?.trim() ?? fallbackUrl;
 
-  // Readable text snippet — strip scripts/styles/comments/tags
-  const snippet = h
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
+  // Readable snippet — strip structural noise before extracting text
+  // Step 1: remove entire nav/header/footer/aside/script/style/form blocks
+  let contentHtml = h
+    .replace(/<(nav|header|footer|aside|script|style|noscript|iframe|form)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+
+  // Step 2: prefer semantic content areas (<main> or <article>) for snippet
+  const mainMatch = contentHtml.match(/<(?:main|article)[^>]*>([\s\S]{80,15000}?)<\/(?:main|article)>/i);
+  const workHtml  = mainMatch ? mainMatch[1] : contentHtml;
+
+  // Step 3: strip remaining tags, collapse whitespace, take first 600 chars
+  const snippet = workHtml
     .replace(/<[^>]{0,1000}>/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim()
-    .slice(0, 400);
+    .slice(0, 600);
 
   return { title, description, canonicalUrl, snippet };
 }
 
 function cleanTitle(raw: string): string {
   let t = decodeHtmlEntities(raw).trim();
-  // Strip common " | Site Name" / " — Site Name" / " · Site Name" suffixes
-  for (const sep of [' | ', ' — ', ' · ']) {
+  // Strip common " | Site Name" / " — Site Name" / " · Site Name" / " - " / " :: " / " – " suffixes
+  for (const sep of [' | ', ' — ', ' – ', ' · ', ' :: ', ' - ']) {
     const idx = t.lastIndexOf(sep);
-    if (idx >= 15) {
+    if (idx >= 12) {
       const suffix = t.slice(idx + sep.length).trim();
-      if (suffix.length <= 60) { t = t.slice(0, idx).trim(); break; }
+      if (suffix.length >= 2 && suffix.length <= 60) { t = t.slice(0, idx).trim(); break; }
     }
   }
+  // Collapse multiple spaces
+  t = t.replace(/\s{2,}/g, ' ').trim();
   return t.slice(0, 200);
 }
 
-function buildSummary(description: string, snippet: string, sourceName: string, sourceUrl: string): string {
+function isGenericTitle(title: string): boolean {
+  const lc = title.toLowerCase().trim();
+  return (
+    lc.length < 10 ||
+    lc === 'home' || lc === 'index' || lc === 'welcome' || lc === 'untitled' ||
+    /^(home|index|welcome|untitled)\s*[|–—\-·]/.test(lc) ||
+    /^www\./.test(lc) ||
+    lc.startsWith('http')
+  );
+}
+
+function buildSummary(description: string, snippet: string): string {
   const desc = description.trim();
   const snip = snippet.trim();
-  const attr = `Source: ${sourceName} — ${sourceUrl}`;
 
-  if (desc.length >= 60)  return `${desc}\n\n${attr}`.slice(0, 2000);
-  if (desc.length > 0)    return `${desc}\n\n${snip ? snip + '\n\n' : ''}${attr}`.slice(0, 2000);
-  if (snip.length >= 40)  return `${snip}\n\n${attr}`.slice(0, 2000);
-  return `Manual scan of ${sourceUrl}. ${attr}`;
+  // Best case: meaningful description
+  if (desc.length >= 60)                    return desc.slice(0, 2000);
+  // Combine short description + snippet
+  if (desc.length > 0 && snip.length >= 20) return `${desc}\n\n${snip}`.slice(0, 2000);
+  // Snippet only
+  if (snip.length >= 40)                    return snip.slice(0, 2000);
+  // Short description only
+  if (desc.length > 0)                      return desc;
+  return 'No description extracted — edit manually before queueing.';
+}
+
+type ExtractionConfidenceLocal = 'low' | 'medium' | 'high';
+
+function scoreExtractionConfidence(
+  title:   string,
+  summary: string,
+): { confidence: ExtractionConfidenceLocal; warning: string | null } {
+  const hasRealTitle   = title.trim().length >= 15 && !isGenericTitle(title);
+  const hasGoodSummary = summary.length >= 80 && !summary.startsWith('No description extracted');
+  const hasSomeSummary = summary.length >= 25 && !summary.startsWith('No description extracted');
+
+  if (hasRealTitle && hasGoodSummary) return { confidence: 'high',   warning: null };
+  if (hasRealTitle && hasSomeSummary) return { confidence: 'medium', warning: null };
+  return {
+    confidence: 'low',
+    warning:    'Weak extraction — title or summary is missing or generic. Manual edit recommended.',
+  };
 }
 
 function buildCategoryNote(categoryFocus: string[], title: string, description: string): string {
@@ -307,16 +370,19 @@ export async function fetchScannerSourcePreviewAction(
   // Extract metadata — raw HTML discarded after this point
   const extracted = extractPageData(html, source.base_url);
   const title     = cleanTitle(extracted.title) || source.name;
-  const summary   = buildSummary(extracted.description, extracted.snippet, source.name, extracted.canonicalUrl || source.base_url);
+  const summary   = buildSummary(extracted.description, extracted.snippet);
+  const conf      = scoreExtractionConfidence(title, summary);
 
   const candidate: FetchedCandidate = {
-    title:        title.slice(0, 200),
-    summary:      summary.slice(0, 2000),
-    sourceUrl:    extracted.canonicalUrl || source.base_url,
-    category:     source.category_focus[0] ?? 'Internet Lore',
-    tags:         ['scanner-source', source.source_type],
-    anomalyScore: 5,
-    categoryNote: buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+    title:                title.slice(0, 200),
+    summary:              summary.slice(0, 2000),
+    sourceUrl:            extracted.canonicalUrl || source.base_url,
+    category:             source.category_focus[0] ?? 'Internet Lore',
+    tags:                 ['scanner-source', source.source_type],
+    anomalyScore:         5,
+    categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
   };
 
   return { candidate };
@@ -445,16 +511,19 @@ export async function runFetchSessionAction(
     // Extract metadata — raw HTML discarded after this point
     const extracted = extractPageData(html, source.base_url);
     const title     = cleanTitle(extracted.title) || source.name;
-    const summary   = buildSummary(extracted.description, extracted.snippet, source.name, extracted.canonicalUrl || source.base_url);
+    const summary   = buildSummary(extracted.description, extracted.snippet);
+    const conf      = scoreExtractionConfidence(title, summary);
 
     const candidate: FetchedCandidate = {
-      title:        title.slice(0, 200),
-      summary:      summary.slice(0, 2000),
-      sourceUrl:    extracted.canonicalUrl || source.base_url,
-      category:     source.category_focus[0] ?? 'Internet Lore',
-      tags:         ['scanner-source', source.source_type],
-      anomalyScore: 5,
-      categoryNote: buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+      title:                title.slice(0, 200),
+      summary:              summary.slice(0, 2000),
+      sourceUrl:            extracted.canonicalUrl || source.base_url,
+      category:             source.category_focus[0] ?? 'Internet Lore',
+      tags:                 ['scanner-source', source.source_type],
+      anomalyScore:         5,
+      categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+      extractionConfidence: conf.confidence,
+      extractionWarning:    conf.warning ?? undefined,
     };
 
     // Duplicate check — include in session results so curator sees it immediately

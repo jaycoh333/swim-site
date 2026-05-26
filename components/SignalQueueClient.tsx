@@ -520,9 +520,9 @@ function RebirthSuccessPanel({ result }: { result: PublishResult }) {
       {/* Success heading */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="mb-1.5 flex items-center gap-2.5">
-            <span className="text-2xl text-[#86d46e]">✓</span>
-            <span className="text-xl font-bold text-crt/92">Thread Reborn</span>
+          <div className="mb-1.5 flex items-center gap-3">
+            <span className="text-3xl text-[#86d46e]">✓</span>
+            <span className="text-2xl font-bold text-crt/92">Thread Reborn</span>
           </div>
           <p className="text-base text-crt/55">
             The signal is now a public SWIM thread.
@@ -532,15 +532,15 @@ function RebirthSuccessPanel({ result }: { result: PublishResult }) {
           href={`/threads/${result.threadSlug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex min-h-[52px] items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.10)] px-6 text-lg font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.18)]"
+          className="inline-flex min-h-[56px] items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.12)] px-6 text-xl font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.20)]"
         >
           Open Thread ↗
         </Link>
       </div>
 
-      {/* Step 4 label */}
+      {/* Step 5 label */}
       <p className="mb-4 text-sm font-semibold text-crt/45">
-        Step 4 — Copy social posts and share manually (no API calls made)
+        Step 5 — Copy social posts and share manually (no API calls made)
       </p>
 
       <div className="space-y-4">
@@ -632,13 +632,17 @@ function RebirthPanel({
   return (
     <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(2,3,3,0.70)]">
       {/* Header */}
-      <div className="border-b border-crt/12 px-5 py-6 md:px-6">
-        <div className="mb-2 text-base font-semibold text-[#c084fc]/78">Rebirth as Thread</div>
-        <p className="text-xl font-bold text-crt/90">
-          Publishing to:{' '}
-          <span className="text-[#c084fc]">{category}</span>
+      <div className="border-b border-[#c084fc]/20 bg-[rgba(192,132,252,0.05)] px-5 py-6 md:px-6">
+        <p className="mb-2 text-sm font-bold uppercase tracking-widest text-[#c084fc]/50">
+          Rebirth Editor — Step 4 of 5
         </p>
-        <p className="mt-2 text-base text-crt/52">
+        <p className="text-[1.7rem] font-black leading-tight text-crt/92">
+          This will create a{' '}
+          <span className="text-[#c084fc]">PUBLIC THREAD</span>
+          {' '}in{' '}
+          <span className="uppercase text-[#c084fc]">{category}</span>
+        </p>
+        <p className="mt-2.5 text-base text-crt/55">
           Edit the content below, complete the checklist, then click Publish.
           Remove the curator note from the body before publishing.
         </p>
@@ -1059,16 +1063,31 @@ function AnalysisPanel({ analysis }: { analysis: SignalAnalysis }) {
 // WorkflowStepBanner — contextual step indicator per card
 // ---------------------------------------------------------------------------
 
+const ACTION_PATH = [
+  { id: 'start-review',   label: 'START REVIEW'   },
+  { id: 'mark-ready',     label: 'MARK READY'     },
+  { id: 'open-editor',    label: 'OPEN EDITOR'    },
+  { id: 'publish-thread', label: 'PUBLISH THREAD' },
+  { id: 'copy-socials',   label: 'COPY SOCIALS'   },
+];
+
+const STATUS_ACTION_POS: Partial<Record<RecoveredSignalStatus, number>> = {
+  pending:         0,
+  reviewing:       1,
+  'rebirth-ready': 2,
+  approved:        2,
+};
+
 const WORKFLOW_STEPS: Partial<Record<RecoveredSignalStatus, {
   num:   number;
   label: string;
   hint:  string;
   color: string;
 }>> = {
-  pending:         { num: 1, label: 'Review Evidence',      hint: 'Read the signal, verify the source, check for red flags — then click Start Review',        color: STATUS_COLORS.pending         },
-  reviewing:       { num: 2, label: 'Mark Rebirth Ready',  hint: 'Satisfied with quality? Click Mark Rebirth Ready — or Approve/Archive/Reject below',       color: STATUS_COLORS.reviewing       },
-  'rebirth-ready': { num: 3, label: 'Open Rebirth Editor', hint: 'Open the editor, review the thread body, complete the checklist, then publish',              color: STATUS_COLORS['rebirth-ready'] },
-  approved:        { num: 3, label: 'Open Rebirth Editor', hint: 'Signal approved — open the rebirth editor to publish it as a public thread',                color: STATUS_COLORS.approved        },
+  pending:         { num: 3, label: 'Review Signal',  hint: 'Read the signal, verify the source, check for red flags — then click Start Review',  color: STATUS_COLORS.pending          },
+  reviewing:       { num: 3, label: 'Review Signal',  hint: 'Satisfied with quality? Click Mark Rebirth Ready — or Approve/Archive/Reject below', color: STATUS_COLORS.reviewing        },
+  'rebirth-ready': { num: 4, label: 'Rebirth Thread', hint: 'Open the editor, edit the thread body, complete the checklist, then publish',        color: STATUS_COLORS['rebirth-ready'] },
+  approved:        { num: 4, label: 'Rebirth Thread', hint: 'Signal approved — open the rebirth editor to publish it as a public thread',         color: STATUS_COLORS.approved         },
 };
 
 function WorkflowStepBanner({
@@ -1081,28 +1100,69 @@ function WorkflowStepBanner({
   if (isReborn) {
     return (
       <div className="border-t-2 border-[#c084fc]/30 bg-[rgba(192,132,252,0.06)] px-5 py-5 md:px-6">
-        <p className="mb-1 text-sm font-medium text-[#c084fc]/60">Step 4 of 4</p>
-        <p className="text-xl font-bold text-[#c084fc]/88">Copy Social Posts</p>
-        <p className="mt-1 text-base text-crt/50">Thread is live — use the copy buttons below</p>
+        <p className="mb-1 text-base font-medium text-[#c084fc]/60">Step 5 of 5</p>
+        <p className="text-2xl font-bold text-[#c084fc]/88">Copy Social Posts</p>
+        <p className="mt-1.5 text-base text-crt/55">Thread is live — copy Telegram and X posts below</p>
+        <div className="mt-3 flex flex-wrap items-center gap-y-1">
+          {ACTION_PATH.map(({ id, label }, i) => (
+            <span key={id} className="flex items-center">
+              {i > 0 && <span className="mx-1.5 text-[11px] text-crt/18">→</span>}
+              <span
+                className="px-1.5 py-0.5 text-[11px] font-bold"
+                style={{
+                  color:      i === 4 ? '#c084fc' : 'rgba(134,212,110,0.32)',
+                  background: i === 4 ? 'rgba(192,132,252,0.12)' : 'transparent',
+                  border:     i === 4 ? '1px solid rgba(192,132,252,0.28)' : '1px solid transparent',
+                }}
+              >
+                {label}
+              </span>
+            </span>
+          ))}
+        </div>
       </div>
     );
   }
 
-  const step = WORKFLOW_STEPS[sig.status];
-  if (!step) return null;
+  const step      = WORKFLOW_STEPS[sig.status];
+  const actionPos = STATUS_ACTION_POS[sig.status] ?? null;
+  if (!step || actionPos === null) return null;
 
   return (
     <div
       className="border-t-2 px-5 py-5 md:px-6"
       style={{ borderTopColor: `${step.color}45`, background: `${step.color}07` }}
     >
-      <p className="mb-1 text-sm font-medium" style={{ color: `${step.color}70` }}>
-        Step {step.num} of 4
+      <p className="mb-1 text-base font-medium" style={{ color: `${step.color}70` }}>
+        Step {step.num} of 5
       </p>
-      <p className="text-xl font-bold" style={{ color: `${step.color}cc` }}>
+      <p className="text-2xl font-bold" style={{ color: `${step.color}cc` }}>
         {step.label}
       </p>
-      <p className="mt-1 text-base text-crt/50">{step.hint}</p>
+      <p className="mt-1.5 text-base text-crt/55">{step.hint}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-y-1">
+        {ACTION_PATH.map(({ id, label }, i) => {
+          const isPast    = i < actionPos;
+          const isCurrent = i === actionPos;
+          return (
+            <span key={id} className="flex items-center">
+              {i > 0 && <span className="mx-1.5 text-[11px] text-crt/18">→</span>}
+              <span
+                className="px-1.5 py-0.5 text-[11px] font-bold"
+                style={{
+                  color:      isCurrent ? step.color
+                            : isPast    ? 'rgba(134,212,110,0.35)'
+                            :             'rgba(134,212,110,0.16)',
+                  background: isCurrent ? `${step.color}14` : 'transparent',
+                  border:     isCurrent ? `1px solid ${step.color}30` : '1px solid transparent',
+                }}
+              >
+                {label}
+              </span>
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1220,13 +1280,13 @@ function SignalCard({
 
       {/* ── TITLE + SUMMARY ── */}
       <div className="px-5 pb-3 pt-6 md:px-6">
-        <h3 className="text-2xl font-semibold leading-tight text-crt/95 md:text-[1.7rem]">
+        <h3 className="text-[28px] font-semibold leading-tight text-crt/95 md:text-[32px]">
           {sig.title}
         </h3>
       </div>
 
       <div className="px-5 pb-6 md:px-6">
-        <p className="text-lg leading-relaxed text-crt/78">
+        <p className="text-xl leading-relaxed text-crt/78">
           {sig.summary}
         </p>
       </div>
@@ -1272,7 +1332,7 @@ function SignalCard({
               <button
                 onClick={() => onStatusChange(sig.id, 'reviewing')}
                 disabled={busy}
-                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#4db8c8]/55 bg-[rgba(77,184,200,0.10)] px-6 text-lg font-bold text-[#4db8c8] transition-colors hover:bg-[rgba(77,184,200,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[56px] w-full items-center justify-between border-2 border-[#4db8c8]/55 bg-[rgba(77,184,200,0.10)] px-6 text-lg font-bold text-[#4db8c8] transition-colors hover:bg-[rgba(77,184,200,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
                 <span>Start Review →</span>
               </button>
@@ -1281,7 +1341,7 @@ function SignalCard({
               <button
                 onClick={() => onStatusChange(sig.id, 'rebirth-ready')}
                 disabled={busy}
-                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[56px] w-full items-center justify-between border-2 border-[#c084fc]/55 bg-[rgba(192,132,252,0.10)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.18)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
                 <span>Mark Rebirth Ready →</span>
               </button>
@@ -1290,7 +1350,7 @@ function SignalCard({
               <button
                 onClick={() => onRequestRebirth(sig)}
                 disabled={busy}
-                className="flex min-h-[52px] w-full items-center justify-between border-2 border-[#c084fc]/70 bg-[rgba(192,132,252,0.14)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.24)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
+                className="flex min-h-[56px] w-full items-center justify-between border-2 border-[#c084fc]/70 bg-[rgba(192,132,252,0.14)] px-6 text-lg font-bold text-[#c084fc] transition-colors hover:bg-[rgba(192,132,252,0.24)] disabled:cursor-not-allowed disabled:opacity-30 sm:inline-flex sm:w-auto"
               >
                 <span>Open Rebirth Editor →</span>
               </button>
@@ -1812,8 +1872,8 @@ export function SignalQueueClient({
           </div>
         </div>
 
-        {/* Operator flow — 4-step visual workflow */}
-        <AdminFlowBanner currentStep={2} />
+        {/* Operator flow — 5-step visual workflow */}
+        <AdminFlowBanner currentStep={3} />
 
         {/* Status tabs */}
         <div className="border-b border-crt/8 px-4 md:px-8">
@@ -1905,6 +1965,54 @@ export function SignalQueueClient({
             {errorMsg}
           </div>
         )}
+
+        {/* ── PAGE ACTION CARDS ── */}
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <button
+            onClick={() => setActiveTab('pending')}
+            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(215,168,92,0.04)]"
+            style={{ borderColor: 'rgba(215,168,92,0.22)', background: 'rgba(8,12,6,0.90)' }}
+          >
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-mono text-4xl font-black leading-none" style={{ color: '#d7a85c' }}>
+                {counts.pending}
+              </span>
+              <span className="text-base" style={{ color: 'rgba(215,168,92,0.55)' }}>pending</span>
+            </div>
+            <span className="text-lg font-bold text-crt/88">Review Next Signal</span>
+            <span className="mt-1 text-sm text-crt/45">Open pending signals, read evidence, start review</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('rebirth-ready')}
+            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(192,132,252,0.04)]"
+            style={{ borderColor: 'rgba(192,132,252,0.22)', background: 'rgba(8,12,6,0.90)' }}
+          >
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-mono text-4xl font-black leading-none" style={{ color: '#c084fc' }}>
+                {counts['rebirth-ready']}
+              </span>
+              <span className="text-base" style={{ color: 'rgba(192,132,252,0.55)' }}>ready</span>
+            </div>
+            <span className="text-lg font-bold text-crt/88">Prepare Rebirth</span>
+            <span className="mt-1 text-sm text-crt/45">Open the rebirth editor and publish as a thread</span>
+          </button>
+
+          <a
+            href="/threads"
+            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(134,212,110,0.03)]"
+            style={{ borderColor: 'rgba(134,212,110,0.18)', background: 'rgba(8,12,6,0.90)' }}
+          >
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-mono text-4xl font-black leading-none text-crt/70">
+                {allSignals.filter((s) => Boolean(s.published_thread_id)).length}
+              </span>
+              <span className="text-base text-crt/38">published</span>
+            </div>
+            <span className="text-lg font-bold text-crt/88">View Reborn Threads</span>
+            <span className="mt-1 text-sm text-crt/45">Browse all published threads on SWIM</span>
+          </a>
+        </div>
 
         {/* Two-column */}
         <div className="flex flex-col gap-6 md:flex-row md:items-start lg:gap-10">

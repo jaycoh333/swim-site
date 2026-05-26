@@ -164,12 +164,41 @@ function CandidatePreviewPanel({ candidate, isQueueing, onSubmit, onCancel }: Ca
 
   const canQueue = form.title.trim().length >= 4 && form.summary.trim().length >= 10;
 
+  const confColor =
+    candidate.extractionConfidence === 'high'   ? '#86d46e' :
+    candidate.extractionConfidence === 'medium' ? '#d7a85c' : '#ff6b6b';
+  const confBg =
+    candidate.extractionConfidence === 'high'   ? 'rgba(134,212,110,0.08)' :
+    candidate.extractionConfidence === 'medium' ? 'rgba(215,168,92,0.08)'  : 'rgba(255,107,107,0.08)';
+  const confBorder =
+    candidate.extractionConfidence === 'high'   ? 'rgba(134,212,110,0.28)' :
+    candidate.extractionConfidence === 'medium' ? 'rgba(215,168,92,0.28)'  : 'rgba(255,107,107,0.28)';
+
   return (
     <div
       className="border-t border-crt/12 px-6 py-6"
       style={{ background: 'rgba(134,212,110,0.018)' }}
     >
-      <div className="mb-1 text-sm font-semibold text-crt/55">Candidate Preview</div>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <div className="text-sm font-semibold text-crt/55">Candidate Preview</div>
+        <span
+          className="px-2.5 py-1 text-sm font-semibold"
+          style={{ color: confColor, background: confBg, border: `1px solid ${confBorder}` }}
+        >
+          {candidate.extractionConfidence} confidence
+        </span>
+      </div>
+      {candidate.extractionWarning && (
+        <div
+          className="mb-4 flex items-start gap-2.5 border px-4 py-3"
+          style={{ borderColor: 'rgba(255,107,107,0.28)', background: 'rgba(255,107,107,0.06)' }}
+        >
+          <span className="shrink-0 text-base" style={{ color: '#ff6b6b' }}>⚠</span>
+          <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,107,107,0.80)' }}>
+            {candidate.extractionWarning}
+          </p>
+        </div>
+      )}
       <div className="mb-4 text-xs text-crt/32">{candidate.categoryNote}</div>
 
       <div className="space-y-5">
@@ -583,6 +612,21 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
                 ⚠ Duplicate Risk
               </span>
             )}
+            {result.candidate.extractionConfidence && (
+              <span
+                className="px-2 py-0.5 text-xs font-semibold"
+                style={{
+                  color:      result.candidate.extractionConfidence === 'high'   ? 'rgba(134,212,110,0.80)' :
+                              result.candidate.extractionConfidence === 'medium' ? '#d7a85c' : '#ff6b6b',
+                  background: result.candidate.extractionConfidence === 'high'   ? 'rgba(134,212,110,0.07)' :
+                              result.candidate.extractionConfidence === 'medium' ? 'rgba(215,168,92,0.08)' : 'rgba(255,107,107,0.07)',
+                  border:     result.candidate.extractionConfidence === 'high'   ? '1px solid rgba(134,212,110,0.22)' :
+                              result.candidate.extractionConfidence === 'medium' ? '1px solid rgba(215,168,92,0.25)' : '1px solid rgba(255,107,107,0.25)',
+                }}
+              >
+                {result.candidate.extractionConfidence}
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-4">
             {!isEditing && (
@@ -611,6 +655,11 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
             <p className="mb-3 text-base leading-relaxed text-crt/60 line-clamp-4">
               {editForm.summary}
             </p>
+            {result.candidate.extractionWarning && (
+              <p className="mb-2 text-sm" style={{ color: 'rgba(255,107,107,0.70)' }}>
+                ⚠ {result.candidate.extractionWarning}
+              </p>
+            )}
             <p className="text-xs text-crt/35">
               {result.candidate.categoryNote}
             </p>
@@ -989,7 +1038,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           {/* Name row + action buttons */}
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5">
-              <h3 className="text-xl font-bold text-crt/92">{source.name}</h3>
+              <h3 className="text-2xl font-bold text-crt/92">{source.name}</h3>
               <TypeBadge type={source.source_type} />
               <RiskBadge level={source.risk_level} />
             </div>
@@ -998,11 +1047,11 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               <button
                 onClick={handleToggle}
                 disabled={togglePending}
-                className="min-h-[44px] border px-4 py-2 text-sm font-bold transition-colors disabled:opacity-40"
+                className="min-h-[52px] border px-5 py-2 text-base font-bold transition-colors disabled:opacity-40"
                 style={
                   source.enabled
-                    ? { borderColor: 'rgba(134,212,110,0.50)', color: '#86d46e', background: 'rgba(134,212,110,0.12)' }
-                    : { borderColor: 'rgba(134,212,110,0.16)', color: 'rgba(134,212,110,0.38)', background: 'transparent' }
+                    ? { borderColor: 'rgba(134,212,110,0.55)', color: '#86d46e', background: 'rgba(134,212,110,0.14)' }
+                    : { borderColor: 'rgba(134,212,110,0.18)', color: 'rgba(134,212,110,0.42)', background: 'transparent' }
                 }
               >
                 {togglePending ? '···' : source.enabled ? '● Enabled' : '○ Disabled'}
@@ -1014,7 +1063,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
                   onClick={handleFetch}
                   disabled={isBusy}
                   title="Fetch base URL — one page, no crawl, preview before queueing"
-                  className="min-h-[44px] border border-crt/25 bg-[rgba(134,212,110,0.05)] px-4 py-2 text-sm font-semibold text-crt/65 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.10)] hover:text-crt/90 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="min-h-[52px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-5 py-2 text-base font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isBusy ? '↯ Fetching…' : '↯ Fetch Preview'}
                 </button>
@@ -1023,7 +1072,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               {/* Edit */}
               <button
                 onClick={() => { setIsEditing(true); setFetchState(null); }}
-                className="min-h-[44px] border border-crt/15 px-4 py-2 text-sm text-crt/48 transition-colors hover:border-crt/28 hover:text-crt/72"
+                className="min-h-[52px] border border-crt/15 px-5 py-2 text-base text-crt/50 transition-colors hover:border-crt/30 hover:text-crt/75"
               >
                 Edit
               </button>
@@ -1032,7 +1081,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
 
           {/* Description */}
           {source.description && (
-            <p className="mb-5 max-w-2xl text-base leading-relaxed text-crt/58">
+            <p className="mb-5 max-w-2xl text-lg leading-relaxed text-crt/58">
               {source.description}
             </p>
           )}
@@ -1041,7 +1090,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
             {source.base_url && (
               <div>
-                <div className="mb-1 text-xs font-semibold text-crt/38">URL</div>
+                <div className="mb-1 text-[15px] font-semibold text-crt/38">URL</div>
                 <a
                   href={source.base_url}
                   target="_blank"
@@ -1060,7 +1109,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
             </div>
             {source.category_focus.length > 0 && (
               <div>
-                <div className="mb-1 text-xs font-semibold text-crt/38">Categories</div>
+                <div className="mb-1 text-[15px] font-semibold text-crt/38">Categories</div>
                 <div className="flex flex-wrap gap-1">
                   {source.category_focus.slice(0, 3).map((c) => (
                     <span key={c} className="border border-crt/16 px-2 py-0.5 text-sm text-crt/55">{c}</span>
@@ -1411,6 +1460,44 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
         {/* Operator flow */}
         <div className="mb-5">
           <AdminFlowBanner currentStep={1} />
+        </div>
+
+        {/* ── PAGE ACTION CARDS ── */}
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <button
+            onClick={handleRunSession}
+            disabled={sessionPending || enabledWithUrl === 0 || session.status !== 'idle'}
+            className="flex flex-col items-start border px-6 py-5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-40 hover:bg-[rgba(134,212,110,0.06)]"
+            style={{ borderColor: 'rgba(134,212,110,0.25)', background: 'rgba(8,12,6,0.90)' }}
+          >
+            <span className="mb-2 text-3xl" style={{ color: '#86d46e' }}>↯</span>
+            <span className="text-lg font-bold text-crt/90">Run Fetch Session</span>
+            <span className="mt-1 text-sm text-crt/48">
+              {enabledWithUrl > 0
+                ? `Fetch ${enabledWithUrl} enabled source${enabledWithUrl !== 1 ? 's' : ''}`
+                : 'Enable a source with a URL first'}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setShowAddForm(true)}
+            disabled={showAddForm}
+            className="flex flex-col items-start border border-crt/16 bg-[rgba(8,12,6,0.90)] px-6 py-5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-40 hover:border-crt/30 hover:bg-[rgba(134,212,110,0.03)]"
+          >
+            <span className="mb-2 text-3xl text-crt/55">+</span>
+            <span className="text-lg font-bold text-crt/88">Add Source</span>
+            <span className="mt-1 text-sm text-crt/45">Register a new URL to scan</span>
+          </button>
+
+          <a
+            href="/scanner/queue"
+            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(77,184,200,0.04)]"
+            style={{ borderColor: 'rgba(77,184,200,0.22)', background: 'rgba(8,12,6,0.90)' }}
+          >
+            <span className="mb-2 text-3xl" style={{ color: '#4db8c8' }}>→</span>
+            <span className="text-lg font-bold text-crt/88">View Queue</span>
+            <span className="mt-1 text-sm text-crt/45">Review and rebirth queued signals</span>
+          </a>
         </div>
 
         {/* ── FETCH SESSION PANEL ── */}
