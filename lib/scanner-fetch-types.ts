@@ -27,6 +27,14 @@ export interface FetchedCandidate {
   mediaType?:           string;  // 'image' if sourceImageUrl found, else 'webpage'
   attributionText?:     string;  // auto-generated: "Recovered from {name} · {type} source"
   captureNotes?:        string;  // auto-generated capture context
+  // Reddit-specific structured evidence (populated by reddit connector)
+  redditSubreddit?:     string;
+  redditAuthor?:        string;
+  redditScore?:         number;
+  redditComments?:      number;
+  redditPostedAt?:      string;  // ISO date YYYY-MM-DD
+  // Wayback-specific structured evidence
+  originalDomain?:      string;  // hostname of the original pre-archive URL
 }
 
 export interface SignalDuplicate {
