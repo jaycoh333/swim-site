@@ -44,6 +44,11 @@ import {
   searchMediaWikiArticles,
   fetchMediaWikiArticle,
 } from '@/lib/discovery-apis';
+import {
+  scoreRedditQuality,
+  extractNarrative,
+  scoreStoryHeuristics,
+} from '@/lib/story-intelligence';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -427,29 +432,44 @@ async function fetchRedditSourcePreview(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const posts: RPost[] = (data as any)?.data?.children ?? [];
 
-  // Skip stickied/mod posts; require title + content
+  // Apply story quality gate — require 2+ criteria
   const filtered = posts.filter(({ data: p }) => {
-    if (p.stickied) return false;
-    const hasSelftext = p.is_self && p.selftext.trim().length >= 80;
-    const hasLink     = !p.is_self && p.url && !p.url.includes('reddit.com');
-    return !!p.title && (hasSelftext || hasLink);
+    const q = scoreRedditQuality({
+      title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
+      url: p.url, score: p.score, num_comments: p.num_comments,
+      stickied: p.stickied, author: p.author,
+    });
+    return q.passes;
   });
 
   if (!filtered.length) {
-    return { error: `No usable posts in r/${subreddit} — try a different subreddit or use Discover Links` };
+    return { error: `No story-quality posts in r/${subreddit} — posts lack longform text, engagement, or anomaly content. Use Discover Links to browse manually.` };
   }
 
-  // Prefer keyword-matching posts; fall back to highest scored
-  const keywordMatch = filtered.find(({ data: p }) => {
-    const combined = `${p.title} ${p.selftext}`.toLowerCase();
-    return DISCOVERY_KEYWORDS.some((kw) => combined.includes(kw));
+  // Score all filtered posts; pick the highest by story heuristics
+  const scored = filtered.map(({ data: p }) => {
+    const narrative = p.selftext?.trim() ? extractNarrative(p.selftext) : '';
+    const heuristics = scoreStoryHeuristics(`${p.title} ${narrative}`);
+    const criteriaBonus = Math.min(
+      (p.selftext.trim().length > 300 ? 1 : 0) +
+      (p.score > 20 ? 1 : 0) +
+      (p.num_comments > 10 ? 1 : 0),
+      3,
+    ) * 8;
+    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus };
   });
-  const { data: p } = keywordMatch ?? filtered.sort((a, b) => b.data.score - a.data.score)[0];
+  scored.sort((a, b) => b.totalScore - a.totalScore);
+  const { p, narrative, heuristics } = scored[0];
+
+  const qualityResult = scoreRedditQuality({
+    title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
+    url: p.url, score: p.score, num_comments: p.num_comments,
+    stickied: p.stickied, author: p.author,
+  });
 
   const cleanedTitle = (p.title.replace(/^\s*\[[^\]]{1,30}\]\s*/g, '').trim() || p.title).slice(0, 200);
-  const summary = (p.selftext?.trim()
-    ? p.selftext
-    : `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
+  const summary = (narrative || p.selftext?.trim() ||
+    `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
   ).slice(0, 2000);
   const rawImg   = p.preview?.images?.[0]?.source?.url;
   const imageUrl = rawImg ? rawImg.replace(/&amp;/g, '&') : undefined;
@@ -470,7 +490,7 @@ async function fetchRedditSourcePreview(
     extractionWarning:    conf.warning ?? undefined,
     sourceType:           'reddit',
     isArchived:           false,
-    passReason:           keywordMatch ? 'keyword match' : `highest scored · ${p.score}↑`,
+    passReason:           qualityResult.passReason || `${p.score}↑`,
     badCandidateReason:   bad.bad ? bad.reason : undefined,
     sourceImageUrl:       imageUrl,
     mediaType:            imageUrl ? 'image' : 'webpage',
@@ -481,6 +501,8 @@ async function fetchRedditSourcePreview(
     redditScore:          p.score,
     redditComments:       p.num_comments,
     redditPostedAt:       postedAt,
+    storyScore:           scored[0].totalScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };
@@ -518,6 +540,8 @@ async function fetchMediaWikiSourcePreview(
   const conf    = scoreExtractionConfidence(title, summary);
   const bad     = detectBadCandidate(article.url, title, summary);
 
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -536,6 +560,8 @@ async function fetchMediaWikiSourcePreview(
     mediaType:            article.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · MediaWiki`,
     captureNotes:         `MediaWiki article: "${article.title}". Plain-text extract only — raw wiki markup not stored.`,
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };
@@ -677,6 +703,8 @@ export async function fetchScannerSourcePreviewAction(
   const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
   const bad        = detectBadCandidate(resolvedUrl, title, summary);
 
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -693,6 +721,8 @@ export async function fetchScannerSourcePreviewAction(
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
     captureNotes:         'Captured from source preview during manual scanner fetch. Raw HTML not stored.',
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };
@@ -868,6 +898,7 @@ export async function runFetchSessionAction(
     const urlPath     = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
     const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
     const bad         = detectBadCandidate(resolvedUrl, title, summary);
+    const heuristicsH = scoreStoryHeuristics(`${title} ${summary}`);
 
     const candidate: FetchedCandidate = {
       title:                title.slice(0, 200),
@@ -885,6 +916,8 @@ export async function runFetchSessionAction(
       mediaType:            extracted.imageUrl ? 'image' : 'webpage',
       attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
       captureNotes:         'Captured from source preview during manual scanner fetch. Raw HTML not stored.',
+      storyScore:           heuristicsH.storyScore,
+      storySignals:         heuristicsH.storySignals.length > 0 ? heuristicsH.storySignals : undefined,
     };
 
     // Duplicate check — include in session results so curator sees it immediately
@@ -978,7 +1011,11 @@ async function discoverRedditPosts(
   const baseUrl = source.base_url!.replace(/\/?$/, '');
   const urls = [`${baseUrl}/new.json?limit=50`, `${baseUrl}/top.json?t=month&limit=50`];
 
-  type RPost = { data: { title: string; permalink: string; selftext: string; score: number; num_comments: number; subreddit: string } };
+  type RPost = { data: {
+    title: string; permalink: string; selftext: string; score: number;
+    num_comments: number; subreddit: string; author: string;
+    is_self: boolean; url: string; stickied?: boolean;
+  } };
   const allPosts: RPost[] = [];
 
   for (const jsonUrl of urls) {
@@ -1009,10 +1046,13 @@ async function discoverRedditPosts(
     if (seen.has(permalink)) continue;
     seen.add(permalink);
 
-    // Quality filters: score > 5, selftext > 100 chars if present
-    if (p.score < 5) continue;
-    const hasSelftext = p.selftext && p.selftext.trim().length > 0;
-    if (hasSelftext && p.selftext.trim().length < 100) continue;
+    // Story quality gate — require 2+ criteria
+    const quality = scoreRedditQuality({
+      title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
+      url: p.url, score: p.score, num_comments: p.num_comments,
+      stickied: p.stickied, author: p.author,
+    });
+    if (!quality.passes) continue;
 
     const combined  = `${p.title} ${p.selftext}`.toLowerCase();
     const matched: string[] = [];
@@ -1022,13 +1062,11 @@ async function discoverRedditPosts(
     }
     if (matched.length === 0) continue;
 
-    // Clean up [FOUND], [UPDATE] etc. prefixes common on Reddit
     const cleanedTitle = p.title.replace(/^\s*\[[^\]]{1,30}\]\s*/g, '').trim() || p.title;
-
     links.push({
       url:         permalink,
       linkText:    cleanedTitle,
-      matchReason: `r/${p.subreddit} · ${p.score}↑ · ${p.num_comments} comments · matched: ${matched.join(', ')}`,
+      matchReason: `r/${p.subreddit} · ${quality.passReason} · matched: ${matched.join(', ')}`,
     });
   }
   return { links };
@@ -1066,15 +1104,16 @@ async function fetchRedditPostPreview(
   const p = (data as any)?.[0]?.data?.children?.[0]?.data as PostData | undefined;
   if (!p) return { error: 'could not parse Reddit post data' };
 
-  const title   = (p.title ?? 'Untitled Reddit Post').slice(0, 200);
-  const summary = (p.selftext?.trim()
-    ? p.selftext
-    : `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
+  const title     = (p.title ?? 'Untitled Reddit Post').slice(0, 200);
+  const narrative = p.selftext?.trim() ? extractNarrative(p.selftext) : '';
+  const summary   = (narrative || p.selftext?.trim() ||
+    `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
   ).slice(0, 2000);
-  const rawImg  = p.preview?.images?.[0]?.source?.url;
-  const imageUrl = rawImg ? rawImg.replace(/&amp;/g, '&') : undefined;
-  const conf    = scoreExtractionConfidence(title, summary);
+  const rawImg    = p.preview?.images?.[0]?.source?.url;
+  const imageUrl  = rawImg ? rawImg.replace(/&amp;/g, '&') : undefined;
+  const conf      = scoreExtractionConfidence(title, summary);
   const postedDate = new Date(p.created_utc * 1000).toISOString().slice(0, 10);
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
 
   const candidate: FetchedCandidate = {
     title,
@@ -1098,6 +1137,8 @@ async function fetchRedditPostPreview(
     redditScore:          p.score,
     redditComments:       p.num_comments,
     redditPostedAt:       postedDate,
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
   return { candidate };
 }
@@ -1201,6 +1242,9 @@ async function fetchWaybackPagePreview(
   const origUrlMatch = url.match(/\/web\/\d{14}\/(https?:\/\/[^/\s]+)/);
   try { if (origUrlMatch) originalDomain = new URL(origUrlMatch[1]).hostname; } catch { /* ignore */ }
 
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+  const waybackScore = Math.min(heuristics.storyScore + 5, 100); // archived = bonus
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -1221,6 +1265,8 @@ async function fetchWaybackPagePreview(
     attributionText:      `Archived via Wayback Machine · ${source.name}`,
     captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}. Original page may no longer be accessible. Raw HTML not stored.`,
     originalDomain,
+    storyScore:           waybackScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };
@@ -1271,6 +1317,8 @@ async function fetchMediaWikiPagePreview(
     return { error: `Quality filter: ${quality.reason}` };
   }
 
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -1289,6 +1337,8 @@ async function fetchMediaWikiPagePreview(
     mediaType:            article.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · MediaWiki`,
     captureNotes:         `MediaWiki article: "${article.title}". Plain-text extract only — raw wiki markup not stored.`,
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };
@@ -1450,11 +1500,12 @@ export async function fetchDiscoveredLinkPreviewAction(
     return { error: `network error — ${msg}` };
   }
 
-  const extracted = extractPageData(html, url);
-  const title     = cleanTitle(extracted.title) || source.name;
-  const summary   = buildSummary(extracted.description, extracted.snippet);
-  const conf      = scoreExtractionConfidence(title, summary);
-  const quality   = candidatePassesQuality(url, title, summary);
+  const extracted  = extractPageData(html, url);
+  const title      = cleanTitle(extracted.title) || source.name;
+  const summary    = buildSummary(extracted.description, extracted.snippet);
+  const conf       = scoreExtractionConfidence(title, summary);
+  const quality    = candidatePassesQuality(url, title, summary);
+  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
 
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
@@ -1473,6 +1524,8 @@ export async function fetchDiscoveredLinkPreviewAction(
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
     captureNotes:         'Captured from discovered link during limited scan. Raw HTML not stored.',
+    storyScore:           heuristics.storyScore,
+    storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
   };
 
   return { candidate };

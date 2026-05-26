@@ -35,6 +35,9 @@ export interface FetchedCandidate {
   redditPostedAt?:      string;  // ISO date YYYY-MM-DD
   // Wayback-specific structured evidence
   originalDomain?:      string;  // hostname of the original pre-archive URL
+  // Story intelligence scoring (populated by server-side heuristics — no AI)
+  storyScore?:          number;    // 0–100 combined story quality score
+  storySignals?:        string[];  // detected signals: ['eyewitness', 'corroborated', ...]
 }
 
 export interface SignalDuplicate {

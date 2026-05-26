@@ -578,12 +578,23 @@ export function ScannerConsoleClient({
 
             {/* Scan results — grouped by quality */}
             {scanPhase === 'done' && scanResults.length > 0 && (() => {
-              const goodResults   = scanResults.filter((r) =>
-                r.status !== 'error' && !r.candidate.badCandidateReason && !r.candidate.isIndexPage,
-              );
+              const goodResults = [...scanResults]
+                .filter((r) => {
+                  if (r.status === 'error') return false;
+                  if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return false;
+                  // Suppress candidates with very low story scores into the low-signal section
+                  if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return false;
+                  return true;
+                })
+                .sort((a, b) => {
+                  if (a.status === 'error' || b.status === 'error') return 0;
+                  return (b.candidate.storyScore ?? 0) - (a.candidate.storyScore ?? 0);
+                });
               const lowQualResults = scanResults.filter((r) => {
                 if (r.status === 'error') return true;
-                return !!(r.candidate.badCandidateReason || r.candidate.isIndexPage);
+                if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return true;
+                if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return true;
+                return false;
               });
               const queuedCnt  = [...candStates.values()].filter((s) => s.action === 'queued').length;
               const skippedCnt = [...candStates.values()].filter((s) => s.action === 'skipped').length;
@@ -676,9 +687,23 @@ export function ScannerConsoleClient({
                               </div>
 
                               {/* Title */}
-                              <p className="mb-2 text-[18px] font-bold leading-snug text-white">
+                              <p className="mb-1.5 text-[18px] font-bold leading-snug text-white">
                                 {result.candidate.title}
                               </p>
+
+                              {/* Story signal badges */}
+                              {result.candidate.storySignals && result.candidate.storySignals.length > 0 && (
+                                <div className="mb-2.5 flex flex-wrap gap-1">
+                                  {result.candidate.storySignals.map((sig) => (
+                                    <span
+                                      key={sig}
+                                      className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400/65"
+                                    >
+                                      {sig}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
 
                               {/* Excerpt — concise */}
                               <p className="mb-3 text-[14px] leading-relaxed text-slate-400 line-clamp-3">
@@ -790,7 +815,7 @@ export function ScannerConsoleClient({
                         className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
                       >
                         <span className="text-[13px] font-semibold text-slate-600">
-                          Skipped / Low Quality · {lowQualResults.length}
+                          Low Signal Results · {lowQualResults.length}
                         </span>
                         <span className="text-[11px] text-slate-700">{lowQualityOpen ? '▲' : '▼'}</span>
                       </button>
@@ -831,7 +856,10 @@ export function ScannerConsoleClient({
                                   )}
                                 </div>
                                 <p className="text-[12px] text-slate-700">
-                                  {result.candidate.badCandidateReason ?? 'Index/homepage — not a story'}
+                                  {result.candidate.badCandidateReason
+                                    ?? (result.candidate.storyScore != null && result.candidate.storyScore < 8
+                                      ? `Low signal score — no story markers detected`
+                                      : 'Index/homepage — not a story')}
                                 </p>
                                 <p className="mt-0.5 text-[11px] text-slate-700">{result.sourceName}</p>
                               </div>
