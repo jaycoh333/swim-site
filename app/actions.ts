@@ -36,7 +36,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
-import type { FetchedCandidate, SignalDuplicate, SessionSourceResult } from '@/lib/scanner-fetch-types';
+import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -573,6 +573,202 @@ export async function runFetchSessionAction(
   }
 
   return { results };
+}
+
+// ---------------------------------------------------------------------------
+// Limited discovery scan — curator-triggered, max 5 links, same-domain only.
+//
+// TWO-STEP FLOW:
+//   Step 1 — discoverSourceLinksAction:
+//     Fetches base_url, extracts anchor hrefs, filters by keyword and domain.
+//     Returns up to 5 candidate URLs. No DB writes.
+//   Step 2 — fetchDiscoveredLinkPreviewAction:
+//     Fetches one discovered URL, extracts metadata → FetchedCandidate.
+//     Feeds into the existing queueFetchedCandidateAction flow.
+//
+// STRICT LIMITS (see docs/limited-discovery-scan.md):
+//   - max 5 links returned per discovery run
+//   - same-domain only (unless source_type is archive/wayback)
+//   - no recursive following
+//   - no scheduling
+//   - zero DB writes until curator clicks Queue Candidate
+// ---------------------------------------------------------------------------
+
+const DISCOVERY_MAX_LINKS = 5;
+
+const DISCOVERY_KEYWORDS = [
+  'story', 'experience', 'thread', 'report', 'archive', 'forum', 'sighting',
+  'dream', 'glitch', 'lost', 'encounter', 'witness', 'strange', 'anomaly',
+  'paranormal', 'ufo', 'case', 'incident', 'found', 'missing', 'secret',
+  'hidden', 'recovered',
+];
+
+function extractAnchors(html: string, baseUrl: string): Array<{ href: string; text: string }> {
+  const links: Array<{ href: string; text: string }> = [];
+  // Match <a href="...">text</a> — cap at 200 KB of HTML
+  const re = /<a[^>]{0,500}href=["']([^"'#\s]{3,500})["'][^>]{0,200}>([\s\S]{0,300}?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const rawHref = m[1].trim();
+    const rawText = m[2].replace(/<[^>]{0,200}>/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 200);
+    try {
+      const resolved = new URL(rawHref, baseUrl).href;
+      if (resolved.startsWith('http')) links.push({ href: resolved, text: rawText || rawHref });
+    } catch { /* skip unresolvable URLs */ }
+  }
+  return links;
+}
+
+function discoveryKeywordMatch(url: string, text: string): string | null {
+  const target = `${url} ${text}`.toLowerCase();
+  for (const kw of DISCOVERY_KEYWORDS) {
+    if (target.includes(kw)) return kw;
+  }
+  return null;
+}
+
+const SKIP_EXTENSIONS = /\.(css|js|jpg|jpeg|png|gif|svg|ico|webp|woff|woff2|ttf|eot|pdf|zip|xml|json|rss|atom)(\?|$)/i;
+
+export async function discoverSourceLinksAction(
+  sourceId: string,
+): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+  const source = await getScannerSource(sourceId);
+  if (!source)          return { error: 'source not found in registry' };
+  if (!source.enabled)  return { error: 'source must be enabled before discovery' };
+  if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  let html: string;
+  try {
+    const response = await fetch(source.base_url, {
+      cache: 'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'text/html,application/xhtml+xml;q=0.9',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) return { error: `HTTP ${response.status} — ${response.statusText}` };
+    const ct = response.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+      return { error: `expected HTML, got ${ct.split(';')[0].trim()}` };
+    }
+    html = await response.text();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `network error — ${msg}` };
+  }
+
+  let baseHostname: string;
+  try { baseHostname = new URL(source.base_url).hostname; }
+  catch { return { error: 'invalid base URL' }; }
+
+  const isArchiveType =
+    source.source_type === 'archive' ||
+    baseHostname.includes('archive.org') ||
+    baseHostname.includes('wayback');
+
+  const anchors = extractAnchors(html.slice(0, 200_000), source.base_url);
+  const seen    = new Set<string>();
+  const results: DiscoveredLink[] = [];
+
+  for (const { href, text } of anchors) {
+    if (results.length >= DISCOVERY_MAX_LINKS) break;
+    if (seen.has(href)) continue;
+    seen.add(href);
+
+    // Skip the source page itself
+    if (href === source.base_url || href === source.base_url + '/') continue;
+    // Skip asset/feed extensions
+    if (SKIP_EXTENSIONS.test(href)) continue;
+
+    // Domain check — strict for non-archive sources
+    try {
+      const linkHost = new URL(href).hostname;
+      if (!isArchiveType && linkHost !== baseHostname) continue;
+    } catch { continue; }
+
+    const reason = discoveryKeywordMatch(href, text);
+    if (!reason && !isArchiveType) continue;
+
+    results.push({
+      url:         href,
+      linkText:    text || href,
+      matchReason: reason
+        ? `matched keyword: "${reason}"`
+        : 'archive source — all same-origin links included',
+    });
+  }
+
+  return { links: results };
+}
+
+// Fetches a specific discovered URL using the source's identity + same-domain validation.
+// Returns a FetchedCandidate for curator review — no DB writes.
+export async function fetchDiscoveredLinkPreviewAction(
+  sourceId: string,
+  url:      string,
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
+  const source = await getScannerSource(sourceId);
+  if (!source)          return { error: 'source not found in registry' };
+  if (!source.enabled)  return { error: 'source must be enabled before fetching' };
+  if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  let parsedUrl: URL;
+  try   { parsedUrl = new URL(url); }
+  catch { return { error: 'invalid URL' }; }
+  if (!parsedUrl.protocol.startsWith('http')) return { error: 'only HTTP/HTTPS URLs allowed' };
+
+  const baseHostname = new URL(source.base_url).hostname;
+  const isArchiveType =
+    source.source_type === 'archive' ||
+    baseHostname.includes('archive.org');
+  if (!isArchiveType && parsedUrl.hostname !== baseHostname) {
+    return { error: `cross-domain fetch blocked — ${parsedUrl.hostname} is not ${baseHostname}` };
+  }
+
+  let html: string;
+  try {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'text/html,application/xhtml+xml;q=0.9',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) return { error: `HTTP ${response.status} — ${response.statusText}` };
+    const ct = response.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+      return { error: `expected HTML, got ${ct.split(';')[0].trim()}` };
+    }
+    html = await response.text();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `network error — ${msg}` };
+  }
+
+  const extracted = extractPageData(html, url);
+  const title     = cleanTitle(extracted.title) || source.name;
+  const summary   = buildSummary(extracted.description, extracted.snippet);
+  const conf      = scoreExtractionConfidence(title, summary);
+
+  const candidate: FetchedCandidate = {
+    title:                title.slice(0, 200),
+    summary:              summary.slice(0, 2000),
+    sourceUrl:            extracted.canonicalUrl || url,
+    category:             source.category_focus[0] ?? 'Internet Lore',
+    tags:                 ['scanner-source', source.source_type, 'discovered-link'],
+    anomalyScore:         5,
+    categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
+    sourceImageUrl:       extracted.imageUrl || undefined,
+    mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+    attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
+    captureNotes:         'Captured from discovered link during limited scan. Raw HTML not stored.',
+  };
+
+  return { candidate };
 }
 
 // Curator action — rebirth a recovered signal as a SWIM thread using

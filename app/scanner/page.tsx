@@ -1,5 +1,5 @@
 import { ScannerClient } from '@/components/ScannerClient';
-import { getRecoveredSignals, getScannerStats } from '@/lib/supabase/repository';
+import { getRecoveredSignals, getScannerStats, hasSupabase } from '@/lib/supabase/repository';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,5 +9,5 @@ export default async function ScannerPage() {
     getScannerStats(),
   ]);
 
-  return <ScannerClient approvedSignals={approvedSignals} stats={stats} />;
+  return <ScannerClient approvedSignals={approvedSignals} stats={stats} isLive={hasSupabase} />;
 }

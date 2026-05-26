@@ -9,9 +9,11 @@ import {
   fetchScannerSourcePreviewAction,
   queueFetchedCandidateAction,
   runFetchSessionAction,
+  discoverSourceLinksAction,
+  fetchDiscoveredLinkPreviewAction,
 } from '@/app/actions';
 import { AdminFlowBanner } from '@/components/AdminFlowBanner';
-import type { FetchedCandidate, SignalDuplicate, SessionSourceResult } from '@/lib/scanner-fetch-types';
+import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource, ScannerRiskLevel } from '@/lib/supabase/types';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 
@@ -892,8 +894,8 @@ function FetchSessionPanel({ entries, runAt, onStatusChange, onClose }: FetchSes
       {/* Header */}
       <div className="flex items-center justify-between border-b border-crt/12 px-6 py-5">
         <div>
-          <h2 className="text-xl font-bold text-crt/88">Session Results</h2>
-          <p className="mt-0.5 text-sm text-crt/40">
+          <h2 className="text-[26px] font-bold text-crt/88">Session Results</h2>
+          <p className="mt-0.5 text-base text-crt/42">
             {new Date(runAt).toLocaleTimeString()} · manual · no crawl · one page per source
           </p>
         </div>
@@ -958,6 +960,94 @@ function FetchSessionPanel({ entries, runAt, onStatusChange, onClose }: FetchSes
 }
 
 // ---------------------------------------------------------------------------
+// Discovery scan types
+// ---------------------------------------------------------------------------
+
+type DiscoverState =
+  | null
+  | { status: 'discovering' }
+  | { status: 'results'; links: DiscoveredLink[] }
+  | { status: 'error'; message: string };
+
+// ---------------------------------------------------------------------------
+// DiscoveryLinksPanel — shows up to 5 discovered links for curator selection
+// ---------------------------------------------------------------------------
+
+interface DiscoveryLinksPanelProps {
+  links:       DiscoveredLink[];
+  onFetchLink: (url: string) => void;
+  onClose:     () => void;
+}
+
+function DiscoveryLinksPanel({ links, onFetchLink, onClose }: DiscoveryLinksPanelProps) {
+  return (
+    <div
+      className="border-t border-crt/12 px-6 py-5"
+      style={{ background: 'rgba(77,184,200,0.015)' }}
+    >
+      {/* Safety banner */}
+      <div
+        className="mb-4 flex items-start gap-3 border px-4 py-3"
+        style={{ borderColor: 'rgba(77,184,200,0.28)', background: 'rgba(77,184,200,0.06)' }}
+      >
+        <span className="shrink-0 text-[18px] font-bold" style={{ color: '#4db8c8' }}>◈</span>
+        <p className="text-[15px] leading-relaxed text-crt/58">
+          <span className="font-semibold text-crt/82">Limited discovery scan</span>
+          {' · '}max 5 links · same-domain only · no recursive crawl ·
+          no DB writes until you click{' '}
+          <span className="font-semibold text-crt/78">Queue Candidate</span>
+        </p>
+      </div>
+
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-[17px] font-semibold text-crt/65">
+          {links.length} candidate link{links.length !== 1 ? 's' : ''} discovered
+        </p>
+        <button
+          onClick={onClose}
+          className="text-sm text-crt/35 transition-colors hover:text-crt/62"
+        >
+          × Close
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {links.map((link) => (
+          <div
+            key={link.url}
+            className="border border-crt/14 bg-[rgba(4,7,5,0.60)] px-5 py-4"
+          >
+            <p className="mb-1 text-[17px] font-semibold text-crt/88 leading-snug line-clamp-2">
+              {link.linkText}
+            </p>
+            <p className="mb-2 truncate font-mono text-[13px] text-crt/38">{link.url}</p>
+            <p className="mb-3 text-[14px] text-crt/45">
+              <span className="text-crt/30">Match: </span>{link.matchReason}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => onFetchLink(link.url)}
+                className="min-h-[44px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-4 text-[15px] font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92"
+              >
+                ↯ Fetch Preview
+              </button>
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[14px] text-crt/38 transition-colors hover:text-crt/65"
+              >
+                Open ↗
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SourceCard — single source card
 // ---------------------------------------------------------------------------
 
@@ -969,17 +1059,19 @@ interface SourceCardProps {
 }
 
 function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps) {
-  const [isEditing, setIsEditing]    = useState(false);
-  const [editPending, startEdit]     = useTransition();
-  const [togglePending, startToggle] = useTransition();
-  const [fetchPending, startFetch]   = useTransition();
-  const [queuePending, startQueue]   = useTransition();
-  const [editError, setEditError]    = useState<string | null>(null);
-  const [fetchState, setFetchState]  = useState<FetchState>(null);
+  const [isEditing, setIsEditing]          = useState(false);
+  const [editPending, startEdit]           = useTransition();
+  const [togglePending, startToggle]       = useTransition();
+  const [fetchPending, startFetch]         = useTransition();
+  const [queuePending, startQueue]         = useTransition();
+  const [discoverPending, startDiscover]   = useTransition();
+  const [editError, setEditError]          = useState<string | null>(null);
+  const [fetchState, setFetchState]        = useState<FetchState>(null);
+  const [discoverState, setDiscoverState]  = useState<DiscoverState>(null);
 
-  const accentColor = RISK_COLORS[source.risk_level];
-  const canFetch    = source.enabled && Boolean(source.base_url);
-  const isBusy      = fetchPending || queuePending || fetchState?.status === 'fetching';
+  const accentColor  = RISK_COLORS[source.risk_level];
+  const canFetch     = source.enabled && Boolean(source.base_url);
+  const isBusy       = fetchPending || queuePending || discoverPending || fetchState?.status === 'fetching';
 
   function handleToggle() {
     startToggle(async () => {
@@ -1022,8 +1114,39 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
 
   function handleFetch() {
     setFetchState({ status: 'fetching' });
+    setDiscoverState(null);
     startFetch(async () => {
       const result = await fetchScannerSourcePreviewAction(source.id);
+      if ('error' in result) {
+        setFetchState({ status: 'error', message: result.error });
+        return;
+      }
+      setFetchState({ status: 'preview', candidate: result.candidate });
+    });
+  }
+
+  function handleDiscover() {
+    setDiscoverState({ status: 'discovering' });
+    setFetchState(null);
+    startDiscover(async () => {
+      const result = await discoverSourceLinksAction(source.id);
+      if ('error' in result) {
+        setDiscoverState({ status: 'error', message: result.error });
+        return;
+      }
+      if (result.links.length === 0) {
+        setDiscoverState({ status: 'error', message: 'No content links matched the discovery keywords on this page.' });
+        return;
+      }
+      setDiscoverState({ status: 'results', links: result.links });
+    });
+  }
+
+  function handleFetchDiscoveredLink(url: string) {
+    setDiscoverState(null);
+    setFetchState({ status: 'fetching' });
+    startFetch(async () => {
+      const result = await fetchDiscoveredLinkPreviewAction(source.id, url);
       if ('error' in result) {
         setFetchState({ status: 'error', message: result.error });
         return;
@@ -1117,7 +1240,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           {/* Name row + action buttons */}
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5">
-              <h3 className="text-2xl font-bold text-crt/92">{source.name}</h3>
+              <h3 className="text-[28px] font-bold text-crt/92">{source.name}</h3>
               <TypeBadge type={source.source_type} />
               <RiskBadge level={source.risk_level} />
             </div>
@@ -1126,7 +1249,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               <button
                 onClick={handleToggle}
                 disabled={togglePending}
-                className="min-h-[52px] border px-5 py-2 text-base font-bold transition-colors disabled:opacity-40"
+                className="min-h-[56px] border px-5 py-2 text-[18px] font-bold transition-colors disabled:opacity-40"
                 style={
                   source.enabled
                     ? { borderColor: 'rgba(134,212,110,0.55)', color: '#86d46e', background: 'rgba(134,212,110,0.14)' }
@@ -1142,16 +1265,33 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
                   onClick={handleFetch}
                   disabled={isBusy}
                   title="Fetch base URL — one page, no crawl, preview before queueing"
-                  className="min-h-[52px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-5 py-2 text-base font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="min-h-[56px] border border-crt/28 bg-[rgba(134,212,110,0.06)] px-5 py-2 text-[18px] font-semibold text-crt/70 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {isBusy ? '↯ Fetching…' : '↯ Fetch Preview'}
+                  {fetchPending || fetchState?.status === 'fetching' ? '↯ Fetching…' : '↯ Fetch Preview'}
+                </button>
+              )}
+
+              {/* Discover links */}
+              {canFetch && (
+                <button
+                  onClick={handleDiscover}
+                  disabled={isBusy}
+                  title="Limited discovery scan — max 5 links, same-domain, no recursion"
+                  className="min-h-[56px] border px-5 py-2 text-[18px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                  style={
+                    discoverState?.status === 'results'
+                      ? { borderColor: 'rgba(77,184,200,0.55)', color: '#4db8c8', background: 'rgba(77,184,200,0.10)' }
+                      : { borderColor: 'rgba(77,184,200,0.25)', color: 'rgba(77,184,200,0.70)', background: 'transparent' }
+                  }
+                >
+                  {discoverPending || discoverState?.status === 'discovering' ? '◈ Scanning…' : '◈ Discover Links'}
                 </button>
               )}
 
               {/* Edit */}
               <button
-                onClick={() => { setIsEditing(true); setFetchState(null); }}
-                className="min-h-[52px] border border-crt/15 px-5 py-2 text-base text-crt/50 transition-colors hover:border-crt/30 hover:text-crt/75"
+                onClick={() => { setIsEditing(true); setFetchState(null); setDiscoverState(null); }}
+                className="min-h-[56px] border border-crt/15 px-5 py-2 text-[18px] text-crt/50 transition-colors hover:border-crt/30 hover:text-crt/75"
               >
                 Edit
               </button>
@@ -1160,7 +1300,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
 
           {/* Description */}
           {source.description && (
-            <p className="mb-5 max-w-2xl text-lg leading-relaxed text-crt/58">
+            <p className="mb-5 max-w-2xl text-xl leading-relaxed text-crt/62">
               {source.description}
             </p>
           )}
@@ -1169,7 +1309,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
           <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
             {source.base_url && (
               <div>
-                <div className="mb-1 text-[15px] font-semibold text-crt/38">URL</div>
+                <div className="mb-1 text-[16px] font-semibold text-crt/42">URL</div>
                 <a
                   href={source.base_url}
                   target="_blank"
@@ -1183,12 +1323,12 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               </div>
             )}
             <div>
-              <div className="mb-1 text-xs font-semibold text-crt/38">Cadence</div>
-              <span className="text-base text-crt/72">{source.refresh_cadence ?? 'manual'}</span>
+              <div className="mb-1 text-[16px] font-semibold text-crt/42">Cadence</div>
+              <span className="text-[18px] text-crt/72">{source.refresh_cadence ?? 'manual'}</span>
             </div>
             {source.category_focus.length > 0 && (
               <div>
-                <div className="mb-1 text-[15px] font-semibold text-crt/38">Categories</div>
+                <div className="mb-1 text-[16px] font-semibold text-crt/42">Categories</div>
                 <div className="flex flex-wrap gap-1">
                   {source.category_focus.slice(0, 3).map((c) => (
                     <span key={c} className="border border-crt/16 px-2 py-0.5 text-sm text-crt/55">{c}</span>
@@ -1200,8 +1340,8 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               </div>
             )}
             <div>
-              <div className="mb-1 text-xs font-semibold text-crt/38">Last Scanned</div>
-              <span className="text-base text-crt/72">
+              <div className="mb-1 text-[16px] font-semibold text-crt/42">Last Scanned</div>
+              <span className="text-[18px] text-crt/72">
                 {source.last_scanned_at
                   ? new Date(source.last_scanned_at).toLocaleDateString()
                   : 'Never'}
@@ -1251,10 +1391,54 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
               className="h-2 w-2 rounded-full shrink-0"
               style={{ background: '#86d46e', boxShadow: '0 0 6px #86d46e80' }}
             />
-            <span className="text-sm text-crt/48">
+            <span className="text-base text-crt/50">
               Fetching one page · no crawl · raw html will not be stored
             </span>
           </div>
+        </div>
+      )}
+
+      {/* ── DISCOVER LOADING ── */}
+      {!isEditing && (discoverPending || discoverState?.status === 'discovering') && (
+        <div className="border-t border-crt/8 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div
+              className="h-2 w-2 rounded-full shrink-0"
+              style={{ background: '#4db8c8', boxShadow: '0 0 6px #4db8c880' }}
+            />
+            <span className="text-base text-crt/50">
+              Discovery scan · extracting links · max 5 · same-domain only
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── DISCOVERY RESULTS ── */}
+      {!isEditing && discoverState?.status === 'results' && (
+        <DiscoveryLinksPanel
+          links={discoverState.links}
+          onFetchLink={handleFetchDiscoveredLink}
+          onClose={() => setDiscoverState(null)}
+        />
+      )}
+
+      {/* ── DISCOVERY ERROR ── */}
+      {!isEditing && discoverState?.status === 'error' && (
+        <div
+          className="border-t border-crt/8 px-6 py-5"
+          style={{ background: 'rgba(77,184,200,0.018)' }}
+        >
+          <div className="mb-2 flex items-center gap-2.5">
+            <span className="text-[#4db8c8]/70 text-lg">◈</span>
+            <span className="text-base font-medium text-crt/60">Discovery returned no results</span>
+          </div>
+          <p className="mb-4 text-sm text-crt/45">{discoverState.message}</p>
+          <button
+            onClick={() => setDiscoverState(null)}
+            className="text-sm text-crt/32 transition-colors hover:text-crt/55"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -1465,65 +1649,40 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
         <div className="mx-auto max-w-5xl px-4 py-4 md:px-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <p className="text-xs font-medium text-crt/35">SWIM · Scanner Admin</p>
-              <h1 className="text-2xl font-bold text-crt/92 md:text-3xl">Scanner Sources</h1>
-              <p className="mt-0.5 text-sm text-crt/42">manual recovery registry · no crawl · one page per call</p>
+              <p className="text-[13px] font-medium text-crt/35">SWIM · Scanner Admin</p>
+              <h1 className="text-[36px] font-black leading-tight text-crt/92">Scanner Sources</h1>
+              <p className="mt-0.5 text-base text-crt/42">manual recovery · no crawl · one page per call</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
               {/* Stats pills */}
               <div className="hidden items-center gap-2.5 sm:flex">
-                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-1.5">
-                  <span className="font-mono text-xl font-bold text-crt/80">{sources.length}</span>
-                  <span className="text-xs text-crt/38">total</span>
+                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-2">
+                  <span className="font-mono text-2xl font-bold text-crt/80">{sources.length}</span>
+                  <span className="text-[15px] text-crt/38">total</span>
                 </div>
-                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-1.5">
+                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-2">
                   <span
-                    className="font-mono text-xl font-bold"
+                    className="font-mono text-2xl font-bold"
                     style={{ color: enabledCount > 0 ? '#86d46e' : 'rgba(134,212,110,0.30)' }}
                   >
                     {enabledCount}
                   </span>
-                  <span className="text-xs text-crt/38">enabled</span>
+                  <span className="text-[15px] text-crt/38">enabled</span>
                 </div>
-                {highRiskCount > 0 && (
-                  <div
-                    className="flex items-center gap-1.5 border px-3 py-1.5"
-                    style={{ borderColor: 'rgba(255,107,107,0.28)', background: 'rgba(255,107,107,0.05)' }}
-                  >
-                    <span className="font-mono text-xl font-bold text-[#ff6b6b]">{highRiskCount}</span>
-                    <span className="text-xs" style={{ color: 'rgba(255,107,107,0.55)' }}>high risk</span>
-                  </div>
-                )}
               </div>
 
               {/* Nav links */}
-              <div className="flex items-center gap-4 text-sm text-crt/38">
+              <div className="flex items-center gap-4 text-base text-crt/38">
                 <a href="/scanner/queue" className="hover:text-crt/65 transition-colors">← queue</a>
                 <a href="/scanner" className="hover:text-crt/65 transition-colors">scanner →</a>
               </div>
-
-              {/* Run Fetch Session — primary CTA */}
-              {session.status === 'idle' && (
-                <button
-                  onClick={handleRunSession}
-                  disabled={sessionPending || enabledWithUrl === 0}
-                  title={enabledWithUrl === 0 ? 'Enable at least one source with a base URL first' : undefined}
-                  className="admin-btn admin-btn-success"
-                >
-                  {sessionPending
-                    ? '↯ Starting…'
-                    : enabledWithUrl > 0
-                    ? `↯ Run Session (${enabledWithUrl})`
-                    : '↯ Run Session'}
-                </button>
-              )}
 
               {/* Add Source */}
               {!showAddForm && (
                 <button
                   onClick={() => setShowAddForm(true)}
-                  className="min-h-[44px] border border-crt/25 bg-[rgba(134,212,110,0.06)] px-5 py-2 text-sm font-bold text-crt/72 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92"
+                  className="min-h-[56px] border border-crt/25 bg-[rgba(134,212,110,0.06)] px-6 py-2 text-[18px] font-bold text-crt/72 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92"
                 >
                   + Add Source
                 </button>
@@ -1536,36 +1695,70 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
       {/* ── MAIN CONTENT ── */}
       <div className="relative z-10 mx-auto max-w-5xl px-4 py-6 md:px-6">
 
+        {/* ── RUN FETCH SESSION — hero primary CTA ── */}
+        <div className="mb-5">
+          {session.status === 'idle' ? (
+            <button
+              onClick={handleRunSession}
+              disabled={sessionPending || enabledWithUrl === 0}
+              className="flex min-h-[88px] w-full flex-col items-center justify-center border-2 px-6 py-6 text-center transition-all disabled:cursor-not-allowed disabled:opacity-45"
+              style={{
+                borderColor: enabledWithUrl > 0 ? 'rgba(134,212,110,0.55)' : 'rgba(134,212,110,0.20)',
+                background:  enabledWithUrl > 0 ? 'rgba(134,212,110,0.08)' : 'rgba(8,12,6,0.92)',
+              }}
+            >
+              <span
+                className="text-[28px] font-black leading-tight"
+                style={{ color: enabledWithUrl > 0 ? '#86d46e' : 'rgba(134,212,110,0.38)' }}
+              >
+                {sessionPending
+                  ? '↯ Starting session…'
+                  : enabledWithUrl > 0
+                  ? `↯ RUN FETCH SESSION — ${enabledWithUrl} source${enabledWithUrl !== 1 ? 's' : ''}`
+                  : '↯ RUN FETCH SESSION'}
+              </span>
+              <span
+                className="mt-2 text-[17px]"
+                style={{ color: enabledWithUrl > 0 ? 'rgba(134,212,110,0.55)' : 'rgba(134,212,110,0.28)' }}
+              >
+                {enabledWithUrl > 0
+                  ? 'One page per source · no crawl · preview before queueing'
+                  : 'Enable at least one source with a URL first'}
+              </span>
+            </button>
+          ) : session.status === 'running' ? (
+            <div
+              className="flex min-h-[80px] w-full items-center justify-center border-2 px-6 py-5"
+              style={{ borderColor: 'rgba(134,212,110,0.45)', background: 'rgba(134,212,110,0.06)' }}
+            >
+              <div className="flex items-center gap-4">
+                <div
+                  className="h-3 w-3 shrink-0 rounded-full"
+                  style={{ background: '#86d46e', boxShadow: '0 0 10px #86d46e80' }}
+                />
+                <span className="text-[22px] font-black text-crt/85">
+                  Running session — fetching {enabledWithUrl} source{enabledWithUrl !== 1 ? 's' : ''}…
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
         {/* Operator flow */}
         <div className="mb-5">
           <AdminFlowBanner currentStep={1} />
         </div>
 
-        {/* ── PAGE ACTION CARDS ── */}
-        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <button
-            onClick={handleRunSession}
-            disabled={sessionPending || enabledWithUrl === 0 || session.status !== 'idle'}
-            className="flex flex-col items-start border px-6 py-5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-40 hover:bg-[rgba(134,212,110,0.06)]"
-            style={{ borderColor: 'rgba(134,212,110,0.25)', background: 'rgba(8,12,6,0.90)' }}
-          >
-            <span className="mb-2 text-3xl" style={{ color: '#86d46e' }}>↯</span>
-            <span className="text-lg font-bold text-crt/90">Run Fetch Session</span>
-            <span className="mt-1 text-sm text-crt/48">
-              {enabledWithUrl > 0
-                ? `Fetch ${enabledWithUrl} enabled source${enabledWithUrl !== 1 ? 's' : ''}`
-                : 'Enable a source with a URL first'}
-            </span>
-          </button>
-
+        {/* ── SECONDARY ACTION CARDS ── */}
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button
             onClick={() => setShowAddForm(true)}
             disabled={showAddForm}
             className="flex flex-col items-start border border-crt/16 bg-[rgba(8,12,6,0.90)] px-6 py-5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-40 hover:border-crt/30 hover:bg-[rgba(134,212,110,0.03)]"
           >
             <span className="mb-2 text-3xl text-crt/55">+</span>
-            <span className="text-lg font-bold text-crt/88">Add Source</span>
-            <span className="mt-1 text-sm text-crt/45">Register a new URL to scan</span>
+            <span className="text-[20px] font-bold text-crt/88">Add Source</span>
+            <span className="mt-1 text-base text-crt/45">Register a new URL to scan</span>
           </button>
 
           <a
@@ -1574,8 +1767,8 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
             style={{ borderColor: 'rgba(77,184,200,0.22)', background: 'rgba(8,12,6,0.90)' }}
           >
             <span className="mb-2 text-3xl" style={{ color: '#4db8c8' }}>→</span>
-            <span className="text-lg font-bold text-crt/88">View Queue</span>
-            <span className="mt-1 text-sm text-crt/45">Review and rebirth queued signals</span>
+            <span className="text-[20px] font-bold text-crt/88">View Queue</span>
+            <span className="mt-1 text-base text-crt/45">Review and rebirth queued signals</span>
           </a>
         </div>
 
@@ -1640,8 +1833,8 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
           >
             <div className="flex items-center justify-between border-b border-crt/10 px-6 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-crt/85">New Source</h2>
-                <p className="mt-0.5 text-sm text-crt/40">Starts disabled. Enable after setup.</p>
+                <h2 className="text-[24px] font-bold text-crt/88">New Source</h2>
+                <p className="mt-0.5 text-base text-crt/42">Starts disabled. Enable after setup.</p>
               </div>
               <button
                 onClick={() => { setShowAddForm(false); setAddError(null); }}
@@ -1665,9 +1858,9 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
 
         {/* ── SOURCE LIST ── */}
         {sources.length === 0 ? (
-          <div className="border border-crt/10 px-6 py-16 text-center">
-            <p className="text-base text-crt/38">No sources registered yet.</p>
-            <p className="mt-1 text-sm text-crt/22">Click + Add Source above to create your first source.</p>
+          <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] px-8 py-20 text-center">
+            <p className="text-[24px] font-bold text-crt/55">No sources registered yet</p>
+            <p className="mt-3 text-[18px] text-crt/38">Click + Add Source above to register your first source.</p>
           </div>
         ) : (
           (['low', 'medium', 'high'] as const).map((risk) => {
@@ -1678,8 +1871,8 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
                 <div className="mb-4 flex items-center gap-3">
                   <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}25` }} />
                   <span
-                    className="shrink-0 text-sm font-bold uppercase tracking-wide"
-                    style={{ color: `${RISK_COLORS[risk]}80` }}
+                    className="shrink-0 text-[20px] font-bold"
+                    style={{ color: `${RISK_COLORS[risk]}90` }}
                   >
                     {risk} Risk — {group.length} source{group.length !== 1 ? 's' : ''}
                   </span>

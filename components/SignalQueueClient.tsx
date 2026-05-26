@@ -1860,23 +1860,23 @@ export function SignalQueueClient({
     <div className="relative min-h-screen pb-16 pt-[80px] md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.08]" />
 
-      {/* ── Sticky toolbar ── */}
+      {/* ── Sticky toolbar — title + tabs only ── */}
       <div className="sticky top-[72px] z-20 border-b border-crt/15 bg-[rgba(2,3,3,0.98)] backdrop-blur-sm md:top-[80px]">
 
         {/* Title bar */}
-        <div className="border-b border-crt/10 px-4 py-3 md:px-8">
+        <div className="border-b border-crt/10 px-4 py-4 md:px-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-medium text-crt/35">
-                SWIM · Curator Console · Restricted Access
+              <p className="text-[13px] font-medium text-crt/35">
+                SWIM · Curator Console
               </p>
-              <h1 className="text-2xl font-bold text-crt/92 md:text-3xl">
+              <h1 className="text-[36px] font-black leading-tight text-crt/92">
                 Signal Queue
               </h1>
             </div>
             <button
               onClick={() => setShowIntake((v) => !v)}
-              className={`min-h-[44px] border px-5 py-2.5 text-base font-semibold transition-colors ${
+              className={`min-h-[56px] border px-6 py-2 text-[18px] font-bold transition-colors ${
                 showIntake
                   ? 'border-crt/28 text-crt/60 hover:border-crt/15 hover:text-crt/40'
                   : 'border-crt/25 text-crt/55 hover:border-crt/42 hover:text-crt/80'
@@ -1886,9 +1886,6 @@ export function SignalQueueClient({
             </button>
           </div>
         </div>
-
-        {/* Operator flow — 5-step visual workflow */}
-        <AdminFlowBanner currentStep={3} />
 
         {/* Status tabs */}
         <div className="border-b border-crt/8 px-4 md:px-8">
@@ -1900,13 +1897,13 @@ export function SignalQueueClient({
                 <button
                   key={key}
                   onClick={() => setActiveTab(key)}
-                  className={`shrink-0 border-b-2 px-4 py-3 text-[15px] font-medium transition-colors ${
+                  className={`shrink-0 border-b-2 px-4 py-3 text-[17px] font-medium transition-colors ${
                     isActive ? 'border-crt/60 text-crt/88' : 'border-transparent text-crt/40 hover:text-crt/65'
                   }`}
                 >
                   {label}
                   {count !== null && (
-                    <span className={`ml-1.5 text-sm ${isActive ? 'text-crt/52' : 'text-crt/28'}`}>
+                    <span className={`ml-1.5 text-base ${isActive ? 'text-crt/55' : 'text-crt/28'}`}>
                       {count}
                     </span>
                   )}
@@ -1915,9 +1912,18 @@ export function SignalQueueClient({
             })}
           </div>
         </div>
+      </div>
+
+      {/* ── Main layout ── */}
+      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-8">
+
+        {/* Operator flow — out of sticky so it doesn't cover content */}
+        <div className="mb-5">
+          <AdminFlowBanner currentStep={3} />
+        </div>
 
         {/* Filter row */}
-        <div className="px-4 py-2.5 md:px-8">
+        <div className="mb-6 border border-crt/10 bg-[rgba(4,7,5,0.80)] px-4 py-3 md:px-6">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-[160px] max-w-xs flex-1">
               <input
@@ -1925,13 +1931,13 @@ export function SignalQueueClient({
                 placeholder="Search title, summary, source…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full border border-crt/18 bg-transparent px-3 py-1.5 text-[15px] text-crt/75 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
+                className="w-full border border-crt/18 bg-transparent px-3 py-2 text-[16px] text-crt/75 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
               />
             </div>
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-1.5 text-[14px] text-crt/65 focus:border-crt/32 focus:outline-none"
+              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-2 text-[15px] text-crt/65 focus:border-crt/32 focus:outline-none"
             >
               <option value="">All categories</option>
               {uniqueCategories.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1939,14 +1945,14 @@ export function SignalQueueClient({
             <select
               value={filterSourceType}
               onChange={(e) => setFilterSourceType(e.target.value)}
-              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-1.5 text-[14px] text-crt/65 focus:border-crt/32 focus:outline-none"
+              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-2 text-[15px] text-crt/65 focus:border-crt/32 focus:outline-none"
             >
               <option value="">All sources</option>
               {uniqueSourceTypes.map((t) => <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>)}
             </select>
             <button
               onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
-              className={`border px-3 py-1.5 text-[14px] transition-colors ${
+              className={`border px-3 py-2 text-[15px] transition-colors ${
                 sortScore ? 'border-crt/30 text-crt/65' : 'border-crt/15 text-crt/40 hover:border-crt/25'
               }`}
             >
@@ -1955,17 +1961,13 @@ export function SignalQueueClient({
             {hasActiveFilter && (
               <button
                 onClick={clearFilters}
-                className="ml-auto text-[14px] text-crt/40 transition-colors hover:text-crt/65"
+                className="ml-auto text-[15px] text-crt/40 transition-colors hover:text-crt/65"
               >
                 × Clear ({visibleSignals.length} shown)
               </button>
             )}
           </div>
         </div>
-      </div>
-
-      {/* ── Main layout ── */}
-      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-8">
 
         {/* Intake form */}
         {showIntake && (
@@ -2035,8 +2037,25 @@ export function SignalQueueClient({
           {/* Signal cards */}
           <div className="min-w-0 flex-1">
             {visibleSignals.length === 0 ? (
-              <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] py-20 text-center text-base text-crt/38">
-                {hasActiveFilter ? 'No signals match the current filters.' : 'No signals in this state.'}
+              <div className="border border-crt/14 bg-[rgba(4,7,5,0.97)] px-8 py-16 text-center">
+                <p className="text-[24px] font-bold text-crt/55">
+                  {hasActiveFilter ? 'No signals match the current filters' : 'No signals in this state'}
+                </p>
+                {hasActiveFilter ? (
+                  <p className="mt-3 text-[18px] text-crt/38">Try clearing the filters above.</p>
+                ) : (
+                  <>
+                    <p className="mt-3 text-[18px] text-crt/38">
+                      No signals have been queued yet.
+                    </p>
+                    <a
+                      href="/scanner/sources"
+                      className="mt-6 inline-flex min-h-[56px] items-center gap-2 border border-crt/25 bg-[rgba(134,212,110,0.06)] px-8 text-[18px] font-bold text-crt/72 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.10)] hover:text-crt/92"
+                    >
+                      Go to Scanner Sources → Run Fetch Session
+                    </a>
+                  </>
+                )}
               </div>
 
             ) : activeTab === 'pending' ? (
@@ -2045,7 +2064,7 @@ export function SignalQueueClient({
                   <section>
                     <div className="mb-3 flex items-center gap-3">
                       <div className="h-px flex-1" style={{ background: 'rgba(192,132,252,0.25)' }} />
-                      <span className="shrink-0 text-sm font-semibold" style={{ color: '#c084fc99' }}>
+                      <span className="shrink-0 text-[18px] font-semibold" style={{ color: '#c084fc' }}>
                         ◈ Rebirth Ready — {rebirthQueueSignals.length}
                       </span>
                       <div className="h-px flex-1" style={{ background: 'rgba(192,132,252,0.25)' }} />
@@ -2057,7 +2076,7 @@ export function SignalQueueClient({
                   <section>
                     <div className="mb-3 flex items-center gap-3">
                       <div className="h-px flex-1" style={{ background: 'rgba(77,184,200,0.22)' }} />
-                      <span className="shrink-0 text-sm font-semibold" style={{ color: '#4db8c890' }}>
+                      <span className="shrink-0 text-[18px] font-semibold" style={{ color: '#4db8c8' }}>
                         ● Under Review — {reviewingSignals.length}
                       </span>
                       <div className="h-px flex-1" style={{ background: 'rgba(77,184,200,0.22)' }} />
@@ -2070,7 +2089,7 @@ export function SignalQueueClient({
                     {(rebirthQueueSignals.length > 0 || reviewingSignals.length > 0) && (
                       <div className="mb-3 flex items-center gap-3">
                         <div className="h-px flex-1 bg-crt/10" />
-                        <span className="shrink-0 text-sm text-crt/38">
+                        <span className="shrink-0 text-[18px] font-semibold text-crt/52">
                           Awaiting Review — {regularPendingSignals.length}
                         </span>
                         <div className="h-px flex-1 bg-crt/10" />
@@ -2090,8 +2109,8 @@ export function SignalQueueClient({
                     <section key={status}>
                       <div className="mb-4 flex items-center gap-3">
                         <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />
-                        <span className="shrink-0 text-sm font-semibold"
-                          style={{ color: `${STATUS_COLORS[status]}90` }}>
+                        <span className="shrink-0 text-[18px] font-semibold"
+                          style={{ color: `${STATUS_COLORS[status]}cc` }}>
                           {SECTION_LABELS[status]} — {sigs.length}
                         </span>
                         <div className="h-px flex-1" style={{ backgroundColor: `${STATUS_COLORS[status]}22` }} />

@@ -372,9 +372,10 @@ function ActivityTimeline({
 export interface ScannerClientProps {
   approvedSignals?: DbRecoveredSignal[];
   stats?:           ScannerStats;
+  isLive?:          boolean;
 }
 
-export function ScannerClient({ approvedSignals, stats }: ScannerClientProps) {
+export function ScannerClient({ approvedSignals, stats, isLive = false }: ScannerClientProps) {
   const router = useRouter();
 
   // Client-side "now" for relative timestamps — avoids SSR hydration mismatch.
@@ -395,14 +396,16 @@ export function ScannerClient({ approvedSignals, stats }: ScannerClientProps) {
   const signals: SignalEntry[] =
     approvedSignals && approvedSignals.length > 0
       ? approvedSignals.map(dbSignalToEntry)
-      : MOCK_SIGNALS;
+      : isLive ? [] : MOCK_SIGNALS;
 
   const activityEvents: ActivityEvent[] =
     approvedSignals && approvedSignals.length > 0
       ? buildActivityEvents(approvedSignals)
-      : MOCK_ACTIVITY;
+      : isLive ? [] : MOCK_ACTIVITY;
 
-  const displayStats = stats ?? MOCK_STATS;
+  const displayStats = stats ?? (isLive
+    ? { totalRecovered: 0, pendingReview: 0, threadsReborn: 0, publicSubmissions: 0 }
+    : MOCK_STATS);
 
   return (
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
@@ -473,6 +476,12 @@ export function ScannerClient({ approvedSignals, stats }: ScannerClientProps) {
                 recovered signal queue
               </span>
             </div>
+
+            {signals.length === 0 && (
+              <p className="text-[1rem] tracking-[0.04em] text-crt/38">
+                No recovered signals approved yet.
+              </p>
+            )}
 
             <div className="terminal-card-grid">
               {signals.map((sig) => (

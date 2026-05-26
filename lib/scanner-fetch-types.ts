@@ -30,6 +30,13 @@ export interface SignalDuplicate {
   status:    string;
 }
 
+// Discovered link from a limited-depth source scan (max 5, same-domain, no recursion).
+export interface DiscoveredLink {
+  url:         string;
+  linkText:    string;
+  matchReason: string;
+}
+
 // Discriminated union — one result per source in a fetch session.
 // 'preview'   — extracted candidate, no duplicates found
 // 'duplicate' — extracted candidate, but similar signals exist in the queue
