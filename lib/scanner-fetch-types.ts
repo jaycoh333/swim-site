@@ -21,6 +21,7 @@ export interface FetchedCandidate {
   isArchived?:          boolean; // true when the URL is a Wayback Machine archive link
   archivedAt?:          string;  // ISO date string when the snapshot was captured
   passReason?:          string;  // why the candidate passed quality filters
+  badCandidateReason?:  string;  // set when extraction looks like nav/index junk — blocks queueing
   // Evidence context (URLs only — no binary stored)
   sourceImageUrl?:      string;  // og:image or twitter:image — absolute URL
   mediaType?:           string;  // 'image' if sourceImageUrl found, else 'webpage'

@@ -8,6 +8,7 @@ import {
   updateSignalStatusAction,
   rebirthSignalAsThreadAction,
 } from '@/app/actions';
+import { getSourceRecommendation } from '@/lib/source-utils';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import type { DbScannerSource, DbRecoveredSignal } from '@/lib/supabase/types';
@@ -306,17 +307,28 @@ export function ScannerConsoleClient({
               </div>
             ) : (
               <>
-                {/* Enabled source pills */}
-                <div className="flex flex-wrap gap-2">
-                  {enabledSources.slice(0, 3).map((s) => (
-                    <span key={s.id} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[13px] text-slate-400">
-                      {s.name}
-                    </span>
-                  ))}
-                  {enabledSources.length > 3 && (
-                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[13px] text-slate-500">
-                      +{enabledSources.length - 3} more
-                    </span>
+                {/* Enabled source pills + per-source recommendations */}
+                <div className="flex flex-col gap-2">
+                  {enabledSources.slice(0, 6).map((s) => {
+                    const rec = getSourceRecommendation(s);
+                    return (
+                      <div key={s.id} className="rounded-xl border border-white/8 bg-white/[0.025] px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[12px] font-semibold text-slate-500 uppercase tracking-wide">
+                            {s.source_type}
+                          </span>
+                          <span className="text-[14px] font-semibold text-slate-300">{s.name}</span>
+                        </div>
+                        {rec && (
+                          <p className="mt-1.5 text-[12px] leading-relaxed text-amber-400/65">
+                            {rec}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {enabledSources.length > 6 && (
+                    <span className="text-[13px] text-slate-600">+{enabledSources.length - 6} more sources</span>
                   )}
                 </div>
 
@@ -477,16 +489,41 @@ export function ScannerConsoleClient({
                             </div>
                           )}
 
-                          {/* Index page queue warning */}
-                          {result.candidate.isIndexPage && st.action === 'idle' && (
-                            <p className="mb-2 text-[12px] text-amber-400/70">
-                              Queue only if this is an actual story or article, not a site index.
-                            </p>
+                          {/* Bad candidate warning */}
+                          {result.candidate.badCandidateReason && st.action === 'idle' && (
+                            <div className="mb-3 rounded-xl border border-red-500/25 bg-red-500/8 px-4 py-3">
+                              <p className="mb-0.5 text-[13px] font-bold text-red-300">Bad candidate detected</p>
+                              <p className="text-[12px] leading-relaxed text-red-400/65">{result.candidate.badCandidateReason}</p>
+                              <p className="mt-1.5 text-[12px] text-red-400/50">Use Discover Links to find specific articles or threads.</p>
+                            </div>
+                          )}
+
+                          {/* Index page warning (softer, when no bad-candidate) */}
+                          {result.candidate.isIndexPage && !result.candidate.badCandidateReason && st.action === 'idle' && (
+                            <div className="mb-3 rounded-xl border border-amber-500/20 bg-amber-500/6 px-4 py-2.5">
+                              <p className="text-[12px] text-amber-400/70">
+                                Homepage or index detected — only queue if this is an actual story, not a site front page.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Weak content notice */}
+                          {result.candidate.extractionConfidence === 'low' && !result.candidate.badCandidateReason && st.action === 'idle' && (
+                            <div className="mb-3 rounded-xl border border-slate-500/20 bg-slate-500/8 px-4 py-2.5">
+                              <p className="text-[12px] text-slate-400/70">
+                                Weak story content — title or summary is thin. Manual edit recommended before queueing.
+                              </p>
+                            </div>
                           )}
 
                           {st.action === 'idle' && (
                             <div className="flex gap-3">
-                              <button onClick={() => handleQueueCandidate(result)} className={BTN_QUEUE}>
+                              <button
+                                onClick={() => handleQueueCandidate(result)}
+                                disabled={!!result.candidate.badCandidateReason}
+                                className={`${BTN_QUEUE} ${result.candidate.badCandidateReason ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                title={result.candidate.badCandidateReason ? 'Blocked: ' + result.candidate.badCandidateReason : undefined}
+                              >
                                 Queue Candidate
                               </button>
                               <button onClick={() => handleSkip(result.sourceId)} className={BTN_SKIP}>
@@ -500,16 +537,42 @@ export function ScannerConsoleClient({
                             </p>
                           )}
                           {st.action === 'queued' && (
-                            <p className="text-[15px] font-semibold text-emerald-400">✓ Queued — now in Review</p>
+                            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4">
+                              <p className="mb-3 text-[17px] font-bold text-emerald-400">✓ Candidate queued for review</p>
+                              <p className="mb-4 text-[14px] text-emerald-400/65">This story is now waiting in the Review column. Approve it to move it to Publish.</p>
+                              <div className="flex flex-wrap gap-2">
+                                <a
+                                  href="/scanner/queue"
+                                  className="flex min-h-[44px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 text-[14px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/25"
+                                >
+                                  Open Signal Queue →
+                                </a>
+                                <button
+                                  onClick={() => {
+                                    setCandStates((prev) => {
+                                      const next = new Map(prev);
+                                      next.delete(result.sourceId);
+                                      return next;
+                                    });
+                                  }}
+                                  className="flex min-h-[44px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-4 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+                                >
+                                  Continue Scanning
+                                </button>
+                              </div>
+                            </div>
                           )}
                           {st.action === 'skipped' && (
                             <p className="text-[15px] text-slate-500">Skipped</p>
                           )}
                           {st.action === 'error' && (
-                            <div>
-                              <p className="text-[15px] text-red-300">{st.error}</p>
+                            <div className="rounded-xl border border-red-500/25 bg-red-500/8 p-4">
+                              <p className="mb-1 text-[15px] font-semibold text-red-300">{st.error}</p>
                               {st.error?.includes('Missing Supabase column') && (
                                 <p className="mt-1 text-[13px] text-red-400/60">Run the recovered_signals migration in your Supabase project to add the missing column.</p>
+                              )}
+                              {st.error?.includes('index or navigation page') && (
+                                <p className="mt-1 text-[13px] text-red-400/60">Use Discover Links on this source to find specific article or thread URLs.</p>
                               )}
                             </div>
                           )}
@@ -538,15 +601,24 @@ export function ScannerConsoleClient({
                 </span>
               )}
             </div>
-            <p className="text-[15px] text-slate-500">Approve to move a signal to Publish</p>
+            <p className="text-[15px] font-semibold text-amber-300/80">
+              Queued Stories Waiting For Review
+            </p>
+            <p className="mt-0.5 text-[14px] text-slate-500">Approve a story to move it to Publish</p>
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
 
             {reviewSignals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-[17px] text-slate-500">No signals to review.</p>
-                <p className="mt-2 text-[15px] text-slate-600">Queue candidates from Scan first.</p>
+              <div className="flex flex-col items-center justify-center rounded-2xl border border-white/8 bg-white/[0.02] py-12 text-center">
+                <p className="text-[17px] font-semibold text-slate-500">No queued stories yet</p>
+                <p className="mt-2 text-[14px] text-slate-600">Run a scan and queue a candidate to see it here.</p>
+                <a
+                  href="/scanner/queue"
+                  className="mt-5 flex min-h-[44px] items-center justify-center rounded-xl border border-white/10 bg-white/5 px-5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+                >
+                  Open Full Queue →
+                </a>
               </div>
             ) : (
               reviewSignals.map((sig) => {

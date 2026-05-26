@@ -355,6 +355,86 @@ function toSignalSourceType(scannerType: string): import('@/lib/supabase/types')
   return map[scannerType] ?? 'other';
 }
 
+// ---------------------------------------------------------------------------
+// Bad-candidate guard — catches index/nav pages before they reach the DB
+// ---------------------------------------------------------------------------
+
+const NAV_WORDS = [
+  'donate', 'donation', 'privacy policy', 'terms of service', 'terms of use',
+  'contact us', 'about us', 'sign in', 'log in', 'sign up', 'register',
+  'subscribe', 'newsletter', 'search results', 'page not found', '404',
+  'cookies', 'accessibility', 'sitemap', 'all rights reserved',
+];
+
+function detectBadCandidate(
+  url: string,
+  title: string,
+  summary: string,
+): { bad: true; reason: string } | { bad: false } {
+  const lcTitle   = title.toLowerCase();
+  const lcSummary = summary.toLowerCase();
+
+  // Wayback homepage
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'web.archive.org' && (parsed.pathname === '/' || parsed.pathname === '')) {
+      return { bad: true, reason: 'Wayback Machine homepage — not a story' };
+    }
+  } catch { /* ignore */ }
+
+  // Title is "Wayback Machine" or derivative
+  if (lcTitle.includes('wayback machine') || lcTitle === 'internet archive') {
+    return { bad: true, reason: 'Wayback Machine index page — not a story' };
+  }
+
+  // Summary contains raw HTML fragments
+  if (/<[a-z][\s\S]{0,60}>/i.test(summary) || summary.includes('</')) {
+    return { bad: true, reason: 'Summary contains HTML fragments — extraction failed' };
+  }
+
+  // Summary looks like JSON/code
+  if (/^\s*[\[{]/.test(summary) || summary.includes('"props"') || summary.includes('"children"')) {
+    return { bad: true, reason: 'Summary contains JSON/component fragments — extraction failed' };
+  }
+
+  // Too many nav/menu words in summary (3+ distinct hits = nav page)
+  const navHits = NAV_WORDS.filter((w) => lcSummary.includes(w));
+  if (navHits.length >= 3) {
+    return { bad: true, reason: `Navigation page detected (${navHits.slice(0, 3).join(', ')})` };
+  }
+
+  // Title includes "Wayback Machine" donation text
+  if (lcSummary.includes('internet archive') && lcSummary.includes('donate')) {
+    return { bad: true, reason: 'Internet Archive donation/nav page — not a story' };
+  }
+
+  return { bad: false };
+}
+
+/** Human-readable advice to show the curator when a bad candidate is blocked. */
+const BAD_CANDIDATE_ADVICE =
+  'This is an index or navigation page, not a story. Use Discover Links to find specific articles or threads.';
+
+// ---------------------------------------------------------------------------
+// Source-level guardrails — warn before fetching known bad source URLs
+// ---------------------------------------------------------------------------
+
+function sourceUrlWarning(source: { source_type: string; base_url: string | null }): string | null {
+  const url = source.base_url ?? '';
+  try {
+    const parsed = new URL(url);
+    // Wayback root — curators must supply a specific archived URL
+    if (
+      source.source_type === 'wayback' &&
+      parsed.hostname === 'web.archive.org' &&
+      (parsed.pathname === '/' || parsed.pathname === '' || parsed.pathname === '/web/')
+    ) {
+      return 'Add a specific archived URL or use Wayback discovery with a target domain (e.g. web.archive.org/web/*/example.com/*). The Wayback homepage is not a story source.';
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 // Phase 1 — fetch page and return candidate preview for curator review.
 // No database writes. Curator must call queueFetchedCandidateAction to insert.
 export async function fetchScannerSourcePreviewAction(
@@ -364,6 +444,10 @@ export async function fetchScannerSourcePreviewAction(
   if (!source)          return { error: 'source not found in registry' };
   if (!source.enabled)  return { error: 'source must be enabled before fetching' };
   if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  // Source-level guardrail — catch obviously bad source URLs before fetching
+  const srcWarning = sourceUrlWarning(source);
+  if (srcWarning) return { error: srcWarning };
 
   let html: string;
   try {
@@ -394,6 +478,7 @@ export async function fetchScannerSourcePreviewAction(
   const resolvedUrl = extracted.canonicalUrl || source.base_url;
   const urlPath    = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
   const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
+  const bad        = detectBadCandidate(resolvedUrl, title, summary);
 
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
@@ -406,6 +491,7 @@ export async function fetchScannerSourcePreviewAction(
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
     isIndexPage,
+    badCandidateReason:   bad.bad ? bad.reason : (isIndexPage ? 'Index/homepage detected' : undefined),
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
@@ -437,6 +523,13 @@ export async function queueFetchedCandidateAction(input: {
 > {
   const source = await getScannerSource(input.sourceId);
   if (!source) return { error: 'source not found' };
+
+  // Hard block — reject index/nav/junk pages before they reach the DB.
+  // Curator must use Discover Links to find real story URLs.
+  const bad = detectBadCandidate(input.sourceUrl, input.title, input.summary);
+  if (bad.bad) {
+    return { error: `${BAD_CANDIDATE_ADVICE} (detected: ${bad.reason})` };
+  }
 
   // Duplicate check — skip if curator has explicitly overridden
   if (!input.overrideDuplicate) {
@@ -867,6 +960,7 @@ async function fetchWaybackPagePreview(
   const summary    = buildSummary(extracted.description, extracted.snippet);
   const conf       = scoreExtractionConfidence(title, summary);
   const quality    = candidatePassesQuality(url, title, summary);
+  const badCheck   = detectBadCandidate(url, title, summary);
 
   if (!quality.pass) {
     return { error: `Quality filter: ${quality.reason}` };
@@ -886,6 +980,7 @@ async function fetchWaybackPagePreview(
     isArchived:           true,
     archivedAt:           archivedAt,
     passReason:           quality.reason,
+    badCandidateReason:   badCheck.bad ? badCheck.reason : undefined,
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Archived via Wayback Machine · ${source.name}`,
@@ -930,10 +1025,11 @@ async function fetchMediaWikiPagePreview(
   if ('error' in result) return result;
 
   const { article } = result;
-  const title   = cleanTitle(article.title) || source.name;
-  const summary = article.extract.trim() || 'No extract available — edit manually.';
-  const conf    = scoreExtractionConfidence(title, summary);
-  const quality = candidatePassesQuality(url, title, summary);
+  const title    = cleanTitle(article.title) || source.name;
+  const summary  = article.extract.trim() || 'No extract available — edit manually.';
+  const conf     = scoreExtractionConfidence(title, summary);
+  const quality  = candidatePassesQuality(url, title, summary);
+  const badCheck = detectBadCandidate(url, title, summary);
 
   if (!quality.pass) {
     return { error: `Quality filter: ${quality.reason}` };
@@ -952,6 +1048,7 @@ async function fetchMediaWikiPagePreview(
     sourceType:           'mediawiki',
     isArchived:           false,
     passReason:           quality.reason,
+    badCandidateReason:   badCheck.bad ? badCheck.reason : undefined,
     sourceImageUrl:       article.imageUrl || undefined,
     mediaType:            article.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · MediaWiki`,
