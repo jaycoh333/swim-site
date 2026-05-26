@@ -7,20 +7,57 @@ import type { TerminalEntry } from '@/lib/terminal-feed';
 // Entry-type → color scheme
 // ---------------------------------------------------------------------------
 
-const TYPE_STYLE: Record<string, { text: string; bg: string; border: string }> = {
-  'SIGNAL RECOVERED':  { text: '#86d46e', bg: 'rgba(134,212,110,0.055)', border: 'rgba(134,212,110,0.18)' },
-  'THREAD REBORN':     { text: '#d7a85c', bg: 'rgba(215,168,92,0.065)',  border: 'rgba(215,168,92,0.22)'  },
-  'SOURCE DISCOVERED': { text: '#6da8ff', bg: 'rgba(109,168,255,0.055)', border: 'rgba(109,168,255,0.18)' },
-  'READY FOR REBIRTH': { text: '#d7a85c', bg: 'rgba(215,168,92,0.055)',  border: 'rgba(215,168,92,0.18)'  },
-  'PUBLIC SUBMISSION': { text: '#6da8ff', bg: 'rgba(109,168,255,0.045)', border: 'rgba(109,168,255,0.15)' },
-  'SIGNAL ARCHIVED':   { text: 'rgba(134,212,110,0.38)', bg: 'rgba(134,212,110,0.02)', border: 'rgba(134,212,110,0.08)' },
+const TYPE_STYLE: Record<string, {
+  text: string; bg: string; border: string; glow: string;
+  badgeBg: string; badgeBorder: string;
+}> = {
+  'SIGNAL RECOVERED':  {
+    text: '#86d46e',
+    bg: 'rgba(134,212,110,0.042)',  border: 'rgba(134,212,110,0.20)', glow: 'rgba(134,212,110,0.10)',
+    badgeBg: 'rgba(134,212,110,0.10)', badgeBorder: 'rgba(134,212,110,0.28)',
+  },
+  'THREAD REBORN':     {
+    text: '#d7a85c',
+    bg: 'rgba(215,168,92,0.060)',   border: 'rgba(215,168,92,0.26)',  glow: 'rgba(215,168,92,0.12)',
+    badgeBg: 'rgba(215,168,92,0.12)',  badgeBorder: 'rgba(215,168,92,0.30)',
+  },
+  'SOURCE DISCOVERED': {
+    text: '#6da8ff',
+    bg: 'rgba(109,168,255,0.042)', border: 'rgba(109,168,255,0.20)', glow: 'rgba(109,168,255,0.10)',
+    badgeBg: 'rgba(109,168,255,0.10)', badgeBorder: 'rgba(109,168,255,0.26)',
+  },
+  'READY FOR REBIRTH': {
+    text: '#d7a85c',
+    bg: 'rgba(215,168,92,0.050)',   border: 'rgba(215,168,92,0.22)',  glow: 'rgba(215,168,92,0.10)',
+    badgeBg: 'rgba(215,168,92,0.10)',  badgeBorder: 'rgba(215,168,92,0.26)',
+  },
+  'PUBLIC SUBMISSION': {
+    text: '#6da8ff',
+    bg: 'rgba(109,168,255,0.038)', border: 'rgba(109,168,255,0.16)', glow: 'rgba(109,168,255,0.08)',
+    badgeBg: 'rgba(109,168,255,0.08)', badgeBorder: 'rgba(109,168,255,0.22)',
+  },
+  'SIGNAL ARCHIVED':   {
+    text: 'rgba(134,212,110,0.38)',
+    bg: 'rgba(134,212,110,0.016)',  border: 'rgba(134,212,110,0.07)', glow: 'transparent',
+    badgeBg: 'rgba(134,212,110,0.05)', badgeBorder: 'rgba(134,212,110,0.12)',
+  },
 };
+
+const SCAN_PHRASES = [
+  'scanning forgotten forums…',
+  'parsing archived fragments…',
+  'checking signal anomalies…',
+  'ranking recovered stories…',
+  'waiting for curator approval…',
+  'indexing lost internet edges…',
+  'detecting orphaned threads…',
+];
 
 function formatRel(iso: string): string {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
   if (d < 1)   return 'today';
   if (d === 1) return 'yesterday';
-  if (d < 30)  return `${d} days ago`;
+  if (d < 30)  return `${d}d ago`;
   return `${Math.floor(d / 30)}mo ago`;
 }
 
@@ -36,9 +73,9 @@ export interface SwimAiTerminalStats {
 }
 
 export interface SwimAiTerminalProps {
-  entries:   TerminalEntry[];
-  stats?:    SwimAiTerminalStats;
-  compact?:  boolean;
+  entries:    TerminalEntry[];
+  stats?:     SwimAiTerminalStats;
+  compact?:   boolean;
   className?: string;
 }
 
@@ -52,11 +89,13 @@ export function SwimAiTerminal({
   compact    = false,
   className  = '',
 }: SwimAiTerminalProps) {
-  const PAGE = compact ? 4 : 6;
+  const PAGE = compact ? 4 : 5;
 
-  const [page,   setPage]   = useState(0);
-  const [cursor, setCursor] = useState(true);
-  const [paused, setPaused] = useState(false);
+  const [page,         setPage]         = useState(0);
+  const [cursor,       setCursor]       = useState(true);
+  const [paused,       setPaused]       = useState(false);
+  const [phraseIdx,    setPhraseIdx]    = useState(0);
+  const [phraseFading, setPhraseFading] = useState(false);
 
   // Blinking cursor
   useEffect(() => {
@@ -64,7 +103,7 @@ export function SwimAiTerminal({
     return () => clearInterval(id);
   }, []);
 
-  // Auto-advance
+  // Auto-advance pages
   const maxPage = Math.max(0, entries.length - PAGE);
   useEffect(() => {
     if (paused || entries.length <= PAGE) return;
@@ -72,145 +111,237 @@ export function SwimAiTerminal({
     return () => clearInterval(id);
   }, [paused, entries.length, PAGE, maxPage]);
 
-  const visible     = entries.slice(page, page + PAGE);
-  const pageCount   = Math.min(Math.ceil(entries.length / PAGE), 8);
-  const activePage  = Math.floor(page / PAGE);
+  // Cycle scan phrases with fade transition
+  useEffect(() => {
+    const id = setInterval(() => {
+      setPhraseFading(true);
+      setTimeout(() => {
+        setPhraseIdx((i) => (i + 1) % SCAN_PHRASES.length);
+        setPhraseFading(false);
+      }, 420);
+    }, 3600);
+    return () => clearInterval(id);
+  }, []);
+
+  const visible    = entries.slice(page, page + PAGE);
+  const pageCount  = Math.min(Math.ceil(entries.length / PAGE), 8);
+  const activePage = Math.floor(page / PAGE);
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl border border-crt/10 font-mono ${className}`}
-      style={{ background: 'rgba(0,0,0,0.52)' }}
+      className={`swim-ai-terminal relative overflow-hidden rounded-2xl font-mono ${className}`}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
-      {/* ── Header bar ── */}
-      <div
-        className="flex items-center justify-between border-b border-crt/10 px-4 py-2.5"
-        style={{ background: 'rgba(134,212,110,0.025)' }}
-      >
-        <div className="flex items-center gap-2.5">
-          <span className="h-[7px] w-[7px] animate-pulse-glow bg-crt/55" aria-hidden="true" />
-          <span className="text-[11px] uppercase tracking-[0.28em] text-crt/52">
-            SWIM AI · SIGNAL MONITOR
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="text-[13px] text-crt/60 transition-opacity duration-100"
-            aria-hidden="true"
-            style={{ opacity: cursor ? 1 : 0 }}
-          >
-            ▋
-          </span>
-          <span className="text-[9px] uppercase tracking-[0.22em] text-crt/25">
-            {paused ? 'PAUSED' : 'LIVE'}
-          </span>
-        </div>
-      </div>
+      {/* ── Ambient overlays (behind all content) ── */}
+      <div className="terminal-scan-sweep pointer-events-none absolute inset-x-0 top-0" aria-hidden="true" />
+      <div className="terminal-grid-overlay pointer-events-none absolute inset-0" aria-hidden="true" />
 
-      {/* ── Feed ── */}
-      <div style={{ minHeight: compact ? 220 : 340 }}>
-        {entries.length === 0 ? (
-          <div className="flex items-center justify-center py-16">
-            <span className="text-[14px] tracking-[0.06em] text-crt/22">
-              awaiting signal data_
-            </span>
-          </div>
-        ) : (
-          visible.map((entry) => {
-            const style = TYPE_STYLE[entry.type] ?? TYPE_STYLE['SIGNAL RECOVERED'];
-            return (
-              <div
-                key={entry.id}
-                className="border-b border-crt/[0.05] px-4 py-3 transition-colors duration-300"
-                style={{ borderLeft: `2px solid ${style.border}`, background: style.bg }}
-              >
-                {/* Type + category + timestamp */}
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0">
-                  <span
-                    className="text-[12px] font-bold uppercase tracking-[0.10em]"
-                    style={{ color: style.text }}
-                  >
-                    [ {entry.type} ]
-                  </span>
-                  <span className="text-[11px] uppercase tracking-[0.08em] text-crt/38">
-                    {entry.category}
-                  </span>
-                  <span
-                    className="ml-auto shrink-0 text-[11px] tabular-nums text-crt/25"
-                    suppressHydrationWarning
-                  >
-                    {formatRel(entry.timestamp)}
-                  </span>
+      {/* ── All content — sits above overlays via DOM order ── */}
+      <div className="relative">
+
+        {/* ── Header ── */}
+        <div
+          className="border-b border-crt/12 px-5 pb-3.5 pt-4"
+          style={{ background: 'rgba(134,212,110,0.022)' }}
+        >
+          {/* Title row */}
+          <div className="mb-2.5 flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="h-2 w-2 shrink-0 bg-crt/70" aria-hidden="true" />
+              <span className="text-[13px] font-bold uppercase tracking-[0.24em] text-crt/88">
+                SWIM AI // SIGNAL SCANNER
+              </span>
+            </div>
+            {/* Live / paused indicator */}
+            <div className="flex shrink-0 items-center gap-2 pt-0.5">
+              {paused ? (
+                <span className="text-[9px] uppercase tracking-[0.22em] text-crt/28">PAUSED</span>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <span className="terminal-live-dot h-[6px] w-[6px] rounded-full" />
+                  <span className="text-[9px] font-bold uppercase tracking-[0.26em] text-crt/55">LIVE</span>
                 </div>
-
-                {/* Title */}
-                {entry.url ? (
-                  <a
-                    href={entry.url}
-                    className="mt-0.5 block text-[16px] leading-snug tracking-[0.01em] text-crt/82 transition-colors hover:text-crt"
-                  >
-                    {entry.title}
-                  </a>
-                ) : (
-                  <p className="mt-0.5 text-[16px] leading-snug tracking-[0.01em] text-crt/82">
-                    {entry.title}
-                  </p>
-                )}
-
-                {/* Source */}
-                <p className="mt-0.5 text-[12px] tracking-[0.04em] text-crt/30">
-                  {entry.source}
-                </p>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* ── Scroll indicator ── */}
-      {pageCount > 1 && (
-        <div
-          className="flex items-center justify-center gap-1.5 border-t border-crt/8 py-1.5"
-          style={{ background: 'rgba(0,0,0,0.28)' }}
-        >
-          {Array.from({ length: pageCount }).map((_, i) => (
-            <button
-              key={i}
-              onClick={() => setPage(i * PAGE)}
-              aria-label={`Page ${i + 1}`}
-              className={`h-1 rounded-full transition-all ${
-                i === activePage ? 'w-5 bg-crt/45' : 'w-1.5 bg-crt/12 hover:bg-crt/25'
-              }`}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* ── Status bar ── */}
-      {stats && (
-        <div
-          className="border-t border-crt/10 px-4 py-3"
-          style={{ background: 'rgba(134,212,110,0.018)' }}
-        >
-          <div className="mb-1.5 text-[9px] uppercase tracking-[0.32em] text-crt/22">
-            LIVE STATUS
+              )}
+              <span
+                className="text-[14px] text-crt/50 transition-opacity duration-100"
+                aria-hidden="true"
+                style={{ opacity: cursor ? 1 : 0 }}
+              >
+                ▋
+              </span>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-x-5 gap-y-1.5 sm:grid-cols-4">
+
+          {/* System metadata row */}
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
             {[
-              { label: 'RECOVERED', value: stats.recoveredToday   },
-              { label: 'SOURCES',   value: stats.sourcesMonitored },
-              { label: 'REBORN',    value: stats.threadsReborn    },
-              { label: 'PENDING',   value: stats.pendingReview    },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex items-baseline gap-1.5">
-                <span className="text-[20px] font-bold tabular-nums text-crt/78">{value}</span>
-                <span className="text-[10px] uppercase tracking-[0.14em] text-crt/28">{label}</span>
+              { label: 'status', value: 'LIVE',              color: '#86d46e' },
+              { label: 'mode',   value: 'deep web recovery', color: 'rgba(134,212,110,0.52)' },
+              { label: 'review', value: 'human-gated',       color: 'rgba(109,168,255,0.62)' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-[0.20em] text-crt/25">{label}:</span>
+                <span className="text-[10px] uppercase tracking-[0.16em]" style={{ color }}>{value}</span>
               </div>
             ))}
           </div>
         </div>
-      )}
+
+        {/* ── Active scan line ── */}
+        <div
+          className="flex items-center gap-2 border-b border-crt/[0.06] px-5 py-2"
+          style={{ background: 'rgba(134,212,110,0.014)' }}
+        >
+          <span className="shrink-0 text-[11px] text-crt/22 select-none" aria-hidden="true">▶</span>
+          <span
+            className="text-[11px] tracking-[0.06em]"
+            style={{
+              color:      'rgba(134,212,110,0.45)',
+              opacity:    phraseFading ? 0 : 1,
+              transition: 'opacity 0.4s ease',
+            }}
+          >
+            {SCAN_PHRASES[phraseIdx]}
+          </span>
+          <span
+            className="text-[11px] text-crt/28 transition-opacity duration-100"
+            style={{ opacity: cursor ? 1 : 0 }}
+            aria-hidden="true"
+          >
+            _
+          </span>
+        </div>
+
+        {/* ── Feed ── */}
+        <div style={{ minHeight: compact ? 220 : 380 }}>
+          {entries.length === 0 ? (
+            <div className="flex items-center justify-center py-16">
+              <span className="text-[14px] tracking-[0.06em] text-crt/22">
+                awaiting signal data_
+              </span>
+            </div>
+          ) : (
+            visible.map((entry) => {
+              const style      = TYPE_STYLE[entry.type] ?? TYPE_STYLE['SIGNAL RECOVERED'];
+              const isHighlight = entry.severity === 'highlight';
+              const isWarning   = entry.severity === 'warning';
+              return (
+                <div
+                  key={entry.id}
+                  className="border-b border-crt/[0.055] px-5 py-4 transition-all duration-300"
+                  style={{
+                    borderLeft: `3px solid ${style.border}`,
+                    background: style.bg,
+                    boxShadow:  isHighlight || isWarning
+                      ? `inset 0 0 20px ${style.glow}`
+                      : 'none',
+                  }}
+                >
+                  {/* Badge row: type + category + timestamp */}
+                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span
+                      className="rounded-sm px-2 py-[3px] text-[10px] font-bold uppercase tracking-[0.12em]"
+                      style={{
+                        color:      style.text,
+                        background: style.badgeBg,
+                        border:     `1px solid ${style.badgeBorder}`,
+                      }}
+                    >
+                      {entry.type}
+                    </span>
+                    <span
+                      className="rounded-sm border px-1.5 py-[3px] text-[10px] uppercase tracking-[0.10em]"
+                      style={{ color: 'rgba(134,212,110,0.40)', borderColor: 'rgba(134,212,110,0.10)' }}
+                    >
+                      {entry.category}
+                    </span>
+                    <span
+                      className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-crt/22"
+                      suppressHydrationWarning
+                    >
+                      {formatRel(entry.timestamp)}
+                    </span>
+                  </div>
+
+                  {/* Title */}
+                  {entry.url ? (
+                    <a
+                      href={entry.url}
+                      className="mb-1.5 block text-[17px] font-bold leading-snug tracking-[0.01em] text-crt/88 transition-colors hover:text-crt md:text-[18px]"
+                      style={{ textShadow: isHighlight ? `0 0 14px ${style.glow}` : 'none' }}
+                    >
+                      {entry.title}
+                    </a>
+                  ) : (
+                    <p
+                      className="mb-1.5 text-[17px] font-bold leading-snug tracking-[0.01em] text-crt/88 md:text-[18px]"
+                      style={{ textShadow: isHighlight ? `0 0 14px ${style.glow}` : 'none' }}
+                    >
+                      {entry.title}
+                    </p>
+                  )}
+
+                  {/* Source */}
+                  <p className="text-[11px] tracking-[0.05em] text-crt/28">
+                    ↳ {entry.source}
+                  </p>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* ── Pagination dots ── */}
+        {pageCount > 1 && (
+          <div
+            className="flex items-center justify-center gap-2 border-t border-crt/[0.07] py-2"
+            style={{ background: 'rgba(0,0,0,0.30)' }}
+          >
+            {Array.from({ length: pageCount }).map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setPage(i * PAGE)}
+                aria-label={`Page ${i + 1}`}
+                className={`h-[3px] rounded-full transition-all ${
+                  i === activePage ? 'w-6 bg-crt/48' : 'w-2 bg-crt/12 hover:bg-crt/25'
+                }`}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* ── Telemetry bar ── */}
+        {stats && (
+          <div
+            className="border-t border-crt/12 px-5 pb-5 pt-4"
+            style={{ background: 'rgba(134,212,110,0.014)' }}
+          >
+            <div className="mb-3 text-[9px] uppercase tracking-[0.36em] text-crt/20">
+              ◈ SYSTEM TELEMETRY
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4">
+              {[
+                { label: 'SIGNALS RECOVERED', value: stats.recoveredToday,   accent: '#86d46e' },
+                { label: 'PENDING REVIEW',    value: stats.pendingReview,    accent: '#d7a85c' },
+                { label: 'THREADS REBORN',    value: stats.threadsReborn,    accent: '#d7a85c' },
+                { label: 'SOURCES MONITORED', value: stats.sourcesMonitored, accent: '#6da8ff' },
+              ].map(({ label, value, accent }) => (
+                <div key={label}>
+                  <div
+                    className="font-mono text-[30px] font-bold leading-none tabular-nums md:text-[34px]"
+                    style={{ color: accent, textShadow: `0 0 12px ${accent}44` }}
+                  >
+                    {value}
+                  </div>
+                  <div className="mt-1.5 text-[9px] uppercase tracking-[0.20em] text-crt/28">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </div>{/* /relative content wrapper */}
     </div>
   );
 }

@@ -1065,14 +1065,58 @@ export async function runFetchSessionAction(
       continue;
     }
 
-    // Erowid — homepage produces no story candidates; tell curator to use Discover Links
+    // Erowid — auto-discover individual experience reports and fetch each one
     if (isErowidSource(source)) {
-      results.push({
-        sourceId,
-        sourceName: source.name,
-        status:     'error',
-        error:      'Erowid homepage skipped — use Discover Links to find individual experience reports.',
-      });
+      const erowidDisc = await discoverErowidExperienceLinks(source);
+      if ('error' in erowidDisc) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: erowidDisc.error });
+        continue;
+      }
+      let erowidFetched = 0;
+      for (const link of erowidDisc.links.slice(0, 10)) {
+        const fr = await fetchErowidExperiencePreview(source, link.url);
+        if ('error' in fr) continue;
+        const dupes = await checkSignalDuplicates(fr.candidate.sourceUrl, fr.candidate.title);
+        if (dupes.length > 0) {
+          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        } else {
+          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+        }
+        erowidFetched++;
+      }
+      if (erowidFetched === 0) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: 'No fetchable Erowid experience reports found — try a substance category URL (e.g. erowid.org/experiences/subs/exp_DMT.shtml).' });
+      }
+      continue;
+    }
+
+    // Wayback CDX — discover archived snapshots via CDX API, then fetch each
+    if (source.source_type === 'wayback') {
+      const baseHost = (() => { try { return new URL(source.base_url).hostname; } catch { return ''; } })();
+      if (baseHost === 'web.archive.org') {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: 'Wayback source requires a specific domain URL as base_url (e.g. "https://oldsite.example.com") — not the archive root.' });
+        continue;
+      }
+      const waybackDisc = await discoverWaybackLinks(source);
+      if ('error' in waybackDisc) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: waybackDisc.error });
+        continue;
+      }
+      let waybackFetched = 0;
+      for (const link of waybackDisc.links.slice(0, 10)) {
+        const fr = await fetchWaybackPagePreview(source, link.url);
+        if ('error' in fr) continue;
+        const dupes = await checkSignalDuplicates(fr.candidate.sourceUrl, fr.candidate.title);
+        if (dupes.length > 0) {
+          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        } else {
+          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+        }
+        waybackFetched++;
+      }
+      if (waybackFetched === 0) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: 'No usable Wayback snapshots found for this source URL — check the CDX API or configure a more specific domain.' });
+      }
       continue;
     }
 
@@ -1111,8 +1155,15 @@ export async function runFetchSessionAction(
       continue;
     }
 
-    // Generic HTML fetch for all other source types
-    let html: string;
+    // Generic HTML sources — discovery-first: extract story links from index, fetch each
+    let baseHostname: string;
+    try { baseHostname = new URL(source.base_url).hostname; }
+    catch {
+      results.push({ sourceId, sourceName: source.name, status: 'error', error: 'invalid base URL' });
+      continue;
+    }
+
+    let indexHtml: string;
     try {
       const response = await fetch(source.base_url, {
         cache:   'no-store',
@@ -1132,61 +1183,122 @@ export async function runFetchSessionAction(
         results.push({ sourceId, sourceName: source.name, status: 'error', error: `non-HTML response: ${ct.split(';')[0].trim()}` });
         continue;
       }
-      html = await response.text();
+      indexHtml = await response.text();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       results.push({ sourceId, sourceName: source.name, status: 'error', error: `network — ${msg}` });
       continue;
     }
 
-    // Extract metadata — raw HTML discarded after this point
-    const extracted   = extractPageData(html, source.base_url);
-    const title       = cleanTitle(extracted.title) || source.name;
-    const summary     = buildSummary(extracted.description, extracted.snippet);
-    const conf        = scoreExtractionConfidence(title, summary);
-    const resolvedUrl = extracted.canonicalUrl || source.base_url;
-    const urlPath     = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
-    const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
-    const bad         = detectBadCandidate(resolvedUrl, title, summary);
-    const heuristicsH = scoreStoryHeuristics(`${title} ${summary}`);
+    // Extract story-quality links from the index page
+    const pageAnchors  = extractAnchors(indexHtml.slice(0, 200_000), source.base_url);
+    const seenLinks    = new Set<string>([source.base_url, source.base_url + '/']);
+    const storyLinks: string[] = [];
 
-    const candidate: FetchedCandidate = {
-      title:                title.slice(0, 200),
-      summary:              summary.slice(0, 2000),
-      sourceUrl:            resolvedUrl,
-      category:             source.category_focus[0] ?? 'Internet Lore',
-      tags:                 ['scanner-source', source.source_type],
-      anomalyScore:         5,
-      categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
-      extractionConfidence: conf.confidence,
-      extractionWarning:    conf.warning ?? undefined,
-      isIndexPage,
-      badCandidateReason:   bad.bad ? bad.reason : (isIndexPage ? 'Index/homepage detected' : undefined),
-      sourceImageUrl:       extracted.imageUrl || undefined,
-      mediaType:            extracted.imageUrl ? 'image' : 'webpage',
-      attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
-      captureNotes:         'Captured from source preview during manual scanner fetch. Raw HTML not stored.',
-      storyScore:           heuristicsH.storyScore,
-      storySignals:         heuristicsH.storySignals.length > 0 ? heuristicsH.storySignals : undefined,
-    };
+    for (const { href, text } of pageAnchors) {
+      if (storyLinks.length >= 8) break;
+      if (seenLinks.has(href)) continue;
+      seenLinks.add(href);
+      if (SKIP_EXTENSIONS.test(href)) continue;
+      try { if (new URL(href).hostname !== baseHostname) continue; } catch { continue; }
+      if (!discoveryKeywordMatch(href, text)) continue;
+      storyLinks.push(href);
+    }
 
-    // Duplicate check — include in session results so curator sees it immediately
-    const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
-    if (dupes.length > 0) {
-      results.push({
-        sourceId,
-        sourceName: source.name,
-        status:     'duplicate',
-        candidate,
-        duplicates: dupes.map((d) => ({
-          id:        d.id,
-          title:     d.title,
-          sourceUrl: d.source_url,
-          status:    d.status,
-        })),
-      });
+    if (storyLinks.length === 0) {
+      // Fallback: single candidate built from the index page metadata
+      const extracted   = extractPageData(indexHtml, source.base_url);
+      const title       = cleanTitle(extracted.title) || source.name;
+      const summary     = buildSummary(extracted.description, extracted.snippet);
+      const conf        = scoreExtractionConfidence(title, summary);
+      const resolvedUrl = extracted.canonicalUrl || source.base_url;
+      const urlPath     = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
+      const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
+      const bad         = detectBadCandidate(resolvedUrl, title, summary);
+      const heur        = scoreStoryHeuristics(`${title} ${summary}`);
+
+      const fallbackCand: FetchedCandidate = {
+        title:                title.slice(0, 200),
+        summary:              summary.slice(0, 2000),
+        sourceUrl:            resolvedUrl,
+        category:             source.category_focus[0] ?? 'Internet Lore',
+        tags:                 ['scanner-source', source.source_type],
+        anomalyScore:         5,
+        categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+        extractionConfidence: conf.confidence,
+        extractionWarning:    conf.warning ?? undefined,
+        isIndexPage,
+        badCandidateReason:   bad.bad ? bad.reason : (isIndexPage ? 'Index/homepage — no story links found' : undefined),
+        sourceImageUrl:       extracted.imageUrl || undefined,
+        mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+        attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
+        captureNotes:         'Source index page — no story-quality links found via keyword scan. Raw HTML not stored.',
+        storyScore:           heur.storyScore,
+        storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+      };
+
+      const fallbackDupes = await checkSignalDuplicates(fallbackCand.sourceUrl, fallbackCand.title);
+      if (fallbackDupes.length > 0) {
+        results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: fallbackCand, duplicates: fallbackDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+      } else {
+        results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: fallbackCand });
+      }
     } else {
-      results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+      // Fetch each story-quality link individually and build candidates
+      for (const linkUrl of storyLinks) {
+        let linkHtml: string;
+        try {
+          const res = await fetch(linkUrl, {
+            cache:   'no-store',
+            headers: {
+              'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+              'Accept':     'text/html,application/xhtml+xml;q=0.9',
+            },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!res.ok) continue;
+          const ct = res.headers.get('content-type') ?? '';
+          if (!ct.includes('text/html') && !ct.includes('xhtml')) continue;
+          linkHtml = await res.text();
+        } catch { continue; }
+
+        const extracted  = extractPageData(linkHtml, linkUrl);
+        const title      = cleanTitle(extracted.title) || source.name;
+        const summary    = buildSummary(extracted.description, extracted.snippet);
+        const quality    = candidatePassesQuality(linkUrl, title, summary);
+        if (!quality.pass) continue;
+
+        const conf       = scoreExtractionConfidence(title, summary);
+        const bad        = detectBadCandidate(linkUrl, title, summary);
+        const heur       = scoreStoryHeuristics(`${title} ${summary}`);
+
+        const linkCand: FetchedCandidate = {
+          title:                title.slice(0, 200),
+          summary:              summary.slice(0, 2000),
+          sourceUrl:            extracted.canonicalUrl || linkUrl,
+          category:             source.category_focus[0] ?? 'Internet Lore',
+          tags:                 ['scanner-source', source.source_type, 'discovered-link'],
+          anomalyScore:         5,
+          categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+          extractionConfidence: conf.confidence,
+          extractionWarning:    conf.warning ?? undefined,
+          passReason:           quality.reason,
+          badCandidateReason:   bad.bad ? bad.reason : undefined,
+          sourceImageUrl:       extracted.imageUrl || undefined,
+          mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+          attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
+          captureNotes:         `Discovered via homepage link scan of ${source.name}. Raw HTML not stored.`,
+          storyScore:           heur.storyScore,
+          storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+        };
+
+        const linkDupes = await checkSignalDuplicates(linkCand.sourceUrl, linkCand.title);
+        if (linkDupes.length > 0) {
+          results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate: linkCand, duplicates: linkDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+        } else {
+          results.push({ sourceId, sourceName: source.name, status: 'preview', candidate: linkCand });
+        }
+      }
     }
   }
 

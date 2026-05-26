@@ -303,15 +303,15 @@ function ActivityTimeline({ events, now }: { events: ActivityEvent[]; now: numbe
               <div className="mt-[5px] h-[7px] w-[7px] shrink-0" style={{ backgroundColor: color }} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <span className="text-[13px] uppercase tracking-[0.14em]" style={{ color }}>{label}</span>
-                  <span className="text-crt/22 text-[12px]">/</span>
-                  <span className="text-[13px] uppercase tracking-[0.10em] text-crt/48">{evt.category}</span>
-                  <span className="ml-auto shrink-0 font-mono text-[12px] tabular-nums text-crt/28" suppressHydrationWarning>
+                  <span className="text-[15px] uppercase tracking-[0.14em]" style={{ color }}>{label}</span>
+                  <span className="text-crt/22 text-[13px]">/</span>
+                  <span className="text-[15px] uppercase tracking-[0.10em] text-crt/48">{evt.category}</span>
+                  <span className="ml-auto shrink-0 font-mono text-[13px] tabular-nums text-crt/28" suppressHydrationWarning>
                     {relTime}
                   </span>
                 </div>
                 {evt.titlePreview && (
-                  <p className="mt-0.5 truncate text-[13px] leading-snug tracking-[0.02em] text-crt/45">
+                  <p className="mt-0.5 truncate text-[15px] leading-snug tracking-[0.02em] text-crt/45">
                     {evt.titlePreview}
                   </p>
                 )}
@@ -387,7 +387,7 @@ function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string })
         </div>
 
         {/* Title */}
-        <p className="mb-3 text-[1.25rem] font-bold leading-snug tracking-[0.02em] text-crt/92 md:text-[1.35rem]">
+        <p className="mb-3 text-[1.45rem] font-bold leading-snug tracking-[0.02em] text-crt/92 md:text-[1.6rem]">
           {sig.title}
         </p>
 
@@ -396,7 +396,7 @@ function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string })
           className="mb-3 border-l-2 pl-3"
           style={{ borderColor: `${sig.categoryColor}30` }}
         >
-          <p className="text-[1rem] leading-[1.6] tracking-[0.02em] text-crt/62 md:text-[1.05rem]">
+          <p className="text-[1.1rem] leading-[1.65] tracking-[0.02em] text-crt/62 md:text-[1.2rem]">
             {sig.summary}
           </p>
         </div>

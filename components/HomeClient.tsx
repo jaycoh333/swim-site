@@ -164,25 +164,31 @@ export function HomeClient({
             </div>
 
             {/* ── SWIM AI Terminal ── */}
-            <div className="border-t border-crt/10 px-4 pb-8 pt-8 md:px-6 md:pb-10 md:pt-10">
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <div className="mb-1 text-[11px] uppercase tracking-[0.30em] text-crt/38">
-                    swim ai signal monitor
-                  </div>
-                  <h2 className="text-[1.6rem] tracking-[0.10em] text-crt/88 md:text-[1.9rem]">
-                    SIGNAL FEED
-                  </h2>
+            <div className="border-t border-crt/10 px-4 pb-12 pt-10 md:px-6 md:pb-16 md:pt-14">
+
+              {/* Section header */}
+              <div className="mb-8 text-center">
+                <div className="mb-2 flex items-center justify-center gap-2.5">
+                  <span className="h-px w-8 bg-crt/15" aria-hidden="true" />
+                  <span className="text-[10px] uppercase tracking-[0.36em] text-crt/35">
+                    autonomous recovery system
+                  </span>
+                  <span className="h-px w-8 bg-crt/15" aria-hidden="true" />
                 </div>
-                <p className="max-w-xs text-[14px] leading-relaxed text-crt/42">
-                  Monitoring forgotten internet edges for signals worth preserving.
+                <h2 className="mb-3 text-[1.7rem] tracking-[0.12em] text-crt/92 md:text-[2.1rem]">
+                  SWIM AI SIGNAL MONITOR
+                </h2>
+                <p className="mx-auto max-w-md text-[1.1rem] leading-relaxed tracking-[0.04em] text-crt/48 md:text-[1.2rem]">
+                  Recovering strange artifacts from forgotten internet edges.
                 </p>
               </div>
+
               <SwimAiTerminal entries={feed} stats={terminalStats} />
-              <div className="mt-4 text-center">
+
+              <div className="mt-5 text-center">
                 <Link
                   href="/scanner"
-                  className="text-[13px] uppercase tracking-[0.20em] text-crt/40 transition-colors hover:text-crt/70"
+                  className="text-[12px] uppercase tracking-[0.22em] text-crt/35 transition-colors hover:text-crt/65"
                 >
                   view full scanner →
                 </Link>

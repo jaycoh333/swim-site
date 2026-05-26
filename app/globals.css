@@ -1336,6 +1336,77 @@ body::after {
   font-size: 16px;
 }
 
+/* ── SWIM AI TERMINAL ────────────────────────────────────── */
+
+.swim-ai-terminal {
+  border: 1px solid rgba(134, 212, 110, 0.22);
+  background: rgba(2, 4, 3, 0.94);
+  box-shadow:
+    /* outer atmospheric glow */
+    0 0 32px rgba(134, 212, 110, 0.08),
+    0 0 80px rgba(134, 212, 110, 0.04),
+    /* subtle blue corner */
+    0 0 60px rgba(109, 168, 255, 0.035),
+    /* inner rim light */
+    inset 0 0 40px rgba(134, 212, 110, 0.018),
+    inset 0 0 0 1px rgba(134, 212, 110, 0.04);
+}
+
+/* Pulsing live dot in terminal header */
+.terminal-live-dot {
+  background: #86d46e;
+  box-shadow: 0 0 4px #86d46e, 0 0 8px rgba(134, 212, 110, 0.55);
+  animation: terminal-live-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes terminal-live-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 4px #86d46e, 0 0 8px rgba(134, 212, 110, 0.55);
+  }
+  50% {
+    opacity: 0.50;
+    box-shadow: 0 0 2px #86d46e, 0 0 4px rgba(134, 212, 110, 0.28);
+  }
+}
+
+/* Slow scan sweep — thin luminous band drifting top to bottom */
+.terminal-scan-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 70px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(134, 212, 110, 0.022) 50%,
+    transparent 100%
+  );
+  animation: terminal-sweep 14s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes terminal-sweep {
+  from { top: -70px; }
+  to   { top: 110%;  }
+}
+
+/* Faint grid texture behind content */
+.terminal-grid-overlay {
+  background-image:
+    linear-gradient(rgba(134, 212, 110, 0.010) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(134, 212, 110, 0.010) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+
+/* Mobile: title minimum 20px, feed entry titles minimum 17px */
+@media (max-width: 639px) {
+  .swim-ai-terminal .terminal-title-main {
+    font-size: 20px;
+  }
+}
+
 .post-handle-op {
   color: var(--crt);
   text-shadow: 0 0 6px rgba(134, 212, 110, 0.18);

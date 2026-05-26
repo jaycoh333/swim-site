@@ -656,26 +656,30 @@ export function ScannerConsoleClient({
                 if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return true;
                 return false;
               });
-              const queuedCnt  = [...candStates.values()].filter((s) => s.action === 'queued').length;
-              const skippedCnt = [...candStates.values()].filter((s) => s.action === 'skipped').length;
-              const blockedCnt = scanResults.filter((r) => r.status === 'error' && r.error.includes('blocked')).length;
-              const dupCnt     = scanResults.filter((r) => r.status === 'duplicate').length;
+              const queuedCnt   = [...candStates.values()].filter((s) => s.action === 'queued').length;
+              const skippedCnt  = [...candStates.values()].filter((s) => s.action === 'skipped').length;
+              const blockedCnt  = scanResults.filter((r) => r.status === 'error' && r.error.includes('blocked')).length;
+              const dupCnt      = scanResults.filter((r) => r.status === 'duplicate').length;
+              const sourcesScanned    = new Set(scanResults.map((r) => r.sourceId)).size;
+              const candidatesFetched = scanResults.filter((r) => r.status !== 'error').length;
 
               return (
                 <div className="flex flex-col gap-4">
 
                   {/* ── Summary counts ── */}
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {[
-                      { label: 'Stories Found', value: goodResults.length,   color: goodResults.length  > 0 ? 'text-emerald-400' : 'text-slate-600' },
-                      { label: 'Queued',         value: queuedCnt,            color: queuedCnt           > 0 ? 'text-emerald-400' : 'text-slate-600' },
-                      { label: 'Duplicates',     value: dupCnt,               color: dupCnt              > 0 ? 'text-amber-400'   : 'text-slate-600' },
-                      { label: 'Weak / Blocked', value: lowQualResults.length + skippedCnt,
-                                                                               color: lowQualResults.length + skippedCnt > 0 ? 'text-slate-500' : 'text-slate-600' },
+                      { label: 'Sources',    value: sourcesScanned,    color: 'text-slate-400' },
+                      { label: 'Fetched',    value: candidatesFetched, color: candidatesFetched > 0 ? 'text-sky-400' : 'text-slate-600' },
+                      { label: 'Strong',     value: goodResults.length, color: goodResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
+                      { label: 'Queued',     value: queuedCnt,          color: queuedCnt > 0 ? 'text-emerald-400' : 'text-slate-600' },
+                      { label: 'Duplicates', value: dupCnt,             color: dupCnt > 0 ? 'text-amber-400' : 'text-slate-600' },
+                      { label: 'Low/Blocked', value: lowQualResults.length + skippedCnt,
+                                                                         color: lowQualResults.length + skippedCnt > 0 ? 'text-slate-500' : 'text-slate-600' },
                     ].map(({ label, value, color }) => (
-                      <div key={label} className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5 text-center">
-                        <div className={`font-mono text-[22px] font-bold tabular-nums ${color}`}>{value}</div>
-                        <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
+                      <div key={label} className="rounded-xl border border-white/8 bg-white/[0.02] px-2 py-2.5 text-center">
+                        <div className={`font-mono text-[20px] font-bold tabular-nums ${color}`}>{value}</div>
+                        <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
                       </div>
                     ))}
                   </div>
@@ -906,27 +910,36 @@ export function ScannerConsoleClient({
                               );
                             }
 
-                            return (
-                              <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
-                                <div className="mb-1 flex items-start justify-between gap-2">
-                                  <p className="text-[13px] font-semibold leading-snug text-slate-500">
-                                    {result.candidate.title.slice(0, 70)}{result.candidate.title.length > 70 ? '…' : ''}
-                                  </p>
-                                  {result.candidate.isIndexPage && (
-                                    <span className="shrink-0 rounded-full border border-amber-500/18 bg-amber-500/7 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/60">
-                                      index
-                                    </span>
+                            {
+                              const debugReason = result.candidate.badCandidateReason
+                                ?? (result.candidate.isIndexPage
+                                  ? 'Homepage or index page — no story links found'
+                                  : result.candidate.storyScore != null && result.candidate.storyScore < 8
+                                    ? `Low story score (${result.candidate.storyScore}pts) — no narrative signals detected`
+                                    : 'Did not pass quality filter');
+                              const isIndex = result.candidate.isIndexPage;
+                              return (
+                                <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
+                                  <div className="mb-1 flex items-start justify-between gap-2">
+                                    <p className="text-[13px] font-semibold leading-snug text-slate-500">
+                                      {result.candidate.title.slice(0, 70)}{result.candidate.title.length > 70 ? '…' : ''}
+                                    </p>
+                                    {isIndex && (
+                                      <span className="shrink-0 rounded-full border border-amber-500/18 bg-amber-500/7 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/60">
+                                        index
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[12px] text-amber-400/50">{debugReason}</p>
+                                  {result.candidate.storyScore != null && (
+                                    <p className="mt-0.5 text-[11px] text-slate-700">score: {result.candidate.storyScore}pts · {result.sourceName}</p>
+                                  )}
+                                  {!result.candidate.storyScore && (
+                                    <p className="mt-0.5 text-[11px] text-slate-700">{result.sourceName}</p>
                                   )}
                                 </div>
-                                <p className="text-[12px] text-slate-700">
-                                  {result.candidate.badCandidateReason
-                                    ?? (result.candidate.storyScore != null && result.candidate.storyScore < 8
-                                      ? `Low signal score — no story markers detected`
-                                      : 'Index/homepage — not a story')}
-                                </p>
-                                <p className="mt-0.5 text-[11px] text-slate-700">{result.sourceName}</p>
-                              </div>
-                            );
+                              );
+                            }
                           })}
                         </div>
                       )}
