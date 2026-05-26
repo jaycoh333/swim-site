@@ -1803,6 +1803,40 @@ body::after {
   }
 }
 
+/* ── SCANNER CONSOLE — modern admin dashboard ───────────────── */
+/* Overrides VT323/CRT body styles for /scanner/console only.    */
+/* Applied to the outermost wrapper div on that page.            */
+
+.scanner-console-modern {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #94a3b8;
+  letter-spacing: 0;
+}
+
+/* Form elements don't inherit font-family by default in all browsers */
+.scanner-console-modern button,
+.scanner-console-modern input,
+.scanner-console-modern textarea,
+.scanner-console-modern select,
+.scanner-console-modern option {
+  font-family: inherit;
+}
+
+/* Override Tailwind's font-mono — the global config maps it to VT323 */
+.scanner-console-modern .font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+/* Strip CRT text-shadow from any utility classes that leak in */
+.scanner-console-modern .crt-text,
+.scanner-console-modern .crt-text-bright,
+.scanner-console-modern .crt-text-dim,
+.scanner-console-modern .amber-glow,
+.scanner-console-modern .phosphor-glow {
+  text-shadow: none;
+  color: inherit;
+}
+
 /* ── COMPOSE FORM ELEMENTS ───────────────────────────────── */
 
 .compose-input {

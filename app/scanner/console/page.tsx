@@ -1,5 +1,4 @@
 import { notFound } from 'next/navigation';
-import { AmbientGrid } from '@/components/AmbientGrid';
 import {
   getScannerSources,
   getRecoveredSignals,
@@ -23,8 +22,8 @@ export default async function ScannerConsolePage() {
   const enabledSources = sources.filter((s) => s.enabled);
 
   return (
-    <div className="relative min-h-screen pt-[80px] md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.015]" />
+    /* scanner-console-modern overrides VT323 font + CRT green from body */
+    <div className="scanner-console-modern relative min-h-screen bg-[#0b0e10] pt-[80px] md:pt-[100px]">
       <ScannerConsoleClient
         sources={sources}
         enabledSources={enabledSources}
