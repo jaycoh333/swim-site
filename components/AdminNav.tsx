@@ -2,14 +2,15 @@
 // Renders as plain links — works in both server and client component trees.
 
 interface AdminNavProps {
-  current?: 'admin' | 'sources' | 'queue';
+  current?: 'admin' | 'sources' | 'queue' | 'console';
 }
 
 const NAV_LINKS = [
-  { href: '/scanner/admin',   label: '⌂ Admin Hub',     key: 'admin'   },
-  { href: '/scanner/sources', label: '⊞ Sources',       key: 'sources' },
-  { href: '/scanner/queue',   label: '≡ Signal Queue',  key: 'queue'   },
-  { href: '/scanner',         label: '◈ Scanner',       key: 'public'  },
+  { href: '/scanner/console', label: '▶ Scanner Console', key: 'console' },
+  { href: '/scanner/admin',   label: '⌂ Admin Hub',       key: 'admin'   },
+  { href: '/scanner/sources', label: '⊞ Sources',         key: 'sources' },
+  { href: '/scanner/queue',   label: '≡ Signal Queue',    key: 'queue'   },
+  { href: '/scanner',         label: '◈ Scanner',         key: 'public'  },
 ] as const;
 
 export function AdminNav({ current }: AdminNavProps) {

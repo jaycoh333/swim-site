@@ -119,6 +119,18 @@ export default async function ScannerAdminPage() {
             Curator operator dashboard — all scanner tools in one place.
           </p>
 
+          {/* Console shortcut */}
+          <a
+            href="/scanner/console"
+            className="mb-4 flex min-h-[64px] w-full items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/6 px-6 transition-all hover:border-emerald-500/50 hover:bg-emerald-500/10 sm:w-auto sm:inline-flex sm:gap-6"
+          >
+            <div>
+              <p className="text-[18px] font-bold text-emerald-400">Scanner Console</p>
+              <p className="text-[13px] text-emerald-400/55">Simple SCAN → REVIEW → PUBLISH workflow</p>
+            </div>
+            <span className="text-[22px] text-emerald-400/50">→</span>
+          </a>
+
           {/* Nav */}
           <AdminNav current="admin" />
         </div>
