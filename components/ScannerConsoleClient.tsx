@@ -29,6 +29,9 @@ interface ConsoleStats {
 interface PublishedResult {
   threadSlug:   string;
   title:        string;
+  category:     string;
+  sourceName:   string;
+  publishedAt:  string;  // ISO
   telegramText: string;
   xText:        string;
 }
@@ -227,6 +230,9 @@ export function ScannerConsoleClient({
   const [statusChanging, setStatusChanging] = useState<string | null>(null);
   const [reviewError,    setReviewError]    = useState<string | null>(null);
 
+  // Review → Publish toast
+  const [approveToast, setApproveToast] = useState<string | null>(null);
+
   // Publish state
   const [readySignals,  setReadySignals]  = useState<DbRecoveredSignal[]>(initialReadySignals);
   const [prepareOpenId, setPrepareOpenId] = useState<string | null>(null);
@@ -351,7 +357,11 @@ export function ScannerConsoleClient({
     if ('error' in result) { setReviewError(result.error); return; }
     if (newStatus === 'rebirth-ready') {
       const sig = reviewSignals.find((s) => s.id === signalId);
-      if (sig) setReadySignals((prev) => [{ ...sig, status: 'rebirth-ready' }, ...prev]);
+      if (sig) {
+        setReadySignals((prev) => [{ ...sig, status: 'rebirth-ready' }, ...prev]);
+        setApproveToast(sig.title);
+        setTimeout(() => setApproveToast(null), 4000);
+      }
     }
     setReviewSignals((prev) => prev.filter((s) => s.id !== signalId));
   }
@@ -387,6 +397,9 @@ export function ScannerConsoleClient({
     setLastPublished({
       threadSlug:   result.threadSlug,
       title:        form.title,
+      category:     form.category,
+      sourceName:   sig?.source_name ?? '',
+      publishedAt:  new Date().toISOString(),
       telegramText: formatTelegramPost(shareData),
       xText:        formatXPost(shareData),
     });
@@ -453,6 +466,18 @@ export function ScannerConsoleClient({
               Open Review Queue →
             </a>
           </div>
+        </div>
+      )}
+
+      {/* ── Approve toast ── */}
+      {approveToast && (
+        <div className="mb-4 flex items-center gap-3 rounded-2xl border border-purple-500/30 bg-purple-500/10 px-5 py-4">
+          <span className="text-[22px]">✓</span>
+          <div>
+            <p className="text-[16px] font-bold text-purple-300">Approved — ready to publish</p>
+            <p className="text-[14px] text-purple-400/60 line-clamp-1">{approveToast}</p>
+          </div>
+          <p className="ml-auto shrink-0 text-[13px] text-purple-400/50">moved to column 3 →</p>
         </div>
       )}
 
@@ -1109,46 +1134,121 @@ export function ScannerConsoleClient({
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
 
-            {/* Publish error panel */}
+            {/* ── Publish error panel (TASK 7) ── */}
             {publishError && (
-              <div className="rounded-2xl border border-red-500/35 bg-red-500/10 p-5">
-                <p className="mb-1 text-[17px] font-bold text-red-300">Publish Failed</p>
-                <p className="text-[15px] text-red-200">{publishError}</p>
-                <button onClick={() => setPublishError(null)} className="mt-3 text-[13px] text-red-400/60 underline-offset-2 hover:underline">
+              <div className="rounded-2xl border border-red-500/40 bg-red-500/12 p-6">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-[20px]">✗</span>
+                  <p className="text-[20px] font-bold text-red-300">Publish Failed</p>
+                </div>
+                <p className="mb-1 text-[15px] leading-relaxed text-red-200">{publishError}</p>
+                <p className="mb-4 text-[13px] text-red-400/55">Check the error above, fix and retry — no changes were made to SWIM.</p>
+                <button
+                  onClick={() => setPublishError(null)}
+                  className="flex min-h-[44px] items-center justify-center rounded-xl border border-red-500/30 bg-red-500/8 px-5 text-[14px] font-semibold text-red-300 transition-colors hover:bg-red-500/18"
+                >
                   Dismiss
                 </button>
               </div>
             )}
 
-            {/* Published success banner */}
+            {/* ── Publish success panel (TASKS 1–5) ── */}
             {lastPublished && (
-              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/8 p-5">
-                <p className="mb-1 text-[14px] font-bold uppercase tracking-wider text-emerald-400">
-                  Published
-                </p>
-                <p className="mb-4 text-[17px] font-semibold leading-snug text-white">
-                  {lastPublished.title}
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  <a
-                    href={`/threads/${lastPublished.threadSlug}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex min-h-[52px] items-center justify-center rounded-2xl bg-emerald-500/20 border border-emerald-500/40 px-4 text-[15px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/30"
-                  >
-                    Open Thread →
-                  </a>
+              <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
+
+                {/* Header */}
+                <div className="border-b border-emerald-500/20 bg-emerald-500/[0.08] px-6 py-4">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/25 text-[15px] font-bold text-emerald-400">✓</span>
+                    <p className="text-[18px] font-bold uppercase tracking-[0.12em] text-emerald-400">
+                      LIVE THREAD CREATED
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-6">
+                  {/* Title */}
+                  <p className="mb-3 text-[20px] font-bold leading-snug text-white">
+                    {lastPublished.title}
+                  </p>
+
+                  {/* Meta — category, source, timestamp */}
+                  <div className="mb-5 flex flex-wrap gap-2">
+                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[12px] font-semibold text-emerald-300">
+                      {lastPublished.category}
+                    </span>
+                    {lastPublished.sourceName && (
+                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[12px] text-slate-400">
+                        {lastPublished.sourceName}
+                      </span>
+                    )}
+                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-[12px] tabular-nums text-slate-500" suppressHydrationWarning>
+                      {new Date(lastPublished.publishedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+
+                  {/* Primary action — Open Thread */}
+                  {lastPublished.threadSlug ? (
+                    <a
+                      href={`/threads/${lastPublished.threadSlug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mb-4 flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500/22 border border-emerald-500/45 text-[17px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/35"
+                    >
+                      Open Thread ↗
+                    </a>
+                  ) : (
+                    <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-[14px] text-amber-300">
+                      Thread created but slug was not returned — check /threads for the new post.
+                    </div>
+                  )}
+
+                  {/* X Post preview + copy */}
+                  <div className="mb-3">
+                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.20em] text-slate-500">X POST</p>
+                    <div className="mb-2 overflow-hidden rounded-xl border border-white/8 bg-black/30 px-4 py-3">
+                      <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-slate-300 line-clamp-4">
+                        {lastPublished.xText}
+                      </pre>
+                    </div>
+                    <button
+                      onClick={() => handleCopy(lastPublished.xText, 'x')}
+                      className={`flex min-h-[44px] w-full items-center justify-center rounded-xl border text-[14px] font-semibold transition-all ${
+                        copied === 'x'
+                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                          : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      {copied === 'x' ? '✓ Copied to clipboard' : 'Copy X Post'}
+                    </button>
+                  </div>
+
+                  {/* Telegram preview + copy */}
+                  <div className="mb-5">
+                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.20em] text-slate-500">TELEGRAM POST</p>
+                    <div className="mb-2 overflow-hidden rounded-xl border border-white/8 bg-black/30 px-4 py-3">
+                      <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-slate-300 line-clamp-5">
+                        {lastPublished.telegramText}
+                      </pre>
+                    </div>
+                    <button
+                      onClick={() => handleCopy(lastPublished.telegramText, 'tg')}
+                      className={`flex min-h-[44px] w-full items-center justify-center rounded-xl border text-[14px] font-semibold transition-all ${
+                        copied === 'tg'
+                          ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
+                          : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      {copied === 'tg' ? '✓ Copied to clipboard' : 'Copy Telegram Post'}
+                    </button>
+                  </div>
+
+                  {/* Continue reviewing */}
                   <button
-                    onClick={() => handleCopy(lastPublished.xText, 'x')}
-                    className="flex min-h-[52px] items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-4 text-[15px] font-semibold text-slate-300 transition-colors hover:bg-white/10"
+                    onClick={() => { setLastPublished(null); setCopied(null); }}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.07] hover:text-slate-200"
                   >
-                    {copied === 'x' ? '✓ Copied' : 'Copy X Post'}
-                  </button>
-                  <button
-                    onClick={() => handleCopy(lastPublished.telegramText, 'tg')}
-                    className="flex min-h-[52px] items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-4 text-[15px] font-semibold text-slate-300 transition-colors hover:bg-white/10"
-                  >
-                    {copied === 'tg' ? '✓ Copied' : 'Copy Telegram'}
+                    Continue Reviewing
                   </button>
                 </div>
               </div>
