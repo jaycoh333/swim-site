@@ -180,6 +180,7 @@ interface ExtractedPageData {
   description:  string;
   canonicalUrl: string;
   snippet:      string;
+  imageUrl:     string;  // og:image or twitter:image absolute URL, empty string if none
 }
 
 function decodeHtmlEntities(str: string): string {
@@ -254,7 +255,15 @@ function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
     .trim()
     .slice(0, 600);
 
-  return { title, description, canonicalUrl, snippet };
+  // Image URL — og:image > twitter:image  (absolute https:// URLs only; no binary stored)
+  const ogImage  = h.match(/<meta[^>]{0,300}property=["']og:image["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}property=["']og:image["']/i);
+  const twImage  = h.match(/<meta[^>]{0,300}name=["']twitter:image["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
+                ?? h.match(/<meta[^>]{0,300}content=["']([^"']{1,500})["'][^>]{0,300}name=["']twitter:image["']/i);
+  const rawImage = (ogImage?.[1] ?? twImage?.[1] ?? '').trim();
+  const imageUrl = /^https?:\/\//.test(rawImage) ? rawImage : '';
+
+  return { title, description, canonicalUrl, snippet, imageUrl };
 }
 
 function cleanTitle(raw: string): string {
@@ -383,6 +392,10 @@ export async function fetchScannerSourcePreviewAction(
     categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
+    sourceImageUrl:       extracted.imageUrl || undefined,
+    mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+    attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
+    captureNotes:         'Captured from source preview during manual scanner fetch. Raw HTML not stored.',
   };
 
   return { candidate };
@@ -391,14 +404,18 @@ export async function fetchScannerSourcePreviewAction(
 // Phase 2 — duplicate check then insert. Curator has reviewed + edited the preview.
 // Returns duplicateWarning if duplicates found (unless overrideDuplicate=true).
 export async function queueFetchedCandidateAction(input: {
-  sourceId:          string;
-  title:             string;
-  summary:           string;
-  sourceUrl:         string;
-  category:          string;
-  tags:              string[];
-  anomalyScore:      number;
+  sourceId:           string;
+  title:              string;
+  summary:            string;
+  sourceUrl:          string;
+  category:           string;
+  tags:               string[];
+  anomalyScore:       number;
   overrideDuplicate?: boolean;
+  sourceImageUrl?:    string;
+  mediaType?:         string;
+  attributionText?:   string;
+  captureNotes?:      string;
 }): Promise<
   | { signalId: string; title: string; url: string; scannedAt: string }
   | { duplicateWarning: true; duplicates: SignalDuplicate[] }
@@ -424,14 +441,19 @@ export async function queueFetchedCandidateAction(input: {
   }
 
   const signalResult = await createRecoveredSignal({
-    title:        input.title,
-    summary:      input.summary,
-    sourceName:   source.name,
-    sourceUrl:    input.sourceUrl,
-    sourceType:   toSignalSourceType(source.source_type),
-    category:     input.category,
-    anomalyScore: input.anomalyScore,
-    tags:         input.tags,
+    title:               input.title,
+    summary:             input.summary,
+    sourceName:          source.name,
+    sourceUrl:           input.sourceUrl,
+    sourceType:          toSignalSourceType(source.source_type),
+    category:            input.category,
+    anomalyScore:        input.anomalyScore,
+    tags:                input.tags,
+    sourceImageUrl:      input.sourceImageUrl,
+    mediaUrl:            input.sourceImageUrl,  // og:image doubles as primary evidence media
+    mediaType:           input.mediaType,
+    attributionText:     input.attributionText,
+    sourceCaptureNotes:  input.captureNotes,
   });
 
   if ('error' in signalResult) return { error: signalResult.error };
@@ -524,6 +546,10 @@ export async function runFetchSessionAction(
       categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
       extractionConfidence: conf.confidence,
       extractionWarning:    conf.warning ?? undefined,
+      sourceImageUrl:       extracted.imageUrl || undefined,
+      mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+      attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
+      captureNotes:         'Captured from source preview during manual scanner fetch. Raw HTML not stored.',
     };
 
     // Duplicate check — include in session results so curator sees it immediately

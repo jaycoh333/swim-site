@@ -16,6 +16,11 @@ export interface FetchedCandidate {
   categoryNote:         string;  // e.g. "matched 2 keywords: ufo, paranormal"
   extractionConfidence: ExtractionConfidence;   // quality rating of the extracted data
   extractionWarning?:   string;  // set when confidence is low
+  // Evidence context (URLs only — no binary stored)
+  sourceImageUrl?:      string;  // og:image or twitter:image — absolute URL
+  mediaType?:           string;  // 'image' if sourceImageUrl found, else 'webpage'
+  attributionText?:     string;  // auto-generated: "Recovered from {name} · {type} source"
+  captureNotes?:        string;  // auto-generated capture context
 }
 
 export interface SignalDuplicate {

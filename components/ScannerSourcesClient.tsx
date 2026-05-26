@@ -65,7 +65,7 @@ type FetchState =
   | null
   | { status: 'fetching' }
   | { status: 'preview'; candidate: FetchedCandidate }
-  | { status: 'duplicate-warning'; savedForm: SavedCandidateForm; duplicates: SignalDuplicate[] }
+  | { status: 'duplicate-warning'; savedForm: SavedCandidateForm; candidate: FetchedCandidate; duplicates: SignalDuplicate[] }
   | { status: 'success'; title: string; signalId: string; url: string }
   | { status: 'error'; message: string };
 
@@ -200,6 +200,48 @@ function CandidatePreviewPanel({ candidate, isQueueing, onSubmit, onCancel }: Ca
         </div>
       )}
       <div className="mb-4 text-xs text-crt/32">{candidate.categoryNote}</div>
+
+      {/* Evidence preview */}
+      {candidate.sourceImageUrl && (
+        <div className="mb-5 overflow-hidden border border-crt/14">
+          <div className="flex items-center justify-between bg-[rgba(2,3,3,0.45)] px-4 py-2">
+            <span className="text-sm font-semibold text-crt/50">Evidence Image</span>
+            <a
+              href={candidate.sourceImageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-crt/38 transition-colors hover:text-crt/65"
+            >
+              Open ↗
+            </a>
+          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={candidate.sourceImageUrl}
+            alt="Source evidence"
+            className="max-h-48 w-full object-contain"
+            style={{ background: 'rgba(2,3,3,0.6)' }}
+          />
+        </div>
+      )}
+
+      {/* Attribution + capture notes — auto-generated, readonly */}
+      {(candidate.attributionText || candidate.captureNotes) && (
+        <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {candidate.attributionText && (
+            <div className="border border-crt/10 bg-[rgba(4,7,5,0.55)] px-4 py-3">
+              <p className="mb-1 text-xs font-semibold text-crt/38">Attribution</p>
+              <p className="text-sm text-crt/62">{candidate.attributionText}</p>
+            </div>
+          )}
+          {candidate.captureNotes && (
+            <div className="border border-crt/10 bg-[rgba(4,7,5,0.55)] px-4 py-3">
+              <p className="mb-1 text-xs font-semibold text-crt/38">Capture Notes</p>
+              <p className="text-sm text-crt/55">{candidate.captureNotes}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="space-y-5">
         <div>
@@ -539,6 +581,10 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
         tags,
         anomalyScore:      editForm.anomalyScore,
         overrideDuplicate,
+        sourceImageUrl:    result.candidate.sourceImageUrl,
+        mediaType:         result.candidate.mediaType,
+        attributionText:   result.candidate.attributionText,
+        captureNotes:      result.candidate.captureNotes,
       });
       if ('error' in res)            { setQueueError(res.error); return; }
       if ('duplicateWarning' in res) { setQueueError('duplicate still detected — use Queue Anyway'); return; }
@@ -663,6 +709,30 @@ function SessionResultCard({ result, actionStatus, onStatusChange }: SessionResu
             <p className="text-xs text-crt/35">
               {result.candidate.categoryNote}
             </p>
+
+            {/* Evidence thumbnail */}
+            {result.candidate.sourceImageUrl && (
+              <div className="mt-3 overflow-hidden border border-crt/12">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={result.candidate.sourceImageUrl}
+                  alt="Source evidence"
+                  className="max-h-32 w-full object-contain"
+                  style={{ background: 'rgba(2,3,3,0.55)' }}
+                />
+                <div className="flex items-center justify-between bg-[rgba(2,3,3,0.4)] px-3 py-1.5">
+                  <span className="text-xs text-crt/35">Evidence image captured</span>
+                  <a
+                    href={result.candidate.sourceImageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-crt/38 transition-colors hover:text-crt/62"
+                  >
+                    Open ↗
+                  </a>
+                </div>
+              </div>
+            )}
 
             {isDuplicate && (
               <div className="mt-4 border-t border-crt/8 pt-4 space-y-2">
@@ -963,22 +1033,27 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
   }
 
   function handleQueueCandidate(form: PreviewFormState) {
+    if (fetchState?.status !== 'preview') return;
+    const cand      = fetchState.candidate;
     const tags      = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
-    const sourceUrl = fetchState?.status === 'preview' ? fetchState.candidate.sourceUrl : '';
     const savedForm: SavedCandidateForm = {
-      title: form.title, summary: form.summary, sourceUrl,
+      title: form.title, summary: form.summary, sourceUrl: cand.sourceUrl,
       category: form.category, tags, anomalyScore: form.anomalyScore,
     };
 
     startQueue(async () => {
       const result = await queueFetchedCandidateAction({
-        sourceId:    source.id,
-        title:       savedForm.title,
-        summary:     savedForm.summary,
-        sourceUrl:   savedForm.sourceUrl,
-        category:    savedForm.category,
-        tags:        savedForm.tags,
-        anomalyScore: savedForm.anomalyScore,
+        sourceId:         source.id,
+        title:            savedForm.title,
+        summary:          savedForm.summary,
+        sourceUrl:        savedForm.sourceUrl,
+        category:         savedForm.category,
+        tags:             savedForm.tags,
+        anomalyScore:     savedForm.anomalyScore,
+        sourceImageUrl:   cand.sourceImageUrl,
+        mediaType:        cand.mediaType,
+        attributionText:  cand.attributionText,
+        captureNotes:     cand.captureNotes,
       });
 
       if ('error' in result) {
@@ -986,7 +1061,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
         return;
       }
       if ('duplicateWarning' in result) {
-        setFetchState({ status: 'duplicate-warning', savedForm, duplicates: result.duplicates });
+        setFetchState({ status: 'duplicate-warning', savedForm, candidate: cand, duplicates: result.duplicates });
         return;
       }
       onFetched(source.id, result.scannedAt);
@@ -996,7 +1071,7 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
 
   function handleQueueAnyway() {
     if (fetchState?.status !== 'duplicate-warning') return;
-    const { savedForm } = fetchState;
+    const { savedForm, candidate: cand } = fetchState;
 
     startQueue(async () => {
       const result = await queueFetchedCandidateAction({
@@ -1008,6 +1083,10 @@ function SourceCard({ source, onToggled, onUpdated, onFetched }: SourceCardProps
         tags:              savedForm.tags,
         anomalyScore:      savedForm.anomalyScore,
         overrideDuplicate: true,
+        sourceImageUrl:    cand.sourceImageUrl,
+        mediaType:         cand.mediaType,
+        attributionText:   cand.attributionText,
+        captureNotes:      cand.captureNotes,
       });
 
       if ('error' in result) {

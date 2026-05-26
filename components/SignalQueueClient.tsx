@@ -365,13 +365,13 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
 
         {/* Source URL card */}
         {sig.source_url && (
-          <div className="mb-4 border border-crt/18 bg-[rgba(134,212,110,0.03)] px-4 py-3">
-            <span className="mb-2 block font-mono text-xs text-crt/40 truncate">{sig.source_url}</span>
+          <div className="mb-4 border border-crt/18 bg-[rgba(134,212,110,0.03)] px-4 py-4">
+            <span className="mb-3 block font-mono text-sm text-crt/42 truncate">{sig.source_url}</span>
             <a
               href={sig.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="admin-btn admin-btn-primary inline-flex"
+              className="inline-flex min-h-[48px] items-center gap-2 border border-crt/28 bg-[rgba(134,212,110,0.07)] px-5 text-base font-semibold text-crt/80 transition-colors hover:border-crt/45 hover:bg-[rgba(134,212,110,0.14)] hover:text-crt/95"
             >
               View Original Source ↗
             </a>
@@ -398,39 +398,52 @@ function EvidenceSection({ sig }: { sig: DbRecoveredSignal }) {
 
         {/* Media / screenshot frame */}
         {sig.source_image_url ? (
-          <div className="overflow-hidden border-2 border-crt/15">
-            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-2">
-              <span className="text-sm text-crt/42">Screenshot / Capture</span>
+          <div className="overflow-hidden border-2 border-crt/18">
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.55)] px-4 py-2.5">
+              <span className="text-base font-semibold text-crt/55">Evidence Image</span>
+              <a
+                href={sig.source_image_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#86d46e]/65 transition-colors hover:text-[#86d46e]"
+              >
+                Open ↗
+              </a>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={sig.source_image_url} alt="Source capture" className="max-h-72 w-full object-cover" />
+            <img
+              src={sig.source_image_url}
+              alt="Source evidence"
+              className="max-h-96 w-full object-contain"
+              style={{ background: 'rgba(2,3,3,0.4)' }}
+            />
           </div>
         ) : sig.media_url ? (
           <div className="border-2 border-crt/15">
-            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-2">
-              <span className="text-sm text-crt/42">
+            <div className="flex items-center justify-between bg-[rgba(2,3,3,0.5)] px-3 py-2.5">
+              <span className="text-base text-crt/45">
                 Media — {sig.media_type ?? 'file'}
               </span>
               <a
                 href={sig.media_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-[#86d46e]/65 hover:text-[#86d46e] transition-colors"
+                className="text-sm text-[#86d46e]/65 transition-colors hover:text-[#86d46e]"
               >
                 Open ↗
               </a>
             </div>
-            <div className="px-4 py-6 text-center text-sm text-crt/40">Media attached — click Open to view</div>
+            <div className="px-4 py-6 text-center text-base text-crt/40">Media attached — click Open to view</div>
           </div>
         ) : (
           <div className="border-2 border-dashed border-crt/10">
-            <div className="flex items-center bg-[rgba(2,3,3,0.35)] px-3 py-2">
-              <span className="text-sm text-crt/28">No media attached</span>
+            <div className="flex items-center bg-[rgba(2,3,3,0.35)] px-4 py-2.5">
+              <span className="text-base text-crt/30">No image captured</span>
             </div>
             <div className="px-5 py-5 text-center">
-              <p className="text-sm text-crt/30">No media attached</p>
-              <p className="mt-1 text-xs text-crt/18 leading-relaxed">
-                Future: screenshots · archived images · document fragments · video stills · audio clips
+              <p className="text-base text-crt/30">No og:image or twitter:image found on source page</p>
+              <p className="mt-1 text-sm text-crt/20 leading-relaxed">
+                Curator can add an image URL manually if evidence is available
               </p>
             </div>
           </div>

@@ -57,7 +57,7 @@ export function formatTelegramPost(data: ThreadShareData): string {
     lines.push(`Anomaly score: ${data.anomalyScore}/10`);
   }
   if (data.hasEvidence) {
-    lines.push('Evidence attached — see full thread');
+    lines.push('Evidence captured in archive thread.');
   }
   if (data.tags && data.tags.length > 0) {
     lines.push('', `─ ${data.tags.slice(0, 4).join(' · ')}`);
