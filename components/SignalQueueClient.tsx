@@ -157,8 +157,10 @@ function buildPreviewBody(sig: DbRecoveredSignal): string {
   const hasEvidence = sig.source_image_url || sig.media_url;
   if (hasEvidence) {
     lines.push('', '> Evidence:');
-    if (sig.source_image_url) lines.push(`> Screenshot / capture: ${sig.source_image_url}`);
-    if (sig.media_url) lines.push(`> Media (${sig.media_type ?? 'file'}): ${sig.media_url}`);
+    if (sig.source_image_url) lines.push(`> Source image: ${sig.source_image_url}`);
+    if (sig.media_url && sig.media_url !== sig.source_image_url) {
+      lines.push(`> Media (${sig.media_type ?? 'file'}): ${sig.media_url}`);
+    }
   }
 
   if (sig.source_capture_notes) {
