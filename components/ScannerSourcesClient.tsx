@@ -24,13 +24,16 @@ import { CATEGORY_ORDER } from '@/lib/forum-types';
 // ---------------------------------------------------------------------------
 
 const SOURCE_TYPES = [
-  { value: 'archive',    label: 'Archive'    },
-  { value: 'forum',      label: 'Forum'      },
-  { value: 'reddit',     label: 'Reddit'     },
-  { value: 'imageboard', label: 'Imageboard' },
-  { value: 'bbs',        label: 'BBS'        },
-  { value: 'pastebin',   label: 'Paste'      },
-  { value: 'other',      label: 'Other'      },
+  { value: 'archive',       label: 'Archive'        },
+  { value: 'forum',         label: 'Forum'          },
+  { value: 'reddit',        label: 'Reddit'         },
+  { value: 'imageboard',    label: 'Imageboard'     },
+  { value: 'bbs',           label: 'BBS'            },
+  { value: 'pastebin',      label: 'Paste'          },
+  { value: 'wayback',       label: 'Wayback'        },
+  { value: 'mediawiki',     label: 'MediaWiki'      },
+  { value: 'archive_forum', label: 'Archive Forum'  },
+  { value: 'other',         label: 'Other'          },
 ] as const;
 
 const CADENCES = [
@@ -1896,62 +1899,54 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden pb-8 pt-[80px] md:pt-[100px]">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.025]"
-        style={{
-          backgroundImage: 'radial-gradient(circle, #86d46e 1px, transparent 1px)',
-          backgroundSize:  '32px 32px',
-        }}
-      />
+    <div className="pb-12">
 
-      {/* ── STICKY ADMIN TOOLBAR ── */}
-      <div className="admin-toolbar sticky top-[72px] z-20 md:top-[80px]">
-        <div className="mx-auto max-w-[1200px] px-4 py-4 md:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-[13px] font-medium text-crt/48">SWIM · Scanner Admin</p>
-              <h1 className="text-[36px] font-black leading-tight text-crt/92">Scanner Sources</h1>
-              <p className="mt-0.5 text-base text-crt/58">manual recovery · no crawl · one page per call</p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {/* Stats pills */}
-              <div className="hidden items-center gap-2.5 sm:flex">
-                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-2">
-                  <span className="font-mono text-2xl font-bold text-crt/80">{sources.length}</span>
-                  <span className="text-[15px] text-crt/38">total</span>
-                </div>
-                <div className="flex items-center gap-1.5 border border-crt/14 px-3 py-2">
-                  <span
-                    className="font-mono text-2xl font-bold"
-                    style={{ color: enabledCount > 0 ? '#86d46e' : 'rgba(134,212,110,0.30)' }}
-                  >
-                    {enabledCount}
-                  </span>
-                  <span className="text-[15px] text-crt/38">enabled</span>
-                </div>
-              </div>
-
-              {/* Admin nav */}
-              <AdminNav current="sources" />
-
-              {/* Add Source */}
-              {!showAddForm && (
-                <button
-                  onClick={() => setShowAddForm(true)}
-                  className="min-h-[56px] border border-crt/25 bg-[rgba(134,212,110,0.06)] px-6 py-2 text-[18px] font-bold text-crt/72 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.12)] hover:text-crt/92"
-                >
-                  + Add Source
-                </button>
-              )}
-            </div>
+      {/* ── PAGE HEADER ── */}
+      <div className="mx-auto max-w-[1280px] px-4 pb-5 pt-6 md:px-8">
+        <p className="mb-1 text-[13px] font-medium uppercase tracking-widest text-slate-500">
+          SWIM · Scanner Admin
+        </p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-[40px] font-bold leading-tight text-white">Scanner Sources</h1>
+            <p className="mt-1 text-[17px] text-slate-500">manual recovery · no crawl · one page per call</p>
           </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Stats pills */}
+            <div className="hidden items-center gap-2.5 sm:flex">
+              <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                <span className="text-[22px] font-bold text-white">{sources.length}</span>
+                <span className="text-[14px] text-slate-500">total</span>
+              </div>
+              <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                <span
+                  className="text-[22px] font-bold"
+                  style={{ color: enabledCount > 0 ? '#34d399' : 'rgba(52,211,153,0.30)' }}
+                >
+                  {enabledCount}
+                </span>
+                <span className="text-[14px] text-slate-500">enabled</span>
+              </div>
+            </div>
+
+            {/* Add Source */}
+            {!showAddForm && (
+              <button
+                onClick={() => setShowAddForm(true)}
+                className="flex min-h-[52px] items-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-6 text-[17px] font-bold text-emerald-300 transition-colors hover:border-emerald-500/50 hover:bg-emerald-500/18"
+              >
+                + Add Source
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="mt-5">
+          <AdminNav current="sources" />
         </div>
       </div>
 
       {/* ── MAIN CONTENT ── */}
-      <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-6">
+      <div className="mx-auto max-w-[1280px] px-4 py-4 md:px-8">
 
         {/* ── RUN FETCH SESSION — hero primary CTA ── */}
         <div className="mb-5">
@@ -2012,46 +2007,42 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
           <button
             onClick={() => setShowAddForm(true)}
             disabled={showAddForm}
-            className="flex flex-col items-start border border-crt/16 bg-[rgba(8,12,6,0.90)] px-6 py-5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-40 hover:border-crt/30 hover:bg-[rgba(134,212,110,0.03)]"
+            className="flex flex-col items-start rounded-2xl border border-white/8 bg-white/[0.025] px-6 py-5 text-left transition-all hover:border-white/15 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <span className="mb-2 text-3xl text-crt/55">+</span>
-            <span className="text-[20px] font-bold text-crt/88">Add Source</span>
-            <span className="mt-1 text-base text-crt/45">Register a new URL to scan</span>
+            <span className="mb-2 text-[28px] text-slate-400">+</span>
+            <span className="text-[19px] font-bold text-white">Add Source</span>
+            <span className="mt-1 text-[15px] text-slate-500">Register a new URL to scan</span>
           </button>
 
           <a
             href="/scanner/queue"
-            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(77,184,200,0.04)]"
-            style={{ borderColor: 'rgba(77,184,200,0.22)', background: 'rgba(8,12,6,0.90)' }}
+            className="flex flex-col items-start rounded-2xl border border-sky-500/20 bg-sky-500/[0.04] px-6 py-5 text-left transition-all hover:border-sky-500/35 hover:bg-sky-500/[0.08]"
           >
-            <span className="mb-2 text-3xl" style={{ color: '#4db8c8' }}>→</span>
-            <span className="text-[20px] font-bold text-crt/88">View Queue</span>
-            <span className="mt-1 text-base text-crt/45">Review and rebirth queued signals</span>
+            <span className="mb-2 text-[28px] text-sky-400">→</span>
+            <span className="text-[19px] font-bold text-white">View Queue</span>
+            <span className="mt-1 text-[15px] text-slate-500">Review and rebirth queued signals</span>
           </a>
         </div>
 
         {/* ── FETCH SESSION PANEL ── */}
-        <div
-          className="mb-6 overflow-hidden border border-crt/12"
-          style={{ background: 'rgba(8,12,6,0.90)' }}
-        >
+        <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
           {session.status === 'idle' && (
             <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3">
-              <span className="text-xs text-crt/25">
-                ◈ manual · no crawl · one page per source · all candidates require review
+              <span className="text-[12px] text-slate-600">
+                manual · no crawl · one page per source · all candidates require review
               </span>
               {sessionError && (
-                <span className="text-sm text-[#ff6b6b]/65">✗ {sessionError}</span>
+                <span className="text-[14px] text-red-400/80">✗ {sessionError}</span>
               )}
               {lastSession && !sessionError && (
-                <span className="shrink-0 text-xs text-crt/30">
+                <span className="shrink-0 text-[12px] text-slate-600">
                   Last: {new Date(lastSession.runAt).toLocaleString()}
                   {lastSession.queued > 0 ? ` · ${lastSession.queued} queued` : ''}
                   {lastSession.failed > 0 ? ` · ${lastSession.failed} failed` : ''}
                 </span>
               )}
               {enabledWithUrl === 0 && (
-                <span className="text-xs text-crt/28">No enabled sources with a URL — enable one below.</span>
+                <span className="text-[12px] text-slate-600">No enabled sources with a URL — enable one below.</span>
               )}
             </div>
           )}
@@ -2085,18 +2076,15 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
 
         {/* ── ADD SOURCE FORM ── */}
         {showAddForm && (
-          <div
-            className="mb-6 overflow-hidden border border-crt/14"
-            style={{ background: 'rgba(8,12,6,0.90)' }}
-          >
-            <div className="flex items-center justify-between border-b border-crt/10 px-6 py-4">
+          <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+            <div className="flex items-center justify-between border-b border-white/8 px-6 py-4">
               <div>
-                <h2 className="text-[24px] font-bold text-crt/88">New Source</h2>
-                <p className="mt-0.5 text-base text-crt/42">Starts disabled. Enable after setup.</p>
+                <h2 className="text-[22px] font-bold text-white">New Source</h2>
+                <p className="mt-0.5 text-[15px] text-slate-500">Starts disabled. Enable after setup.</p>
               </div>
               <button
                 onClick={() => { setShowAddForm(false); setAddError(null); }}
-                className="text-sm text-crt/35 hover:text-crt/60 transition-colors"
+                className="text-[15px] text-slate-500 transition-colors hover:text-slate-300"
               >
                 × Close
               </button>
@@ -2116,9 +2104,9 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
 
         {/* ── SOURCE LIST ── */}
         {sources.length === 0 ? (
-          <div className="border border-crt/12 bg-[rgba(4,7,5,0.97)] px-8 py-20 text-center">
-            <p className="text-[24px] font-bold text-crt/55">No sources registered yet</p>
-            <p className="mt-3 text-[18px] text-crt/38">Click + Add Source above to register your first source.</p>
+          <div className="rounded-2xl border border-white/8 px-8 py-20 text-center">
+            <p className="text-[22px] font-bold text-white/60">No sources registered yet</p>
+            <p className="mt-3 text-[17px] text-slate-500">Click + Add Source above to register your first source.</p>
           </div>
         ) : (
           (['low', 'medium', 'high'] as const).map((risk) => {
@@ -2127,14 +2115,14 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
             return (
               <div key={risk} className="mb-8">
                 <div className="mb-4 flex items-center gap-3">
-                  <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}25` }} />
+                  <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}30` }} />
                   <span
-                    className="shrink-0 text-[20px] font-bold"
-                    style={{ color: `${RISK_COLORS[risk]}90` }}
+                    className="shrink-0 rounded-full px-4 py-1 text-[14px] font-bold uppercase tracking-wider"
+                    style={{ color: RISK_COLORS[risk], background: `${RISK_COLORS[risk]}18`, border: `1px solid ${RISK_COLORS[risk]}35` }}
                   >
-                    {risk} Risk — {group.length} source{group.length !== 1 ? 's' : ''}
+                    {risk} Risk · {group.length}
                   </span>
-                  <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}25` }} />
+                  <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}30` }} />
                 </div>
                 <div className="space-y-4">
                   {group.map((source) => (
@@ -2153,11 +2141,11 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
         )}
 
         {/* Safety footer */}
-        <div className="mt-8 flex flex-wrap gap-x-6 gap-y-1 border-t border-crt/8 pt-5 text-xs text-crt/22">
-          <span>◈ manual fetch only</span>
-          <span>◈ raw html is discarded</span>
-          <span>◈ all signals require curator approval</span>
-          <span>◈ no signal is published automatically</span>
+        <div className="mt-8 flex flex-wrap gap-x-6 gap-y-1 border-t border-white/8 pt-5 text-[12px] text-slate-600">
+          <span>manual fetch only</span>
+          <span>raw html is discarded</span>
+          <span>all signals require curator approval</span>
+          <span>no signal is published automatically</span>
         </div>
       </div>
     </div>

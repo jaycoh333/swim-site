@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 export type AuthorMode          = 'anon' | 'ghost';
-export type ScannerSourceType   = 'archive' | 'forum' | 'imageboard' | 'bbs' | 'reddit' | 'pastebin' | 'other';
+export type ScannerSourceType   = 'archive' | 'forum' | 'imageboard' | 'bbs' | 'reddit' | 'pastebin' | 'wayback' | 'mediawiki' | 'archive_forum' | 'other';
 export type ScannerRiskLevel    = 'low' | 'medium' | 'high';
 export type ScannerRefreshCadence = 'daily' | 'weekly' | 'monthly' | 'manual' | 'disabled';
 export type TargetType       = 'thread' | 'reply';

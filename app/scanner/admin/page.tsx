@@ -6,7 +6,6 @@
  */
 
 import { notFound } from 'next/navigation';
-import { AmbientGrid } from '@/components/AmbientGrid';
 import { NetworkFooter } from '@/components/NetworkFooter';
 import { AdminNav } from '@/components/AdminNav';
 import {
@@ -102,8 +101,7 @@ export default async function ScannerAdminPage() {
   ];
 
   return (
-    <div className="relative min-h-screen overflow-hidden pb-8 pt-[80px] md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.025]" />
+    <div className="scanner-console-modern relative min-h-screen overflow-hidden bg-[#0b0e10] pb-8 pt-[80px] md:pt-[100px]">
 
       <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-6">
 

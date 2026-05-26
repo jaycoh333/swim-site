@@ -10,7 +10,6 @@
 import Link from 'next/link';
 import { useState, useMemo, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { AmbientGrid } from '@/components/AmbientGrid';
 import { AdminFlowBanner } from '@/components/AdminFlowBanner';
 import { AdminNav } from '@/components/AdminNav';
 import { IntakeFormClient } from '@/components/IntakeFormClient';
@@ -1858,39 +1857,30 @@ export function SignalQueueClient({
   }
 
   return (
-    <div className="relative min-h-screen pb-16 pt-[80px] md:pt-[100px]">
-      <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.08]" />
+    <div className="pb-16 pt-[80px] md:pt-[100px]">
 
-      {/* ── Sticky toolbar — title + tabs only ── */}
-      <div className="sticky top-[72px] z-20 border-b border-crt/15 bg-[rgba(2,3,3,0.98)] backdrop-blur-sm md:top-[80px]">
-
-        {/* Title bar */}
-        <div className="border-b border-crt/10 px-4 py-4 md:px-8">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-[13px] font-medium text-crt/48">
-                SWIM · Curator Console
-              </p>
-              <h1 className="text-[36px] font-black leading-tight text-crt/92">
-                Signal Queue
-              </h1>
-            </div>
-            <button
-              onClick={() => setShowIntake((v) => !v)}
-              className={`min-h-[56px] border px-6 py-2 text-[18px] font-bold transition-colors ${
-                showIntake
-                  ? 'border-crt/28 text-crt/60 hover:border-crt/15 hover:text-crt/40'
-                  : 'border-crt/25 text-crt/55 hover:border-crt/42 hover:text-crt/80'
-              }`}
-            >
-              {showIntake ? '− Close Intake' : '+ Add Signal'}
-            </button>
-          </div>
-          <AdminNav current="queue" />
+      {/* ── Page header ── */}
+      <div className="mx-auto max-w-[1280px] px-4 pb-4 pt-6 md:px-8">
+        <p className="mb-1 text-[13px] font-medium uppercase tracking-widest text-slate-500">
+          SWIM · Curator Console
+        </p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-[40px] font-bold leading-tight text-white">Signal Queue</h1>
+          <button
+            onClick={() => setShowIntake((v) => !v)}
+            className={`flex min-h-[52px] items-center rounded-2xl border px-6 text-[17px] font-bold transition-colors ${
+              showIntake
+                ? 'border-white/15 text-slate-400 hover:border-white/8 hover:text-slate-500'
+                : 'border-white/15 bg-white/[0.04] text-slate-300 hover:border-white/25 hover:text-white'
+            }`}
+          >
+            {showIntake ? '− Close Intake' : '+ Add Signal'}
+          </button>
         </div>
+        <AdminNav current="queue" />
 
         {/* Status tabs */}
-        <div className="border-b border-crt/8 px-4 md:px-8">
+        <div className="mt-5 border-b border-white/8">
           <div className="flex overflow-x-auto">
             {STATUS_TABS.map(({ key, label }) => {
               const count = key !== 'all' ? counts[key as RecoveredSignalStatus] : null;
@@ -1899,13 +1889,13 @@ export function SignalQueueClient({
                 <button
                   key={key}
                   onClick={() => setActiveTab(key)}
-                  className={`shrink-0 border-b-2 px-4 py-3 text-[17px] font-medium transition-colors ${
-                    isActive ? 'border-crt/60 text-crt/88' : 'border-transparent text-crt/40 hover:text-crt/65'
+                  className={`shrink-0 border-b-2 px-4 py-3 text-[16px] font-medium transition-colors ${
+                    isActive ? 'border-emerald-400 text-white' : 'border-transparent text-slate-500 hover:text-slate-300'
                   }`}
                 >
                   {label}
                   {count !== null && (
-                    <span className={`ml-1.5 text-base ${isActive ? 'text-crt/55' : 'text-crt/28'}`}>
+                    <span className={`ml-1.5 text-[14px] ${isActive ? 'text-slate-400' : 'text-slate-600'}`}>
                       {count}
                     </span>
                   )}
@@ -1917,15 +1907,15 @@ export function SignalQueueClient({
       </div>
 
       {/* ── Main layout ── */}
-      <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-8 md:py-8">
+      <div className="mx-auto max-w-[1280px] px-4 py-6 md:px-8 md:py-8">
 
-        {/* Operator flow — out of sticky so it doesn't cover content */}
+        {/* Operator flow */}
         <div className="mb-5">
           <AdminFlowBanner currentStep={3} />
         </div>
 
         {/* Filter row */}
-        <div className="mb-6 border border-crt/10 bg-[rgba(4,7,5,0.80)] px-4 py-3 md:px-6">
+        <div className="mb-6 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 md:px-5">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-[160px] max-w-xs flex-1">
               <input
@@ -1933,13 +1923,13 @@ export function SignalQueueClient({
                 placeholder="Search title, summary, source…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full border border-crt/18 bg-transparent px-3 py-2 text-[16px] text-crt/75 placeholder:text-crt/28 focus:border-crt/35 focus:outline-none"
+                className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[15px] text-slate-300 placeholder:text-slate-600 focus:border-white/25 focus:outline-none"
               />
             </div>
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-2 text-[15px] text-crt/65 focus:border-crt/32 focus:outline-none"
+              className="rounded-lg border border-white/10 bg-[rgba(11,14,16,0.95)] px-3 py-2 text-[14px] text-slate-400 focus:border-white/25 focus:outline-none"
             >
               <option value="">All categories</option>
               {uniqueCategories.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1947,15 +1937,15 @@ export function SignalQueueClient({
             <select
               value={filterSourceType}
               onChange={(e) => setFilterSourceType(e.target.value)}
-              className="border border-crt/18 bg-[rgba(4,7,5,0.8)] px-3 py-2 text-[15px] text-crt/65 focus:border-crt/32 focus:outline-none"
+              className="rounded-lg border border-white/10 bg-[rgba(11,14,16,0.95)] px-3 py-2 text-[14px] text-slate-400 focus:border-white/25 focus:outline-none"
             >
               <option value="">All sources</option>
               {uniqueSourceTypes.map((t) => <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>)}
             </select>
             <button
               onClick={() => setSortScore((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc')}
-              className={`border px-3 py-2 text-[15px] transition-colors ${
-                sortScore ? 'border-crt/30 text-crt/65' : 'border-crt/15 text-crt/40 hover:border-crt/25'
+              className={`rounded-lg border px-3 py-2 text-[14px] transition-colors ${
+                sortScore ? 'border-white/20 text-slate-300' : 'border-white/8 text-slate-500 hover:border-white/18'
               }`}
             >
               Score {sortScore === 'desc' ? '↓' : sortScore === 'asc' ? '↑' : '—'}
@@ -1963,7 +1953,7 @@ export function SignalQueueClient({
             {hasActiveFilter && (
               <button
                 onClick={clearFilters}
-                className="ml-auto text-[15px] text-crt/40 transition-colors hover:text-crt/65"
+                className="ml-auto text-[14px] text-slate-500 transition-colors hover:text-slate-300"
               >
                 × Clear ({visibleSignals.length} shown)
               </button>
@@ -1973,7 +1963,7 @@ export function SignalQueueClient({
 
         {/* Intake form */}
         {showIntake && (
-          <div className="mb-6 border border-crt/18 bg-[rgba(4,7,5,0.97)]">
+          <div className="mb-6 rounded-2xl border border-white/10 bg-white/[0.025]">
             <IntakeFormClient onSuccess={() => setShowIntake(false)} />
           </div>
         )}
@@ -1989,47 +1979,44 @@ export function SignalQueueClient({
         <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <button
             onClick={() => setActiveTab('pending')}
-            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(215,168,92,0.04)]"
-            style={{ borderColor: 'rgba(215,168,92,0.22)', background: 'rgba(8,12,6,0.90)' }}
+            className="flex flex-col items-start rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] px-6 py-5 text-left transition-all hover:border-amber-500/35 hover:bg-amber-500/[0.08]"
           >
             <div className="mb-2 flex items-baseline gap-2">
-              <span className="font-mono text-4xl font-black leading-none" style={{ color: '#d7a85c' }}>
+              <span className="text-[36px] font-bold leading-none" style={{ color: '#d7a85c' }}>
                 {counts.pending}
               </span>
-              <span className="text-base" style={{ color: 'rgba(215,168,92,0.55)' }}>pending</span>
+              <span className="text-[15px] text-amber-500/60">pending</span>
             </div>
-            <span className="text-lg font-bold text-crt/88">Review Next Signal</span>
-            <span className="mt-1 text-sm text-crt/45">Open pending signals, read evidence, start review</span>
+            <span className="text-[17px] font-bold text-white">Review Next Signal</span>
+            <span className="mt-1 text-[14px] text-slate-500">Open pending signals, read evidence, start review</span>
           </button>
 
           <button
             onClick={() => setActiveTab('rebirth-ready')}
-            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(192,132,252,0.04)]"
-            style={{ borderColor: 'rgba(192,132,252,0.22)', background: 'rgba(8,12,6,0.90)' }}
+            className="flex flex-col items-start rounded-2xl border border-purple-500/20 bg-purple-500/[0.04] px-6 py-5 text-left transition-all hover:border-purple-500/35 hover:bg-purple-500/[0.08]"
           >
             <div className="mb-2 flex items-baseline gap-2">
-              <span className="font-mono text-4xl font-black leading-none" style={{ color: '#c084fc' }}>
+              <span className="text-[36px] font-bold leading-none" style={{ color: '#c084fc' }}>
                 {counts['rebirth-ready']}
               </span>
-              <span className="text-base" style={{ color: 'rgba(192,132,252,0.55)' }}>ready</span>
+              <span className="text-[15px] text-purple-500/60">ready</span>
             </div>
-            <span className="text-lg font-bold text-crt/88">Prepare Rebirth</span>
-            <span className="mt-1 text-sm text-crt/45">Open the rebirth editor and publish as a thread</span>
+            <span className="text-[17px] font-bold text-white">Prepare Rebirth</span>
+            <span className="mt-1 text-[14px] text-slate-500">Open the rebirth editor and publish as a thread</span>
           </button>
 
           <a
             href="/threads"
-            className="flex flex-col items-start border px-6 py-5 text-left transition-all hover:bg-[rgba(134,212,110,0.03)]"
-            style={{ borderColor: 'rgba(134,212,110,0.18)', background: 'rgba(8,12,6,0.90)' }}
+            className="flex flex-col items-start rounded-2xl border border-white/8 bg-white/[0.025] px-6 py-5 text-left transition-all hover:border-white/15 hover:bg-white/[0.04]"
           >
             <div className="mb-2 flex items-baseline gap-2">
-              <span className="font-mono text-4xl font-black leading-none text-crt/70">
+              <span className="text-[36px] font-bold leading-none text-slate-400">
                 {allSignals.filter((s) => Boolean(s.published_thread_id)).length}
               </span>
-              <span className="text-base text-crt/38">published</span>
+              <span className="text-[15px] text-slate-600">published</span>
             </div>
-            <span className="text-lg font-bold text-crt/88">View Reborn Threads</span>
-            <span className="mt-1 text-sm text-crt/45">Browse all published threads on SWIM</span>
+            <span className="text-[17px] font-bold text-white">View Reborn Threads</span>
+            <span className="mt-1 text-[14px] text-slate-500">Browse all published threads on SWIM</span>
           </a>
         </div>
 
@@ -2039,20 +2026,20 @@ export function SignalQueueClient({
           {/* Signal cards */}
           <div className="min-w-0 flex-1">
             {visibleSignals.length === 0 ? (
-              <div className="border border-crt/14 bg-[rgba(4,7,5,0.97)] px-8 py-16 text-center">
-                <p className="text-[24px] font-bold text-crt/55">
+              <div className="rounded-2xl border border-white/8 px-8 py-16 text-center">
+                <p className="text-[22px] font-bold text-white/60">
                   {hasActiveFilter ? 'No signals match the current filters' : 'No signals in this state'}
                 </p>
                 {hasActiveFilter ? (
-                  <p className="mt-3 text-[18px] text-crt/38">Try clearing the filters above.</p>
+                  <p className="mt-3 text-[17px] text-slate-500">Try clearing the filters above.</p>
                 ) : (
                   <>
-                    <p className="mt-3 text-[18px] text-crt/38">
+                    <p className="mt-3 text-[17px] text-slate-500">
                       No signals have been queued yet.
                     </p>
                     <a
                       href="/scanner/sources"
-                      className="mt-6 inline-flex min-h-[56px] items-center gap-2 border border-crt/25 bg-[rgba(134,212,110,0.06)] px-8 text-[18px] font-bold text-crt/72 transition-colors hover:border-crt/42 hover:bg-[rgba(134,212,110,0.10)] hover:text-crt/92"
+                      className="mt-6 inline-flex min-h-[52px] items-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-8 text-[17px] font-bold text-emerald-300 transition-colors hover:border-emerald-500/50 hover:bg-emerald-500/18"
                     >
                       Go to Scanner Sources → Run Fetch Session
                     </a>
@@ -2137,7 +2124,7 @@ export function SignalQueueClient({
               duplicateWarnings={duplicateWarnings}
               latestPublishedTitle={latestPublished}
             />
-            <p className="text-center text-xs text-crt/22">
+            <p className="text-center text-[12px] text-slate-600">
               Requires service role key · Not accessible to public
             </p>
           </div>

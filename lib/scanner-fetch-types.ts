@@ -16,6 +16,11 @@ export interface FetchedCandidate {
   categoryNote:         string;  // e.g. "matched 2 keywords: ufo, paranormal"
   extractionConfidence: ExtractionConfidence;   // quality rating of the extracted data
   extractionWarning?:   string;  // set when confidence is low
+  isIndexPage?:         boolean; // true when URL is a root/index or generic front page
+  sourceType?:          string;  // 'wayback' | 'mediawiki' | 'reddit' | etc — display badge
+  isArchived?:          boolean; // true when the URL is a Wayback Machine archive link
+  archivedAt?:          string;  // ISO date string when the snapshot was captured
+  passReason?:          string;  // why the candidate passed quality filters
   // Evidence context (URLs only — no binary stored)
   sourceImageUrl?:      string;  // og:image or twitter:image — absolute URL
   mediaType?:           string;  // 'image' if sourceImageUrl found, else 'webpage'

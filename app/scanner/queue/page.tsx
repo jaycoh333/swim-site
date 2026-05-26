@@ -37,13 +37,15 @@ export default async function QueuePage() {
   ]);
 
   return (
-    <SignalQueueClient
-      pending={pending}
-      reviewing={reviewing}
-      rebirthReady={rebirthReady}
-      approved={approved}
-      archived={archived}
-      rejected={rejected}
-    />
+    <div className="scanner-console-modern min-h-screen bg-[#0b0e10]">
+      <SignalQueueClient
+        pending={pending}
+        reviewing={reviewing}
+        rebirthReady={rebirthReady}
+        approved={approved}
+        archived={archived}
+        rejected={rejected}
+      />
+    </div>
   );
 }

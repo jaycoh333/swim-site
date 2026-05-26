@@ -107,10 +107,11 @@ export function ScannerConsoleClient({
   const router = useRouter();
 
   // Scan state
-  const [scanPhase,   setScanPhase]   = useState<'idle' | 'scanning' | 'done'>('idle');
-  const [scanResults, setScanResults] = useState<SessionSourceResult[]>([]);
-  const [scanError,   setScanError]   = useState<string | null>(null);
-  const [candStates,  setCandStates]  = useState<Map<string, CandidateState>>(new Map());
+  const [scanPhase,      setScanPhase]      = useState<'idle' | 'scanning' | 'done'>('idle');
+  const [scanResults,    setScanResults]    = useState<SessionSourceResult[]>([]);
+  const [scanError,      setScanError]      = useState<string | null>(null);
+  const [candStates,     setCandStates]     = useState<Map<string, CandidateState>>(new Map());
+  const [sourceViewOpen, setSourceViewOpen] = useState<Set<string>>(new Set());
 
   // Review state
   const [reviewSignals,  setReviewSignals]  = useState<DbRecoveredSignal[]>(initialReviewSignals);
@@ -349,7 +350,13 @@ export function ScannerConsoleClient({
                 </p>
 
                 {scanResults.map((result) => {
-                  const st = candStates.get(result.sourceId) ?? { action: 'idle' as CandidateAction };
+                  const st         = candStates.get(result.sourceId) ?? { action: 'idle' as CandidateAction };
+                  const svOpen     = sourceViewOpen.has(result.sourceId);
+                  const toggleSV   = () => setSourceViewOpen((prev) => {
+                    const next = new Set(prev);
+                    svOpen ? next.delete(result.sourceId) : next.add(result.sourceId);
+                    return next;
+                  });
                   return (
                     <div key={result.sourceId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
                       <p className="mb-1 text-[12px] font-semibold uppercase tracking-widest text-slate-500">
@@ -360,10 +367,30 @@ export function ScannerConsoleClient({
                         <p className="text-[15px] text-red-300">Error: {result.error}</p>
                       ) : (
                         <>
-                          <p className="mb-2 text-[17px] font-bold leading-snug text-white">
+                          <p className="mb-1.5 text-[17px] font-bold leading-snug text-white">
                             {result.candidate.title}
                           </p>
-                          <p className="mb-3 text-[18px] leading-relaxed text-slate-300 line-clamp-4">
+
+                          {/* Source page URL */}
+                          <a
+                            href={result.candidate.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mb-3 block truncate text-[12px] text-slate-600 transition-colors hover:text-slate-400"
+                          >
+                            {result.candidate.sourceUrl}
+                          </a>
+
+                          {/* Index page warning */}
+                          {result.candidate.isIndexPage && (
+                            <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3">
+                              <p className="text-[13px] font-bold text-amber-300">Index page — discovery recommended</p>
+                              <p className="mt-0.5 text-[12px] text-amber-400/65">This looks like a site front page. Use Discover Links instead of queueing this directly.</p>
+                            </div>
+                          )}
+
+                          {/* Extracted preview */}
+                          <p className="mb-3 text-[16px] leading-relaxed text-slate-300 line-clamp-4">
                             {result.candidate.summary}
                           </p>
 
@@ -377,10 +404,31 @@ export function ScannerConsoleClient({
                           )}
 
                           {/* Badges */}
-                          <div className="mb-4 flex flex-wrap items-center gap-2">
+                          <div className="mb-3 flex flex-wrap items-center gap-2">
                             <span className={`rounded-full px-3 py-1 text-[13px] font-semibold ${confidenceCls(result.candidate.extractionConfidence)}`}>
                               {result.candidate.extractionConfidence} confidence
                             </span>
+                            {result.candidate.sourceType && (
+                              <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-3 py-1 text-[13px] font-semibold text-sky-400">
+                                {result.candidate.sourceType}
+                              </span>
+                            )}
+                            {result.candidate.isArchived ? (
+                              <span className="rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1 text-[13px] font-semibold text-violet-400">
+                                archived
+                              </span>
+                            ) : (
+                              result.candidate.sourceType && (
+                                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-3 py-1 text-[13px] font-semibold text-emerald-400/70">
+                                  live
+                                </span>
+                              )
+                            )}
+                            {result.candidate.archivedAt && (
+                              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[13px] text-slate-500">
+                                {result.candidate.archivedAt.slice(0, 10)}
+                              </span>
+                            )}
                             {result.status === 'duplicate' && (
                               <span className="rounded-full bg-amber-500/15 px-3 py-1 text-[13px] font-semibold text-amber-400">
                                 ⚠ duplicate detected
@@ -389,7 +437,52 @@ export function ScannerConsoleClient({
                             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[13px] text-slate-500">
                               {result.candidate.category}
                             </span>
+                            {result.candidate.passReason && (
+                              <span className="rounded-full border border-white/8 bg-white/4 px-3 py-1 text-[12px] text-slate-600">
+                                ✓ {result.candidate.passReason}
+                              </span>
+                            )}
                           </div>
+
+                          {/* Original Source View toggle */}
+                          <button
+                            onClick={toggleSV}
+                            className="mb-3 text-[12px] font-semibold text-slate-600 underline-offset-2 hover:text-slate-400 hover:underline"
+                          >
+                            {svOpen ? '▾ Hide source preview' : '▸ View source preview'}
+                          </button>
+
+                          {svOpen && (
+                            <div className="mb-4 rounded-xl border border-white/8 bg-black/30 p-4 text-[13px]">
+                              <a
+                                href={result.candidate.sourceUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mb-2 block break-all font-mono text-emerald-400/70 hover:text-emerald-400"
+                              >
+                                {result.candidate.sourceUrl}
+                              </a>
+                              <p className="mb-2 font-semibold text-white">{result.candidate.title}</p>
+                              <p className="mb-3 leading-relaxed text-slate-400">{result.candidate.summary}</p>
+                              {result.candidate.sourceImageUrl && (
+                                <img
+                                  src={result.candidate.sourceImageUrl}
+                                  alt=""
+                                  className="mb-2 h-24 w-full rounded-lg object-cover opacity-75"
+                                />
+                              )}
+                              {result.candidate.attributionText && (
+                                <p className="text-slate-600">{result.candidate.attributionText}</p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Index page queue warning */}
+                          {result.candidate.isIndexPage && st.action === 'idle' && (
+                            <p className="mb-2 text-[12px] text-amber-400/70">
+                              Queue only if this is an actual story or article, not a site index.
+                            </p>
+                          )}
 
                           {st.action === 'idle' && (
                             <div className="flex gap-3">
@@ -413,7 +506,12 @@ export function ScannerConsoleClient({
                             <p className="text-[15px] text-slate-500">Skipped</p>
                           )}
                           {st.action === 'error' && (
-                            <p className="text-[15px] text-red-300">Error: {st.error}</p>
+                            <div>
+                              <p className="text-[15px] text-red-300">{st.error}</p>
+                              {st.error?.includes('Missing Supabase column') && (
+                                <p className="mt-1 text-[13px] text-red-400/60">Run the recovered_signals migration in your Supabase project to add the missing column.</p>
+                              )}
+                            </div>
                           )}
                         </>
                       )}

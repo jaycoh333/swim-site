@@ -21,5 +21,9 @@ export default async function ScannerSourcesPage() {
 
   const sources = await getScannerSources();
 
-  return <ScannerSourcesClient sources={sources} />;
+  return (
+    <div className="scanner-console-modern min-h-screen bg-[#0b0e10] pt-[80px] md:pt-[100px]">
+      <ScannerSourcesClient sources={sources} />
+    </div>
+  );
 }

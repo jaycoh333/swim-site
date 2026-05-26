@@ -38,6 +38,12 @@ import {
 } from '@/lib/supabase/repository';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource } from '@/lib/supabase/types';
+import {
+  searchWaybackSnapshots,
+  waybackTimestampToIso,
+  searchMediaWikiArticles,
+  fetchMediaWikiArticle,
+} from '@/lib/discovery-apis';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -249,12 +255,14 @@ function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
   const mainMatch = contentHtml.match(/<(?:main|article)[^>]*>([\s\S]{80,15000}?)<\/(?:main|article)>/i);
   const workHtml  = mainMatch ? mainMatch[1] : contentHtml;
 
-  // Step 3: strip remaining tags, collapse whitespace, take first 600 chars
-  const snippet = workHtml
-    .replace(/<[^>]{0,1000}>/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-    .slice(0, 600);
+  // Step 3: strip remaining tags, collapse whitespace, decode entities, take first 600 chars
+  const snippet = decodeHtmlEntities(
+    workHtml
+      .replace(/<[^>]{0,1000}>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 600),
+  );
 
   // Image URL — og:image > twitter:image  (absolute https:// URLs only; no binary stored)
   const ogImage  = h.match(/<meta[^>]{0,300}property=["']og:image["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
@@ -341,6 +349,7 @@ function toSignalSourceType(scannerType: string): import('@/lib/supabase/types')
   const map: Record<string, import('@/lib/supabase/types').SignalSourceType> = {
     archive: 'wayback', forum: 'forum', reddit: 'reddit',
     imageboard: 'imageboard', bbs: 'other', pastebin: 'pastebin',
+    wayback: 'wayback', mediawiki: 'other', archive_forum: 'forum',
     irc: 'irc', other: 'other',
   };
   return map[scannerType] ?? 'other';
@@ -378,21 +387,25 @@ export async function fetchScannerSourcePreviewAction(
   }
 
   // Extract metadata — raw HTML discarded after this point
-  const extracted = extractPageData(html, source.base_url);
-  const title     = cleanTitle(extracted.title) || source.name;
-  const summary   = buildSummary(extracted.description, extracted.snippet);
-  const conf      = scoreExtractionConfidence(title, summary);
+  const extracted  = extractPageData(html, source.base_url);
+  const title      = cleanTitle(extracted.title) || source.name;
+  const summary    = buildSummary(extracted.description, extracted.snippet);
+  const conf       = scoreExtractionConfidence(title, summary);
+  const resolvedUrl = extracted.canonicalUrl || source.base_url;
+  const urlPath    = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
+  const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
 
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
-    sourceUrl:            extracted.canonicalUrl || source.base_url,
+    sourceUrl:            resolvedUrl,
     category:             source.category_focus[0] ?? 'Internet Lore',
     tags:                 ['scanner-source', source.source_type],
     anomalyScore:         5,
     categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
+    isIndexPage,
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
@@ -532,21 +545,25 @@ export async function runFetchSessionAction(
     }
 
     // Extract metadata — raw HTML discarded after this point
-    const extracted = extractPageData(html, source.base_url);
-    const title     = cleanTitle(extracted.title) || source.name;
-    const summary   = buildSummary(extracted.description, extracted.snippet);
-    const conf      = scoreExtractionConfidence(title, summary);
+    const extracted   = extractPageData(html, source.base_url);
+    const title       = cleanTitle(extracted.title) || source.name;
+    const summary     = buildSummary(extracted.description, extracted.snippet);
+    const conf        = scoreExtractionConfidence(title, summary);
+    const resolvedUrl = extracted.canonicalUrl || source.base_url;
+    const urlPath     = (() => { try { return new URL(resolvedUrl).pathname; } catch { return '/'; } })();
+    const isIndexPage = urlPath === '/' || urlPath === '' || isGenericTitle(title);
 
     const candidate: FetchedCandidate = {
       title:                title.slice(0, 200),
       summary:              summary.slice(0, 2000),
-      sourceUrl:            extracted.canonicalUrl || source.base_url,
+      sourceUrl:            resolvedUrl,
       category:             source.category_focus[0] ?? 'Internet Lore',
       tags:                 ['scanner-source', source.source_type],
       anomalyScore:         5,
       categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
       extractionConfidence: conf.confidence,
       extractionWarning:    conf.warning ?? undefined,
+      isIndexPage,
       sourceImageUrl:       extracted.imageUrl || undefined,
       mediaType:            extracted.imageUrl ? 'image' : 'webpage',
       attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
@@ -640,30 +657,46 @@ const REDDIT_HOST = /^(www\.)?reddit\.com$/;
 async function discoverRedditPosts(
   source: DbScannerSource,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
-  const jsonUrl = source.base_url!.replace(/\/?$/, '') + '/new.json?limit=50';
-  let data: unknown;
-  try {
-    const res = await fetch(jsonUrl, {
-      cache: 'no-store',
-      headers: {
-        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
-        'Accept':     'application/json',
-      },
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!res.ok) return { error: `Reddit JSON HTTP ${res.status}` };
-    data = await res.json();
-  } catch (err) {
-    return { error: `Reddit fetch — ${err instanceof Error ? err.message : String(err)}` };
-  }
+  // Fetch both /new and /top to surface quality posts
+  const baseUrl = source.base_url!.replace(/\/?$/, '');
+  const urls = [`${baseUrl}/new.json?limit=50`, `${baseUrl}/top.json?t=month&limit=50`];
 
   type RPost = { data: { title: string; permalink: string; selftext: string; score: number; num_comments: number; subreddit: string } };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const posts: RPost[] = (data as any)?.data?.children ?? [];
+  const allPosts: RPost[] = [];
 
+  for (const jsonUrl of urls) {
+    let data: unknown;
+    try {
+      const res = await fetch(jsonUrl, {
+        cache: 'no-store',
+        headers: {
+          'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+          'Accept':     'application/json',
+        },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!res.ok) continue;
+      data = await res.json();
+    } catch { continue; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const posts: RPost[] = (data as any)?.data?.children ?? [];
+    allPosts.push(...posts);
+  }
+
+  const seen  = new Set<string>();
   const links: DiscoveredLink[] = [];
-  for (const { data: p } of posts) {
+
+  for (const { data: p } of allPosts) {
     if (links.length >= DISCOVERY_MAX_LINKS) break;
+    const permalink = `https://www.reddit.com${p.permalink}`;
+    if (seen.has(permalink)) continue;
+    seen.add(permalink);
+
+    // Quality filters: score > 5, selftext > 100 chars if present
+    if (p.score < 5) continue;
+    const hasSelftext = p.selftext && p.selftext.trim().length > 0;
+    if (hasSelftext && p.selftext.trim().length < 100) continue;
+
     const combined  = `${p.title} ${p.selftext}`.toLowerCase();
     const matched: string[] = [];
     for (const kw of DISCOVERY_KEYWORDS) {
@@ -671,9 +704,13 @@ async function discoverRedditPosts(
       if (matched.length >= 3) break;
     }
     if (matched.length === 0) continue;
+
+    // Clean up [FOUND], [UPDATE] etc. prefixes common on Reddit
+    const cleanedTitle = p.title.replace(/^\s*\[[^\]]{1,30}\]\s*/g, '').trim() || p.title;
+
     links.push({
-      url:         `https://www.reddit.com${p.permalink}`,
-      linkText:    p.title,
+      url:         permalink,
+      linkText:    cleanedTitle,
       matchReason: `r/${p.subreddit} · ${p.score}↑ · ${p.num_comments} comments · matched: ${matched.join(', ')}`,
     });
   }
@@ -732,11 +769,195 @@ async function fetchRedditPostPreview(
     categoryNote:         buildCategoryNote(source.category_focus, title, summary),
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
+    sourceType:           'reddit',
+    isArchived:           false,
+    passReason:           `r/${p.subreddit} · ${p.score}↑ · keyword match`,
     sourceImageUrl:       imageUrl,
     mediaType:            imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from r/${p.subreddit} · u/${p.author} · Reddit`,
     captureNotes:         `r/${p.subreddit} · u/${p.author} · ${p.score}↑ · ${p.num_comments} comments · posted ${postedDate}. Raw content not stored.`,
   };
+  return { candidate };
+}
+
+// ---------------------------------------------------------------------------
+// Quality filter — rejects low-value pages before building a candidate
+// ---------------------------------------------------------------------------
+
+function candidatePassesQuality(url: string, title: string, summary: string): { pass: boolean; reason: string } {
+  const path  = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return '/'; } })();
+  const lcTitle = title.toLowerCase();
+  const lcSum   = summary.toLowerCase();
+
+  // Reject navigation / tag / category index pages
+  if (/^\/(tag|tags|category|categories|topics?|search|login|register|about|contact|privacy|terms)\b/.test(path)) {
+    return { pass: false, reason: 'navigation or index page' };
+  }
+  // Reject empty excerpts
+  if (summary.trim().length < 40) {
+    return { pass: false, reason: 'summary too short' };
+  }
+  // Reject generic page titles
+  if (lcTitle === 'home' || lcTitle === 'index' || lcTitle === 'welcome' || lcTitle.length < 8) {
+    return { pass: false, reason: 'generic page title' };
+  }
+  // Prefer longform — mark pass reason accordingly
+  const isLongform = summary.trim().length > 300;
+  const hasKeyword = DISCOVERY_KEYWORDS.some((kw) => lcTitle.includes(kw) || lcSum.includes(kw));
+  const reason = isLongform
+    ? 'longform content'
+    : hasKeyword
+      ? 'keyword match'
+      : 'passed quality filter';
+  return { pass: true, reason };
+}
+
+// ---------------------------------------------------------------------------
+// Wayback CDX connector — discover snapshots of a domain registered as a source
+// ---------------------------------------------------------------------------
+
+async function discoverWaybackLinks(
+  source: DbScannerSource,
+): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+  const result = await searchWaybackSnapshots(source.base_url!, DISCOVERY_MAX_LINKS);
+  if ('error' in result) return result;
+
+  const links: DiscoveredLink[] = result.snapshots.map((snap) => ({
+    url:         snap.waybackUrl,
+    linkText:    snap.url.split('/').pop() || snap.url,
+    matchReason: `Wayback snapshot · captured ${waybackTimestampToIso(snap.timestamp).slice(0, 10)}`,
+  }));
+
+  return { links };
+}
+
+// Wayback connector — fetch a single archived page and produce a candidate.
+async function fetchWaybackPagePreview(
+  source: DbScannerSource,
+  url:    string,
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
+  // Extract timestamp and original URL from the Wayback URL
+  // Format: https://web.archive.org/web/20231201120000/https://example.com/page
+  const tsMatch = url.match(/\/web\/(\d{14})\//);
+  const timestamp  = tsMatch?.[1] ?? '';
+  const archivedAt = timestamp ? waybackTimestampToIso(timestamp) : undefined;
+
+  let html: string;
+  try {
+    const res = await fetch(url, {
+      cache:   'no-store',
+      headers: {
+        'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+        'Accept':     'text/html,application/xhtml+xml;q=0.9',
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return { error: `Wayback fetch HTTP ${res.status}` };
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('xhtml')) {
+      return { error: `expected HTML, got ${ct.split(';')[0].trim()}` };
+    }
+    html = await res.text();
+  } catch (err) {
+    return { error: `Wayback page fetch — ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const extracted  = extractPageData(html, url);
+  const title      = cleanTitle(extracted.title) || source.name;
+  const summary    = buildSummary(extracted.description, extracted.snippet);
+  const conf       = scoreExtractionConfidence(title, summary);
+  const quality    = candidatePassesQuality(url, title, summary);
+
+  if (!quality.pass) {
+    return { error: `Quality filter: ${quality.reason}` };
+  }
+
+  const candidate: FetchedCandidate = {
+    title:                title.slice(0, 200),
+    summary:              summary.slice(0, 2000),
+    sourceUrl:            extracted.canonicalUrl || url,
+    category:             source.category_focus[0] ?? 'Internet Lore',
+    tags:                 ['scanner-source', 'wayback', 'archived', 'discovered-link'],
+    anomalyScore:         5,
+    categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
+    sourceType:           'wayback',
+    isArchived:           true,
+    archivedAt:           archivedAt,
+    passReason:           quality.reason,
+    sourceImageUrl:       extracted.imageUrl || undefined,
+    mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+    attributionText:      `Archived via Wayback Machine · ${source.name}`,
+    captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}. Original page may no longer be accessible. Raw HTML not stored.`,
+  };
+
+  return { candidate };
+}
+
+// ---------------------------------------------------------------------------
+// MediaWiki connector — discover articles on a MediaWiki instance
+// ---------------------------------------------------------------------------
+
+async function discoverMediaWikiLinks(
+  source: DbScannerSource,
+): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+  // Search using the source's category_focus keywords to find relevant articles
+  const query = source.category_focus.slice(0, 3).join(' ') || 'lost found archived';
+  const result = await searchMediaWikiArticles(source.base_url!, query, DISCOVERY_MAX_LINKS);
+  if ('error' in result) return result;
+
+  const links: DiscoveredLink[] = result.results.map((r) => ({
+    url:         r.url,
+    linkText:    r.title,
+    matchReason: r.snippet.slice(0, 120) || 'MediaWiki article',
+  }));
+
+  return { links };
+}
+
+// MediaWiki connector — fetch a single article and produce a candidate.
+async function fetchMediaWikiPagePreview(
+  source: DbScannerSource,
+  url:    string,
+): Promise<{ candidate: FetchedCandidate } | { error: string }> {
+  // Extract the article title from the URL: /wiki/Article_Title
+  const titleMatch = url.match(/\/wiki\/([^?#]+)/);
+  if (!titleMatch) return { error: 'could not extract article title from URL' };
+  const rawTitle   = decodeURIComponent(titleMatch[1].replace(/_/g, ' '));
+
+  const result = await fetchMediaWikiArticle(source.base_url!, rawTitle);
+  if ('error' in result) return result;
+
+  const { article } = result;
+  const title   = cleanTitle(article.title) || source.name;
+  const summary = article.extract.trim() || 'No extract available — edit manually.';
+  const conf    = scoreExtractionConfidence(title, summary);
+  const quality = candidatePassesQuality(url, title, summary);
+
+  if (!quality.pass) {
+    return { error: `Quality filter: ${quality.reason}` };
+  }
+
+  const candidate: FetchedCandidate = {
+    title:                title.slice(0, 200),
+    summary:              summary.slice(0, 2000),
+    sourceUrl:            article.url,
+    category:             source.category_focus[0] ?? 'Internet Lore',
+    tags:                 ['scanner-source', 'mediawiki', 'discovered-link'],
+    anomalyScore:         5,
+    categoryNote:         buildCategoryNote(source.category_focus, article.title, article.extract),
+    extractionConfidence: conf.confidence,
+    extractionWarning:    conf.warning ?? undefined,
+    sourceType:           'mediawiki',
+    isArchived:           false,
+    passReason:           quality.reason,
+    sourceImageUrl:       article.imageUrl || undefined,
+    mediaType:            article.imageUrl ? 'image' : 'webpage',
+    attributionText:      `Recovered from ${source.name} · MediaWiki`,
+    captureNotes:         `MediaWiki article: "${article.title}". Plain-text extract only — raw wiki markup not stored.`,
+  };
+
   return { candidate };
 }
 
@@ -747,6 +968,16 @@ export async function discoverSourceLinksAction(
   if (!source)          return { error: 'source not found in registry' };
   if (!source.enabled)  return { error: 'source must be enabled before discovery' };
   if (!source.base_url) return { error: 'source has no base URL configured' };
+
+  // Wayback CDX connector — query Internet Archive snapshots
+  if (source.source_type === 'wayback') {
+    return discoverWaybackLinks(source);
+  }
+
+  // MediaWiki connector — search wiki articles via API
+  if (source.source_type === 'mediawiki') {
+    return discoverMediaWikiLinks(source);
+  }
 
   // Reddit connector — use JSON API instead of HTML scraping
   if (source.source_type === 'reddit') {
@@ -837,9 +1068,23 @@ export async function fetchDiscoveredLinkPreviewAction(
   const baseHostname = new URL(source.base_url).hostname;
   const isArchiveType =
     source.source_type === 'archive' ||
+    source.source_type === 'wayback' ||
     baseHostname.includes('archive.org');
-  if (!isArchiveType && parsedUrl.hostname !== baseHostname && !REDDIT_HOST.test(parsedUrl.hostname)) {
+  const isWaybackUrl = parsedUrl.hostname === 'web.archive.org';
+  const isMediaWikiSource = source.source_type === 'mediawiki';
+
+  if (!isArchiveType && !isMediaWikiSource && parsedUrl.hostname !== baseHostname && !REDDIT_HOST.test(parsedUrl.hostname)) {
     return { error: `cross-domain fetch blocked — ${parsedUrl.hostname} is not ${baseHostname}` };
+  }
+
+  // Wayback connector — archived page via Wayback Machine URL
+  if (isWaybackUrl || source.source_type === 'wayback') {
+    return fetchWaybackPagePreview(source, url);
+  }
+
+  // MediaWiki connector — use API for structured article data
+  if (isMediaWikiSource || url.includes('/wiki/')) {
+    return fetchMediaWikiPagePreview(source, url);
   }
 
   // Reddit connector — use JSON API for structured post metadata
@@ -872,6 +1117,7 @@ export async function fetchDiscoveredLinkPreviewAction(
   const title     = cleanTitle(extracted.title) || source.name;
   const summary   = buildSummary(extracted.description, extracted.snippet);
   const conf      = scoreExtractionConfidence(title, summary);
+  const quality   = candidatePassesQuality(url, title, summary);
 
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
@@ -883,6 +1129,9 @@ export async function fetchDiscoveredLinkPreviewAction(
     categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
+    sourceType:           source.source_type,
+    isArchived:           false,
+    passReason:           quality.reason,
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,

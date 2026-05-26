@@ -1044,6 +1044,10 @@ export async function createRecoveredSignal(
 
   if (error) {
     console.error('[repository] createRecoveredSignal:', error.message);
+    const colMatch = error.message.match(/column "([^"]+)" of relation "recovered_signals" does not exist/);
+    if (colMatch) {
+      return { error: `Missing Supabase column: ${colMatch[1]}. Run the recovered_signals migration.` };
+    }
     return { error: error.message };
   }
   return { id: data.id };

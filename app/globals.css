@@ -1803,14 +1803,16 @@ body::after {
   }
 }
 
-/* ── SCANNER CONSOLE — modern admin dashboard ───────────────── */
-/* Overrides VT323/CRT body styles for /scanner/console only.    */
-/* Applied to the outermost wrapper div on that page.            */
+/* ── SCANNER CONSOLE — modern admin dashboard ─────────────────────── */
+/* Overrides VT323/CRT body styles for all scanner admin pages.        */
+/* Applied to the outermost wrapper div on each admin page.            */
 
 .scanner-console-modern {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: #94a3b8;
   letter-spacing: 0;
+  /* Override CSS --crt variable: changes color: var(--crt) usages to neutral */
+  --crt: #7c8fa5;
 }
 
 /* Form elements don't inherit font-family by default in all browsers */
@@ -1835,6 +1837,83 @@ body::after {
 .scanner-console-modern .phosphor-glow {
   text-shadow: none;
   color: inherit;
+}
+
+/* ── Admin toolbar: de-sticky, neutral dark background ── */
+.scanner-console-modern .admin-toolbar {
+  position: relative !important;
+  top: auto !important;
+  background: rgba(11, 14, 16, 0.98);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ── Admin buttons: rounded, emerald modern palette ── */
+.scanner-console-modern .admin-btn {
+  min-height: 52px;
+  border-radius: 12px;
+  font-size: 16px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.scanner-console-modern .admin-btn-primary {
+  border-color: rgba(52, 211, 153, 0.38);
+  background: rgba(52, 211, 153, 0.10);
+  color: #34d399;
+}
+.scanner-console-modern .admin-btn-primary:hover:not(:disabled) {
+  border-color: rgba(52, 211, 153, 0.60);
+  background: rgba(52, 211, 153, 0.18);
+  box-shadow: none;
+}
+.scanner-console-modern .admin-btn-success {
+  border-color: rgba(52, 211, 153, 0.50);
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+.scanner-console-modern .admin-btn-success:hover:not(:disabled) {
+  border-color: rgba(52, 211, 153, 0.72);
+  background: rgba(52, 211, 153, 0.25);
+  box-shadow: none;
+}
+.scanner-console-modern .admin-btn-warning {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(251, 191, 36, 0.10);
+  color: #fbbf24;
+}
+.scanner-console-modern .admin-btn-warning:hover:not(:disabled) {
+  border-color: rgba(251, 191, 36, 0.60);
+  background: rgba(251, 191, 36, 0.18);
+}
+.scanner-console-modern .admin-btn-danger {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.10);
+  color: #f87171;
+}
+.scanner-console-modern .admin-btn-danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.18);
+  color: #f87171;
+}
+
+/* ── Source card fetch buttons: rounded modern ── */
+.scanner-console-modern input[type="text"],
+.scanner-console-modern input[type="url"],
+.scanner-console-modern input[type="search"],
+.scanner-console-modern input[type="number"],
+.scanner-console-modern textarea,
+.scanner-console-modern select {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  color: #e2e8f0 !important;
+  border-radius: 8px;
+}
+.scanner-console-modern input:focus,
+.scanner-console-modern textarea:focus,
+.scanner-console-modern select:focus {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  outline: none;
+  box-shadow: none;
 }
 
 /* ── COMPOSE FORM ELEMENTS ───────────────────────────────── */
