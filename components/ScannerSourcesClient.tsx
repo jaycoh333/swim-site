@@ -1907,12 +1907,12 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
 
       {/* ── STICKY ADMIN TOOLBAR ── */}
       <div className="admin-toolbar sticky top-[72px] z-20 md:top-[80px]">
-        <div className="mx-auto max-w-5xl px-4 py-4 md:px-6">
+        <div className="mx-auto max-w-[1200px] px-4 py-4 md:px-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <p className="text-[13px] font-medium text-crt/35">SWIM · Scanner Admin</p>
+              <p className="text-[13px] font-medium text-crt/48">SWIM · Scanner Admin</p>
               <h1 className="text-[36px] font-black leading-tight text-crt/92">Scanner Sources</h1>
-              <p className="mt-0.5 text-base text-crt/42">manual recovery · no crawl · one page per call</p>
+              <p className="mt-0.5 text-base text-crt/58">manual recovery · no crawl · one page per call</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -1951,7 +1951,7 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
       </div>
 
       {/* ── MAIN CONTENT ── */}
-      <div className="relative z-10 mx-auto max-w-5xl px-4 py-6 md:px-6">
+      <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-6">
 
         {/* ── RUN FETCH SESSION — hero primary CTA ── */}
         <div className="mb-5">

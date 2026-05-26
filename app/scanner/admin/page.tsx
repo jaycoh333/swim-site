@@ -105,17 +105,17 @@ export default async function ScannerAdminPage() {
     <div className="relative min-h-screen overflow-hidden pb-8 pt-[80px] md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-[0.025]" />
 
-      <div className="relative z-10 mx-auto max-w-5xl px-4 py-6 md:px-6">
+      <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-6">
 
         {/* ── Page header ── */}
         <div className="mb-6">
-          <p className="mb-1 text-[13px] font-medium uppercase tracking-[0.22em] text-crt/32">
+          <p className="mb-1 text-[13px] font-medium uppercase tracking-[0.12em] text-crt/45">
             SWIM · Scanner Admin
           </p>
           <h1 className="mb-2 text-[40px] font-black leading-tight text-crt/92 md:text-[48px]">
             Admin Hub
           </h1>
-          <p className="mb-5 text-[18px] text-crt/50">
+          <p className="mb-5 text-[18px] text-crt/62">
             Curator operator dashboard — all scanner tools in one place.
           </p>
 
@@ -129,7 +129,7 @@ export default async function ScannerAdminPage() {
           style={{ background: 'rgba(8,12,6,0.92)' }}
         >
           <div className="border-b border-crt/10 px-6 py-4">
-            <h2 className="text-[14px] font-semibold uppercase tracking-[0.18em] text-crt/40">
+            <h2 className="text-[15px] font-semibold uppercase tracking-[0.10em] text-crt/55">
               System Status
             </h2>
           </div>
@@ -142,7 +142,7 @@ export default async function ScannerAdminPage() {
                 >
                   {value}
                 </div>
-                <div className="mt-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-crt/35">
+                <div className="mt-2 text-[13px] font-semibold uppercase tracking-[0.06em] text-crt/50">
                   {label}
                 </div>
               </div>
@@ -197,7 +197,7 @@ export default async function ScannerAdminPage() {
           style={{ background: 'rgba(8,12,6,0.92)' }}
         >
           <div className="border-b border-crt/10 px-6 py-4">
-            <h2 className="text-[14px] font-semibold uppercase tracking-[0.18em] text-crt/40">
+            <h2 className="text-[15px] font-semibold uppercase tracking-[0.10em] text-crt/55">
               Operator Flow
             </h2>
           </div>
@@ -210,13 +210,13 @@ export default async function ScannerAdminPage() {
               >
                 <div
                   className="mt-0.5 shrink-0 font-mono text-[2.8rem] font-black leading-none tabular-nums"
-                  style={{ color: 'rgba(134,212,110,0.22)', minWidth: '2.5rem' }}
+                  style={{ color: 'rgba(134,212,110,0.30)', minWidth: '2.5rem' }}
                 >
                   {step.num}
                 </div>
                 <div>
                   <p className="text-[20px] font-bold text-crt/88">{step.label}</p>
-                  <p className="mt-1 text-[16px] leading-relaxed text-crt/48">{step.desc}</p>
+                  <p className="mt-1 text-[16px] leading-relaxed text-crt/62">{step.desc}</p>
                 </div>
               </a>
             ))}

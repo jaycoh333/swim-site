@@ -1868,7 +1868,7 @@ export function SignalQueueClient({
         <div className="border-b border-crt/10 px-4 py-4 md:px-8">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-[13px] font-medium text-crt/35">
+              <p className="text-[13px] font-medium text-crt/48">
                 SWIM · Curator Console
               </p>
               <h1 className="text-[36px] font-black leading-tight text-crt/92">
@@ -1917,7 +1917,7 @@ export function SignalQueueClient({
       </div>
 
       {/* ── Main layout ── */}
-      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-8">
+      <div className="relative z-10 mx-auto max-w-[1200px] px-4 py-6 md:px-8 md:py-8">
 
         {/* Operator flow — out of sticky so it doesn't cover content */}
         <div className="mb-5">

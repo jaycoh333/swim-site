@@ -21,11 +21,11 @@ export function AdminNav({ current }: AdminNavProps) {
           <a
             key={key}
             href={href}
-            className="inline-flex min-h-[44px] items-center border px-4 py-2 text-[16px] font-bold transition-colors"
+            className="inline-flex min-h-[52px] items-center border px-5 py-2.5 text-[17px] font-bold transition-colors hover:opacity-100"
             style={{
-              borderColor: isActive ? 'rgba(134,212,110,0.55)' : 'rgba(134,212,110,0.20)',
-              color:       isActive ? '#86d46e'                : 'rgba(134,212,110,0.52)',
-              background:  isActive ? 'rgba(134,212,110,0.10)' : 'transparent',
+              borderColor: isActive ? 'rgba(134,212,110,0.60)' : 'rgba(134,212,110,0.25)',
+              color:       isActive ? '#86d46e'                : 'rgba(134,212,110,0.58)',
+              background:  isActive ? 'rgba(134,212,110,0.12)' : 'rgba(0,0,0,0.20)',
             }}
           >
             {label}
