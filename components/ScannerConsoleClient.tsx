@@ -215,7 +215,9 @@ export function ScannerConsoleClient({
   const [scanPhase,      setScanPhase]      = useState<'idle' | 'scanning' | 'done'>('idle');
   const [scanResults,    setScanResults]    = useState<SessionSourceResult[]>([]);
   const [scanError,      setScanError]      = useState<string | null>(null);
+  // Key = candidate.sourceUrl (supports multiple candidates from same source)
   const [candStates,     setCandStates]     = useState<Map<string, CandidateState>>(new Map());
+  const [queueToast,     setQueueToast]     = useState<string | null>(null);
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
@@ -223,11 +225,13 @@ export function ScannerConsoleClient({
   // Review state
   const [reviewSignals,  setReviewSignals]  = useState<DbRecoveredSignal[]>(initialReviewSignals);
   const [statusChanging, setStatusChanging] = useState<string | null>(null);
+  const [reviewError,    setReviewError]    = useState<string | null>(null);
 
   // Publish state
   const [readySignals,  setReadySignals]  = useState<DbRecoveredSignal[]>(initialReadySignals);
   const [prepareOpenId, setPrepareOpenId] = useState<string | null>(null);
   const [publishing,    setPublishing]    = useState<string | null>(null);
+  const [publishError,  setPublishError]  = useState<string | null>(null);
   const [lastPublished, setLastPublished] = useState<PublishedResult | null>(null);
   const [copied,        setCopied]        = useState<'tg' | 'x' | null>(null);
 
@@ -278,7 +282,7 @@ export function ScannerConsoleClient({
 
   async function handleQueueCandidate(result: SessionSourceResult) {
     if (result.status === 'error') return;
-    const key = result.sourceId;
+    const key = result.candidate.sourceUrl;
     setCandStates((prev) => new Map(prev).set(key, { action: 'queueing' }));
     const c = result.candidate;
     const qr = await queueFetchedCandidateAction({
@@ -299,12 +303,39 @@ export function ScannerConsoleClient({
       setCandStates((prev) => new Map(prev).set(key, { action: 'error', error: qr.error }));
     } else {
       setCandStates((prev) => new Map(prev).set(key, { action: 'queued' }));
+      // Optimistic update — show the story in the Review column immediately
+      const now = new Date().toISOString();
+      setReviewSignals((prev) => [{
+        id:                   ('signalId' in qr ? qr.signalId : `optimistic-${Date.now()}`),
+        title:                c.title,
+        summary:              c.summary,
+        category:             c.category,
+        source_name:          result.sourceName,
+        source_url:           c.sourceUrl,
+        source_type:          (c.sourceType ?? 'other') as DbRecoveredSignal['source_type'],
+        status:               'pending',
+        anomaly_score:        c.anomalyScore,
+        tags:                 c.tags,
+        attribution_text:     c.attributionText ?? null,
+        source_capture_notes: c.captureNotes ?? null,
+        source_image_url:     c.sourceImageUrl ?? null,
+        media_url:            c.sourceImageUrl ?? null,
+        media_type:           c.mediaType ?? null,
+        curator_notes:        null,
+        submitted_publicly:   false,
+        created_at:           now,
+        discovered_at:        now,
+        approved_at:          null,
+        published_thread_id:  null,
+      }, ...prev]);
+      setQueueToast(c.title);
+      setTimeout(() => setQueueToast(null), 4000);
       router.refresh();
     }
   }
 
-  function handleSkip(sourceId: string) {
-    setCandStates((prev) => new Map(prev).set(sourceId, { action: 'skipped' }));
+  function handleSkip(sourceUrl: string) {
+    setCandStates((prev) => new Map(prev).set(sourceUrl, { action: 'skipped' }));
   }
 
   // ── Review handlers ──────────────────────────────────────────────────────
@@ -314,9 +345,10 @@ export function ScannerConsoleClient({
     newStatus: 'rebirth-ready' | 'rejected' | 'archived',
   ) {
     setStatusChanging(signalId);
+    setReviewError(null);
     const result = await updateSignalStatusAction({ id: signalId, status: newStatus });
     setStatusChanging(null);
-    if ('error' in result) { alert(`Error: ${result.error}`); return; }
+    if ('error' in result) { setReviewError(result.error); return; }
     if (newStatus === 'rebirth-ready') {
       const sig = reviewSignals.find((s) => s.id === signalId);
       if (sig) setReadySignals((prev) => [{ ...sig, status: 'rebirth-ready' }, ...prev]);
@@ -331,6 +363,7 @@ export function ScannerConsoleClient({
     form: { title: string; body: string; category: string; tags: string },
   ) {
     setPublishing(signalId);
+    setPublishError(null);
     const tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
     const result = await rebirthSignalAsThreadAction({
       signalId,
@@ -340,7 +373,7 @@ export function ScannerConsoleClient({
       tags,
     });
     setPublishing(null);
-    if ('error' in result) { alert(`Publish error: ${result.error}`); return; }
+    if ('error' in result) { setPublishError(result.error); return; }
     const sig = readySignals.find((s) => s.id === signalId);
     const shareData = {
       title:        form.title,
@@ -406,6 +439,22 @@ export function ScannerConsoleClient({
           ))}
         </div>
       </div>
+
+      {/* ── Queue toast ── */}
+      {queueToast && (
+        <div className="mb-4 flex items-center gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-4">
+          <span className="text-[22px]">✓</span>
+          <div>
+            <p className="text-[16px] font-bold text-emerald-300">Story queued for review</p>
+            <p className="text-[14px] text-emerald-400/60 line-clamp-1">{queueToast}</p>
+          </div>
+          <div className="ml-auto flex gap-2">
+            <a href="/scanner/queue" className="flex min-h-[40px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[13px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
+              Open Review Queue →
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* ── 3-column grid ── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -651,10 +700,10 @@ export function ScannerConsoleClient({
 
                       {goodResults.map((result) => {
                         if (result.status === 'error') return null;
-                        const st = candStates.get(result.sourceId) ?? { action: 'idle' as CandidateAction };
+                        const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
 
                         return (
-                          <div key={result.sourceId} className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04]">
+                          <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04]">
 
                             {/* Evidence image — dominant visual, full bleed */}
                             {result.candidate.sourceImageUrl && (
@@ -678,15 +727,15 @@ export function ScannerConsoleClient({
                             <div className="p-5">
 
                               {/* Source header */}
-                              <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                                <span className="text-[12px] font-semibold uppercase tracking-widest text-slate-500">
-                                  {result.sourceName}
-                                </span>
-                                {!result.candidate.sourceImageUrl && result.candidate.sourceType && (
-                                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
-                                    {result.candidate.sourceType}
+                              <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+                                {result.candidate.sourceType && (
+                                  <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                    {result.candidate.sourceType.toUpperCase()}
                                   </span>
                                 )}
+                                <span className="text-[13px] font-semibold text-slate-400">
+                                  {result.sourceName}
+                                </span>
                                 {result.candidate.passReason && (
                                   <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-0.5 text-[11px] text-emerald-400/70">
                                     ✓ {result.candidate.passReason}
@@ -697,20 +746,25 @@ export function ScannerConsoleClient({
                                     ⚠ duplicate
                                   </span>
                                 )}
+                                {result.candidate.storyScore != null && (
+                                  <span className="ml-auto rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
+                                    {result.candidate.storyScore}pts
+                                  </span>
+                                )}
                               </div>
 
-                              {/* Title */}
-                              <p className="mb-1.5 text-[18px] font-bold leading-snug text-white">
+                              {/* Title — large */}
+                              <p className="mb-2 text-[24px] font-bold leading-snug text-white">
                                 {result.candidate.title}
                               </p>
 
                               {/* Story signal badges */}
                               {result.candidate.storySignals && result.candidate.storySignals.length > 0 && (
-                                <div className="mb-2.5 flex flex-wrap gap-1">
+                                <div className="mb-3 flex flex-wrap gap-1">
                                   {result.candidate.storySignals.map((sig) => (
                                     <span
                                       key={sig}
-                                      className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400/65"
+                                      className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65"
                                     >
                                       {sig}
                                     </span>
@@ -718,27 +772,31 @@ export function ScannerConsoleClient({
                                 </div>
                               )}
 
-                              {/* Excerpt — concise */}
-                              <p className="mb-3 text-[14px] leading-relaxed text-slate-400 line-clamp-3">
-                                {result.candidate.summary}
-                              </p>
+                              {/* Quote-style excerpt panel */}
+                              <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
+                                <p className="text-[16px] leading-relaxed text-slate-300 line-clamp-5">
+                                  {result.candidate.summary}
+                                </p>
+                              </div>
 
                               {/* Evidence block — source-type-specific metadata */}
                               <EvidenceBlock candidate={result.candidate} />
 
-                              {/* Source URL */}
+                              {/* Source URL button */}
                               <a
                                 href={result.candidate.sourceUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="mb-3 block truncate text-[11px] text-slate-700 transition-colors hover:text-slate-500"
+                                className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300"
                               >
-                                {result.candidate.sourceUrl}
+                                <span className="text-[10px] text-slate-600">SOURCE</span>
+                                <span className="truncate">{result.candidate.sourceUrl}</span>
+                                <span className="ml-auto shrink-0 text-[14px]">↗</span>
                               </a>
 
                               {/* Low/medium confidence notice */}
                               {result.candidate.extractionConfidence !== 'high' && st.action === 'idle' && (
-                                <div className={`mb-3 rounded-lg px-2.5 py-1.5 text-[12px] ${
+                                <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] ${
                                   result.candidate.extractionConfidence === 'low'
                                     ? 'bg-red-500/8 text-red-400/65'
                                     : 'bg-amber-500/8 text-amber-400/65'
@@ -753,46 +811,37 @@ export function ScannerConsoleClient({
                                 <div className="flex flex-wrap gap-2">
                                   <button
                                     onClick={() => handleQueueCandidate(result)}
-                                    className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl bg-emerald-500 text-[16px] font-bold text-black transition-colors hover:bg-emerald-400"
+                                    className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400"
                                   >
                                     Queue This Story
                                   </button>
                                   <button
-                                    onClick={() => handleSkip(result.sourceId)}
-                                    className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-4 text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+                                    onClick={() => handleSkip(result.candidate.sourceUrl)}
+                                    className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
                                   >
                                     Skip
                                   </button>
-                                  <a
-                                    href={result.candidate.sourceUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex min-h-[52px] w-[52px] items-center justify-center rounded-xl border border-white/8 bg-white/[0.02] text-[18px] text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300"
-                                    title="Open source"
-                                  >
-                                    ↗
-                                  </a>
                                 </div>
                               )}
                               {st.action === 'queueing' && (
-                                <p className="flex items-center gap-2 text-[15px] text-slate-400">
+                                <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400">
                                   <Spinner /> Queueing…
-                                </p>
+                                </div>
                               )}
                               {st.action === 'queued' && (
                                 <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4">
-                                  <p className="mb-2.5 text-[16px] font-bold text-emerald-400">✓ Candidate queued for review</p>
-                                  <p className="mb-3 text-[13px] text-emerald-400/60">Waiting in the Review column — approve to move to Publish.</p>
+                                  <p className="mb-1 text-[18px] font-bold text-emerald-300">✓ Queued for Review</p>
+                                  <p className="mb-3 text-[14px] text-emerald-400/60">Review it in column 2 → approve to publish.</p>
                                   <div className="flex flex-wrap gap-2">
                                     <a
                                       href="/scanner/queue"
-                                      className="flex min-h-[42px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[13px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22"
+                                      className="flex min-h-[46px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[14px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22"
                                     >
-                                      Open Signal Queue →
+                                      Open Review Queue →
                                     </a>
                                     <button
-                                      onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.sourceId); return next; })}
-                                      className="flex min-h-[42px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[13px] text-slate-400 transition-colors hover:bg-white/[0.07]"
+                                      onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.candidate.sourceUrl); return next; })}
+                                      className="flex min-h-[46px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] text-slate-400 transition-colors hover:bg-white/[0.07]"
                                     >
                                       Continue Scanning
                                     </button>
@@ -800,16 +849,17 @@ export function ScannerConsoleClient({
                                 </div>
                               )}
                               {st.action === 'skipped' && (
-                                <p className="text-[13px] text-slate-700">Skipped</p>
+                                <p className="text-[14px] text-slate-700">Skipped — story hidden</p>
                               )}
                               {st.action === 'error' && (
-                                <div className="rounded-xl border border-red-500/25 bg-red-500/8 p-3">
-                                  <p className="text-[14px] text-red-300">{st.error}</p>
+                                <div className="rounded-xl border border-red-500/35 bg-red-500/10 p-4">
+                                  <p className="mb-1 text-[16px] font-bold text-red-300">Queue Failed</p>
+                                  <p className="text-[15px] text-red-200">{st.error}</p>
                                   {st.error?.includes('Missing Supabase column') && (
-                                    <p className="mt-1 text-[12px] text-red-400/55">Run the recovered_signals migration to add the missing column.</p>
+                                    <p className="mt-2 text-[13px] text-red-400/55">Run the recovered_signals migration to add the missing column.</p>
                                   )}
                                   {st.error?.includes('index or navigation page') && (
-                                    <p className="mt-1 text-[12px] text-red-400/55">Use Discover Links to find specific story URLs.</p>
+                                    <p className="mt-2 text-[13px] text-red-400/55">Use Discover Links to find specific story URLs.</p>
                                   )}
                                 </div>
                               )}
@@ -835,11 +885,11 @@ export function ScannerConsoleClient({
 
                       {lowQualityOpen && (
                         <div className="mt-2 flex flex-col gap-2">
-                          {lowQualResults.map((result) => {
+                          {lowQualResults.map((result, idx) => {
                             if (result.status === 'error') {
                               const isBlocked = result.error.includes('blocked direct fetch');
                               return (
-                                <div key={result.sourceId} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
+                                <div key={`${result.sourceId}-err-${idx}`} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
                                   <p className="mb-0.5 text-[13px] font-semibold text-slate-500">{result.sourceName}</p>
                                   {isBlocked ? (
                                     <>
@@ -857,7 +907,7 @@ export function ScannerConsoleClient({
                             }
 
                             return (
-                              <div key={result.sourceId} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
+                              <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
                                 <div className="mb-1 flex items-start justify-between gap-2">
                                   <p className="text-[13px] font-semibold leading-snug text-slate-500">
                                     {result.candidate.title.slice(0, 70)}{result.candidate.title.length > 70 ? '…' : ''}
@@ -900,17 +950,28 @@ export function ScannerConsoleClient({
               <h2 className="text-[22px] font-bold text-white">Review</h2>
               {reviewSignals.length > 0 && (
                 <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-[14px] font-bold text-amber-300">
-                  {reviewSignals.length}
+                  {reviewSignals.length} queued
                 </span>
               )}
             </div>
-            <p className="text-[15px] font-semibold text-amber-300/80">
-              Queued Stories Waiting For Review
+            <p className="text-[16px] font-bold text-amber-300/90">
+              Queued Stories
             </p>
-            <p className="mt-0.5 text-[14px] text-slate-500">Approve a story to move it to Publish</p>
+            <p className="mt-0.5 text-[14px] text-slate-500">Approve for Publishing moves story to column 3</p>
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+
+            {/* Review error panel */}
+            {reviewError && (
+              <div className="rounded-2xl border border-red-500/35 bg-red-500/10 p-5">
+                <p className="mb-1 text-[17px] font-bold text-red-300">Action Failed</p>
+                <p className="text-[15px] text-red-200">{reviewError}</p>
+                <button onClick={() => setReviewError(null)} className="mt-3 text-[13px] text-red-400/60 underline-offset-2 hover:underline">
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {reviewSignals.length === 0 ? (
               <div className="flex flex-col items-center justify-center rounded-2xl border border-white/8 bg-white/[0.02] py-12 text-center">
@@ -954,17 +1015,19 @@ export function ScannerConsoleClient({
                       </div>
 
                       {/* Title */}
-                      <p className="mb-1 text-[17px] font-bold leading-snug text-white">{sig.title}</p>
+                      <p className="mb-1 text-[22px] font-bold leading-snug text-white">{sig.title}</p>
 
                       {/* Attribution line */}
-                      <p className="mb-3 text-[12px] text-emerald-400/55">
+                      <p className="mb-3 text-[14px] text-emerald-400/55">
                         {sig.attribution_text ?? sig.source_name}
                       </p>
 
-                      {/* Summary — concise */}
-                      <p className="mb-3 text-[14px] leading-relaxed text-slate-300 line-clamp-3">
-                        {sig.summary}
-                      </p>
+                      {/* Summary — quote panel */}
+                      <div className="mb-3 rounded-xl border-l-2 border-amber-500/20 bg-white/[0.02] px-4 py-3">
+                        <p className="text-[16px] leading-relaxed text-slate-300 line-clamp-4">
+                          {sig.summary}
+                        </p>
+                      </div>
 
                       {/* Capture notes — evidence provenance */}
                       {sig.source_capture_notes && (
@@ -996,7 +1059,7 @@ export function ScannerConsoleClient({
                       {/* Action buttons */}
                       <div className="flex flex-wrap gap-3">
                         <button onClick={() => handleStatusChange(sig.id, 'rebirth-ready')} disabled={isChanging} className={BTN_APPROVE}>
-                          {isChanging ? <Spinner /> : 'Approve'}
+                          {isChanging ? <Spinner /> : 'Approve for Publishing'}
                         </button>
                         <button onClick={() => handleStatusChange(sig.id, 'rejected')}  disabled={isChanging} className={BTN_REJECT}>
                           Reject
@@ -1032,6 +1095,17 @@ export function ScannerConsoleClient({
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+
+            {/* Publish error panel */}
+            {publishError && (
+              <div className="rounded-2xl border border-red-500/35 bg-red-500/10 p-5">
+                <p className="mb-1 text-[17px] font-bold text-red-300">Publish Failed</p>
+                <p className="text-[15px] text-red-200">{publishError}</p>
+                <button onClick={() => setPublishError(null)} className="mt-3 text-[13px] text-red-400/60 underline-offset-2 hover:underline">
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* Published success banner */}
             {lastPublished && (

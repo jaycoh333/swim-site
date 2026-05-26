@@ -528,6 +528,137 @@ async function fetchRedditSourcePreview(
 }
 
 // ---------------------------------------------------------------------------
+// Reddit multi-candidate — /new + /top?t=week + /hot, top 10 quality posts
+// ---------------------------------------------------------------------------
+
+async function fetchRedditMultipleCandidates(
+  source: DbScannerSource,
+): Promise<{ candidates: FetchedCandidate[] } | { error: string }> {
+  const urlMatch = (source.base_url ?? '').match(/\/r\/([A-Za-z0-9_]+)/i);
+  if (!urlMatch) {
+    return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName' };
+  }
+  const subreddit = urlMatch[1];
+
+  const endpoints = [
+    `https://www.reddit.com/r/${subreddit}/new.json?limit=25`,
+    `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=25`,
+    `https://www.reddit.com/r/${subreddit}/hot.json?limit=25`,
+  ];
+
+  type RPost = {
+    data: {
+      title: string; permalink: string; selftext: string; score: number;
+      num_comments: number; subreddit: string; author: string;
+      created_utc: number; stickied: boolean; is_self: boolean; url: string;
+      preview?: { images?: [{ source: { url: string } }] };
+    };
+  };
+
+  const seen    = new Set<string>();
+  const allPosts: RPost[] = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        cache:   'no-store',
+        headers: {
+          'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+          'Accept':     'application/json',
+        },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!res.ok) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const posts: RPost[] = ((await res.json()) as any)?.data?.children ?? [];
+      for (const post of posts) {
+        if (!seen.has(post.data.permalink)) {
+          seen.add(post.data.permalink);
+          allPosts.push(post);
+        }
+      }
+    } catch { continue; }
+  }
+
+  if (!allPosts.length) {
+    return { error: `Reddit JSON fetch failed — r/${subreddit} may be private, quarantined, or removed` };
+  }
+
+  const filtered = allPosts.filter(({ data: p }) => {
+    const q = scoreRedditQuality({
+      title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
+      url: p.url, score: p.score, num_comments: p.num_comments,
+      stickied: p.stickied, author: p.author,
+    });
+    return q.passes;
+  });
+
+  if (!filtered.length) {
+    return { error: `No story-quality posts in r/${subreddit} — posts lack longform text, engagement, or anomaly content. Use Discover Links to browse manually.` };
+  }
+
+  const scored = filtered.map(({ data: p }) => {
+    const narrative  = p.selftext?.trim() ? extractNarrative(p.selftext) : '';
+    const heuristics = scoreStoryHeuristics(`${p.title} ${narrative}`);
+    const criteriaBonus = Math.min(
+      (p.selftext.trim().length > 300 ? 1 : 0) +
+      (p.score > 20 ? 1 : 0) +
+      (p.num_comments > 10 ? 1 : 0),
+      3,
+    ) * 8;
+    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus };
+  });
+  scored.sort((a, b) => b.totalScore - a.totalScore);
+
+  const candidates: FetchedCandidate[] = scored.slice(0, 10).map(({ p, narrative, heuristics, totalScore }) => {
+    const qualityResult = scoreRedditQuality({
+      title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
+      url: p.url, score: p.score, num_comments: p.num_comments,
+      stickied: p.stickied, author: p.author,
+    });
+    const cleanedTitle = (p.title.replace(/^\s*\[[^\]]{1,30}\]\s*/g, '').trim() || p.title).slice(0, 200);
+    const summary      = (narrative || p.selftext?.trim() ||
+      `r/${p.subreddit} · ${p.score} points · ${p.num_comments} comments`
+    ).slice(0, 2000);
+    const rawImg   = p.preview?.images?.[0]?.source?.url;
+    const imageUrl = rawImg ? rawImg.replace(/&amp;/g, '&') : undefined;
+    const conf     = scoreExtractionConfidence(cleanedTitle, summary);
+    const postUrl  = `https://www.reddit.com${p.permalink}`;
+    const postedAt = new Date(p.created_utc * 1000).toISOString().slice(0, 10);
+    const bad      = detectBadCandidate(postUrl, cleanedTitle, summary);
+
+    return {
+      title:                cleanedTitle,
+      summary,
+      sourceUrl:            postUrl,
+      category:             source.category_focus[0] ?? 'Internet Lore',
+      tags:                 ['scanner-source', 'reddit', `r-${p.subreddit}`],
+      anomalyScore:         5,
+      categoryNote:         buildCategoryNote(source.category_focus, p.title, p.selftext),
+      extractionConfidence: conf.confidence,
+      extractionWarning:    conf.warning ?? undefined,
+      sourceType:           'reddit',
+      isArchived:           false,
+      passReason:           qualityResult.passReason || `${p.score}↑`,
+      badCandidateReason:   bad.bad ? bad.reason : undefined,
+      sourceImageUrl:       imageUrl,
+      mediaType:            imageUrl ? 'image' : 'webpage',
+      attributionText:      `Recovered from r/${p.subreddit} · u/${p.author} · Reddit`,
+      captureNotes:         `r/${p.subreddit} · u/${p.author} · ${p.score}↑ · ${p.num_comments} comments · posted ${postedAt}. Raw content not stored.`,
+      redditSubreddit:      p.subreddit,
+      redditAuthor:         p.author,
+      redditScore:          p.score,
+      redditComments:       p.num_comments,
+      redditPostedAt:       postedAt,
+      storyScore:           totalScore,
+      storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    };
+  });
+
+  return { candidates };
+}
+
+// ---------------------------------------------------------------------------
 // MediaWiki source preview — search API + article extract, one best article
 // ---------------------------------------------------------------------------
 
@@ -584,6 +715,64 @@ async function fetchMediaWikiSourcePreview(
   };
 
   return { candidate };
+}
+
+// ---------------------------------------------------------------------------
+// MediaWiki multi-candidate — up to 10 articles from search results
+// ---------------------------------------------------------------------------
+
+async function fetchMediaWikiMultipleCandidates(
+  source: DbScannerSource,
+): Promise<{ candidates: FetchedCandidate[] } | { error: string }> {
+  const baseUrl = (source.base_url ?? '').replace(/\/(api\.php|wiki\/?.*)$/, '');
+  const query   = source.category_focus.slice(0, 2).join(' ') || 'lost found mystery recovered';
+  const searchResult = await searchMediaWikiArticles(baseUrl, query, 10);
+  if ('error' in searchResult) return searchResult;
+
+  if (!searchResult.results.length) {
+    return { error: `No MediaWiki articles found for "${query}" on ${source.name}` };
+  }
+
+  const candidates: FetchedCandidate[] = [];
+  for (const searchItem of searchResult.results.slice(0, 10)) {
+    const articleResult = await fetchMediaWikiArticle(baseUrl, searchItem.title);
+    if ('error' in articleResult) continue;
+
+    const { article } = articleResult;
+    const title   = cleanTitle(article.title) || source.name;
+    const summary = article.extract.trim() || searchItem.snippet || 'No extract — edit manually.';
+    const conf    = scoreExtractionConfidence(title, summary);
+    const bad     = detectBadCandidate(article.url, title, summary);
+    const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
+
+    candidates.push({
+      title:                title.slice(0, 200),
+      summary:              summary.slice(0, 2000),
+      sourceUrl:            article.url,
+      category:             source.category_focus[0] ?? 'Internet Lore',
+      tags:                 ['scanner-source', 'mediawiki'],
+      anomalyScore:         5,
+      categoryNote:         buildCategoryNote(source.category_focus, article.title, article.extract),
+      extractionConfidence: conf.confidence,
+      extractionWarning:    conf.warning ?? undefined,
+      sourceType:           'mediawiki',
+      isArchived:           false,
+      passReason:           'MediaWiki API article',
+      badCandidateReason:   bad.bad ? bad.reason : undefined,
+      sourceImageUrl:       article.imageUrl || undefined,
+      mediaType:            article.imageUrl ? 'image' : 'webpage',
+      attributionText:      `Recovered from ${source.name} · MediaWiki`,
+      captureNotes:         `MediaWiki article: "${article.title}". Plain-text extract only — raw wiki markup not stored.`,
+      storyScore:           heuristics.storyScore,
+      storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    });
+  }
+
+  if (!candidates.length) {
+    return { error: `Failed to fetch any articles from ${source.name}` };
+  }
+
+  return { candidates };
 }
 
 // ---------------------------------------------------------------------------
@@ -887,25 +1076,37 @@ export async function runFetchSessionAction(
       continue;
     }
 
-    // Route to API connectors — avoids HTML fetches that get blocked or return garbage
-    let apiResult: { candidate: FetchedCandidate } | { error: string } | null = null;
+    // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
-      apiResult = await fetchRedditSourcePreview(source);
-    } else if (source.source_type === 'mediawiki' || isMediaWikiHost(source.base_url)) {
-      apiResult = await fetchMediaWikiSourcePreview(source);
+      const multiResult = await fetchRedditMultipleCandidates(source);
+      if ('error' in multiResult) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
+      } else {
+        for (const candidate of multiResult.candidates) {
+          const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+          if (dupes.length > 0) {
+            results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          } else {
+            results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+          }
+        }
+      }
+      continue;
     }
 
-    if (apiResult) {
-      if ('error' in apiResult) {
-        results.push({ sourceId, sourceName: source.name, status: 'error', error: apiResult.error });
-        continue;
-      }
-      const candidate = apiResult.candidate;
-      const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
-      if (dupes.length > 0) {
-        results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+    if (source.source_type === 'mediawiki' || isMediaWikiHost(source.base_url)) {
+      const multiResult = await fetchMediaWikiMultipleCandidates(source);
+      if ('error' in multiResult) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
-        results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+        for (const candidate of multiResult.candidates) {
+          const dupes = await checkSignalDuplicates(candidate.sourceUrl, candidate.title);
+          if (dupes.length > 0) {
+            results.push({ sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          } else {
+            results.push({ sourceId, sourceName: source.name, status: 'preview', candidate });
+          }
+        }
       }
       continue;
     }
