@@ -37,6 +37,9 @@ export const PRESET_ALL = 'all';
 /** Debug test preset — returns static mock candidates to verify the pipeline. */
 export const PRESET_DEBUG = 'debug-test';
 
+/** Deep Truth Scanner preset — archive-only, no Reddit, pre-2015 content only. */
+export const PRESET_DEEP_TRUTH = 'deep-truth-scanner';
+
 export const SCAN_PRESETS: ScanPreset[] = [
   {
     id:           'weird-reddit',
@@ -121,6 +124,26 @@ export const SCAN_PRESETS: ScanPreset[] = [
     risk:         'medium',
     riskNote:     'Medium — archived pages may return index results; BBS content is anonymous and era-unverified. Curator review required.',
     color:        'amber',
+  },
+  {
+    id:           PRESET_DEEP_TRUTH,
+    name:         'Deep Truth Scanner',
+    tagline:      'Archive-only: BBS, Wayback & early-web conspiracy artifacts',
+    description:  'Hard-locks to archive sources only (Wayback, BBS, archive_forum, mediawiki). No Reddit. No modern feeds. Targets 1996–2012 pre-social internet: bibliotecapleyades, rense, abovetopsecret, projectcamelot, NUFORC, NICAP, MUFON, GeoCities, textfiles.com BBS, and early-web "truth" archives. All candidates must have an archive year or BBS provenance.',
+    sourceTypes:  ['wayback', 'bbs', 'archive', 'archive_forum', 'mediawiki'],
+    nameKeywords: [
+      'wayback', 'bibliotecapleyades', 'rense', 'abovetopsecret', 'projectcamelot',
+      'projectavalon', 'crystalinks', 'coasttocoast', 'coast to coast', 'nuforc',
+      'cufon', 'nicap', 'nicap.org', 'textfiles', 'bbs', 'geocities', 'angelfire',
+      'tripod', 'fortunecity', 'mufon', 'parascope', 'anomalist', 'fortean',
+      'friedman', 'earthfiles', 'black vault', 'blackvault', 'virtuallystrange',
+      'ufo updates', 'ufo evidence', 'majesticdocuments', 'cydonia', 'hyper',
+      'surfingtheapocalypse', 'alienshift', 'stopthecrime', 'educate-yourself',
+      'internet archive', 'archive.org',
+    ],
+    risk:         'medium',
+    riskNote:     'Medium — archive pages may return index or stub results. No Reddit or modern social content.',
+    color:        'violet',
   },
   {
     id:           PRESET_DEBUG,

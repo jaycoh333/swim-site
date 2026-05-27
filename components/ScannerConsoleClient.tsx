@@ -10,10 +10,11 @@ import {
   getScanMemoryStatsAction,
   clearScanMemoryAction,
   autoEnableOriginSourcesAction,
+  autoEnableDeepTruthSourcesAction,
   type ScanMode,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
-import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
+import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, PRESET_DEEP_TRUTH, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
@@ -870,7 +871,7 @@ export function ScannerConsoleClient({
 
   // Phase T: feed sort + filter + quick review
   const [feedSort,    setFeedSort]    = useState<'best' | 'newest' | 'oldest' | 'weirdest' | 'unseen'>(
-    activePreset === 'origin-scan' ? 'oldest' : 'best'
+    (activePreset === 'origin-scan' || activePreset === PRESET_DEEP_TRUTH) ? 'oldest' : 'best'
   );
   const [feedFilters, setFeedFilters] = useState<Set<string>>(new Set());
   const [quickReview, setQuickReview] = useState(false);
@@ -1001,7 +1002,7 @@ export function ScannerConsoleClient({
 
   // ── Feed sort default: switch to 'oldest' for origin-scan ───────────────
   useEffect(() => {
-    setFeedSort(activePreset === 'origin-scan' ? 'oldest' : 'best');
+    setFeedSort((activePreset === 'origin-scan' || activePreset === PRESET_DEEP_TRUTH) ? 'oldest' : 'best');
   }, [activePreset]);
 
   // ── Preset helpers ───────────────────────────────────────────────────────
@@ -1015,18 +1016,17 @@ export function ScannerConsoleClient({
   }
 
   function sourcesForPreset(presetId: string) {
-    const isOriginPreset = presetId === 'origin-scan';
+    const isOriginPreset   = presetId === 'origin-scan';
+    const isDeepTruthPreset = presetId === PRESET_DEEP_TRUTH;
+    const ARCHIVE_ONLY_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki', 'archive_forum']);
     const pool = (() => {
       if (presetId === PRESET_ALL) return enabledSources;
       const preset = SCAN_PRESETS.find((p) => p.id === presetId);
       if (!preset) return enabledSources;
-      // Phase W/AB: origin scan is locked to archive-only types.
-      // Reddit, imageboard, and live non-archive forums are completely excluded.
-      const ORIGIN_ALLOWED_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki', 'archive_forum']);
       return enabledSources.filter((s) => {
-        if (isOriginPreset) {
-          // Hard lock — only archival source types, no exceptions
-          return ORIGIN_ALLOWED_TYPES.has(s.source_type);
+        if (isOriginPreset || isDeepTruthPreset) {
+          // Hard lock — archive-only types, Reddit explicitly excluded
+          return ARCHIVE_ONLY_TYPES.has(s.source_type) && s.source_type !== 'reddit';
         }
         if (preset.nameKeywords.length > 0) {
           const lc = s.name.toLowerCase();
@@ -1068,14 +1068,14 @@ export function ScannerConsoleClient({
       ...sorted.filter((s) =>  lastScanSrcIds.has(s.id)),
     ];
 
-    // Origin scan: sort BBS → Wayback → archive first for archive dominance (TASK 3/5)
-    const ORIGIN_TYPE_RANK: Record<string, number> = { bbs: 0, wayback: 1, archive: 2, archive_forum: 3, mediawiki: 4 };
-    const originSorted = isOriginPreset
+    // Origin/DTS scan: sort BBS → Wayback → archive_forum → archive first for archive dominance
+    const ORIGIN_TYPE_RANK: Record<string, number> = { bbs: 0, wayback: 1, archive_forum: 2, archive: 3, mediawiki: 4 };
+    const originSorted = (isOriginPreset || isDeepTruthPreset)
       ? [...fairSorted].sort((a, b) => (ORIGIN_TYPE_RANK[a.source_type] ?? 9) - (ORIGIN_TYPE_RANK[b.source_type] ?? 9))
       : fairSorted;
 
-    // Origin scan gets a higher cap (20) to surface more archive sources
-    const presetCap = isOriginPreset ? 20 : MAX_PRESET_SOURCES;
+    // Origin/DTS scan gets a higher cap (20) to surface more archive sources
+    const presetCap = (isOriginPreset || isDeepTruthPreset) ? 20 : MAX_PRESET_SOURCES;
     const sliced = originSorted.slice(0, presetCap);
     // Deep Archive mode: cap Reddit to 2 sources so old-web sources dominate
     if (scanMode === 'deep-archive') {
@@ -1140,6 +1140,7 @@ export function ScannerConsoleClient({
       excludeUrls:     [...seenUrlsThisSession],
       scanMode,
       isOriginScan:    activePreset === 'origin-scan',
+      isDeepTruth:     activePreset === PRESET_DEEP_TRUTH,
     });
     if ('error' in res) {
       setScanError(res.error);
@@ -1858,6 +1859,16 @@ export function ScannerConsoleClient({
                       </button>
                       <button
                         onClick={async () => {
+                          const r2 = await autoEnableDeepTruthSourcesAction();
+                          setMemStats((prev) => prev);
+                          if (r2.enabled.length > 0) window.location.reload();
+                        }}
+                        className="w-full rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-amber-400/70 transition-colors hover:bg-amber-500/10 hover:text-amber-300"
+                      >
+                        Enable Deep Truth Sources
+                      </button>
+                      <button
+                        onClick={async () => {
                           await clearScanMemoryAction();
                           const r = await getScanMemoryStatsAction();
                           setMemStats(r.stats);
@@ -1985,10 +1996,20 @@ export function ScannerConsoleClient({
                 }
               }
 
-              // ── Phase AC TASK 2: Modern content quota for origin scan ────────────
-              const isOriginScan = activePreset === 'origin-scan';
+              // ── Phase AC/AD: Modern content quota ────────────────────────────────
+              const isOriginScan     = activePreset === 'origin-scan';
+              const isDeepTruthScan  = activePreset === PRESET_DEEP_TRUTH;
               let filteredGoodResults = goodResults;
-              if (isOriginScan && goodResults.length > 0) {
+              if ((isOriginScan || isDeepTruthScan) && goodResults.length > 0) {
+                if (isDeepTruthScan) {
+                  // Deep Truth Scanner: zero tolerance for modern content — archive/BBS only
+                  filteredGoodResults = goodResults.filter((r) =>
+                    r.status === 'error' ||
+                    r.candidate.sourceType === 'bbs' ||
+                    r.candidate.isPreSocialEra === true ||
+                    (r.candidate.archiveYear != null && r.candidate.archiveYear <= 2015)
+                  );
+                } else {
                 const preSocialCount = goodResults.filter((r) =>
                   r.status !== 'error' && (
                     r.candidate.isPreSocialEra === true ||
@@ -2020,11 +2041,12 @@ export function ScannerConsoleClient({
                     );
                   }
                 }
+                } // end else (isOriginScan branch)
               }
 
-              // ── Phase AC TASK 7: Origin scan metrics ─────────────────────────────
+              // ── Phase AC/AD TASK 7: Origin/DTS scan metrics ──────────────────────
               const originMetrics = (() => {
-                if (!isOriginScan || filteredGoodResults.length === 0) return null;
+                if ((!isOriginScan && !isDeepTruthScan) || filteredGoodResults.length === 0) return null;
                 const withYear = filteredGoodResults.filter((r) => r.status !== 'error' && r.candidate.archiveYear != null);
                 const years = withYear.map((r) => r.status !== 'error' ? (r.candidate.archiveYear as number) : 9999);
                 const avgYear = years.length > 0 ? Math.round(years.reduce((a, b) => a + b, 0) / years.length) : null;
@@ -2096,9 +2118,9 @@ export function ScannerConsoleClient({
                 setSelectedUrls(new Set());
               }
 
-              // Tab data — TASK 2
+              // Tab data
               const TABS = [
-                { id: 'strong'       as const, label: 'Strong Candidates', count: filteredGoodResults.length,      color: 'emerald' },
+                { id: 'strong'       as const, label: isDeepTruthScan ? 'Recovered Artifacts' : 'Strong Candidates', count: filteredGoodResults.length,      color: 'emerald' },
                 { id: 'needs-review' as const, label: 'Needs Review',      count: needsReview.length,      color: 'amber'   },
                 { id: 'low-signal'   as const, label: 'Low Signal',        count: lowSignalResults.length, color: 'slate'   },
                 { id: 'blocked'      as const, label: 'Blocked / Failed',  count: errorResults.length,     color: 'red'     },
@@ -2138,21 +2160,30 @@ export function ScannerConsoleClient({
                 <div className="flex flex-col gap-4">
 
                   {/* ── Scan results header ── */}
-                  <div className="rounded-2xl border border-white/14 bg-white/[0.05] px-5 py-5">
-                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600/70">
-                      Scan #{scanId} · {candidatesFetched} found{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
+                  {(() => {
+                    const isDTS = activePreset === PRESET_DEEP_TRUTH;
+                    const artifactWord  = isDTS ? 'artifact' : 'signal';
+                    const artifactsWord = isDTS ? 'artifacts' : 'signals';
+                    return (
+                  <div className={`rounded-2xl border px-5 py-5 ${isDTS ? 'border-violet-500/20 bg-violet-500/[0.04]' : 'border-white/14 bg-white/[0.05]'}`}>
+                    <p className={`mb-1 text-[11px] font-bold uppercase tracking-[0.25em] ${isDTS ? 'text-violet-400/60' : 'text-emerald-600/70'}`}>
+                      {isDTS ? 'Deep Truth Scanner' : `Scan #${scanId}`} · {candidatesFetched} {isDTS ? 'archive signals' : 'found'}{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
                     </p>
                     <h2 className="mb-3 text-[28px] font-bold tracking-tight text-white">
                       {filteredGoodResults.length > 0
-                        ? `${filteredGoodResults.length} strong signal${filteredGoodResults.length !== 1 ? 's' : ''} recovered`
-                        : candidatesFetched > 0 ? `${candidatesFetched} fetched — no strong candidates` : 'Scan complete'}
+                        ? `${filteredGoodResults.length} recovered internet ${filteredGoodResults.length !== 1 ? artifactsWord : artifactWord}`
+                        : candidatesFetched > 0
+                          ? isDTS
+                            ? 'Not enough archive artifacts found — enable more origin sources.'
+                            : `${candidatesFetched} fetched — no strong candidates`
+                          : isDTS ? 'No archive artifacts recovered' : 'Scan complete'}
                     </h2>
                     <div className="flex flex-wrap gap-2">
-                      <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[14px] font-bold tabular-nums text-sky-300">
-                        {candidatesFetched} fetched
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${isDTS ? 'border-violet-500/30 bg-violet-500/10 text-violet-300' : 'border-sky-500/30 bg-sky-500/10 text-sky-300'}`}>
+                        {candidatesFetched} {isDTS ? 'archive signals' : 'fetched'}
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${filteredGoodResults.length > 0 ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
-                        {filteredGoodResults.length} strong
+                        {filteredGoodResults.length} {isDTS ? 'artifacts' : 'strong'}
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${needsReview.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
                         {needsReview.length} needs review
@@ -2167,6 +2198,8 @@ export function ScannerConsoleClient({
                       )}
                     </div>
                   </div>
+                    );
+                  })()}
 
                   {/* ── Summary counts ── */}
                   <div className="grid grid-cols-3 gap-1.5">
@@ -2186,10 +2219,12 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
-                  {/* Phase AC TASK 7 — Origin scan metrics panel */}
+                  {/* Phase AC/AD TASK 7 — Origin/DTS scan metrics panel */}
                   {originMetrics && (
-                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-3">
-                      <p className="mb-2 text-[9px] font-black uppercase tracking-[0.3em] text-amber-400/50">Origin Scan Intelligence</p>
+                    <div className={`rounded-xl border px-4 py-3 ${isDeepTruthScan ? 'border-violet-500/25 bg-violet-500/[0.04]' : 'border-amber-500/20 bg-amber-500/[0.04]'}`}>
+                      <p className={`mb-2 text-[9px] font-black uppercase tracking-[0.3em] ${isDeepTruthScan ? 'text-violet-400/50' : 'text-amber-400/50'}`}>
+                        {isDeepTruthScan ? 'Deep Truth Archive Intelligence' : 'Origin Scan Intelligence'}
+                      </p>
                       <div className="grid grid-cols-4 gap-2">
                         {[
                           { label: 'Avg Year',     value: originMetrics.avgYear    != null ? String(originMetrics.avgYear)  : '—', color: 'text-amber-300' },
@@ -2431,16 +2466,16 @@ export function ScannerConsoleClient({
                         {/* Strong Candidates header */}
                         <div className="rounded-xl border border-emerald-500/18 bg-emerald-500/[0.05] px-4 py-3">
                           <p className="text-[17px] font-bold text-emerald-300">
-                            Strong Candidates
+                            {isDeepTruthScan ? 'Recovered Artifacts' : 'Strong Candidates'}
                             {visibleGood.length < filteredGoodResults.length && (
                               <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">· showing {visibleGood.length} of {filteredGoodResults.length}</span>
                             )}
                           </p>
-                          <p className="mt-0.5 text-[13px] text-emerald-400/55">Queue the best stories for review.</p>
+                          <p className="mt-0.5 text-[13px] text-emerald-400/55">{isDeepTruthScan ? 'Archived claims — not verified. Internet artifacts only.' : 'Queue the best stories for review.'}</p>
                         </div>
                         {/* Sort + filter + render */}
                         {(() => {
-                          const isOriginScan = activePreset === 'origin-scan';
+                          const isOriginScan = activePreset === 'origin-scan' || activePreset === PRESET_DEEP_TRUTH;
                           // ── Sort ──
                           const sortedGood = [...visibleGood].sort((a, b) => {
                             if (a.status === 'error') return 1;
@@ -2486,6 +2521,12 @@ export function ScannerConsoleClient({
                                 return (b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0) - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
                               }
                               default: { // 'best'
+                                // Phase AE: DTS sorts primarily by archiveSignalScore
+                                if (isDeepTruthScan) {
+                                  const aa = a.candidate.archiveSignalScore ?? a.candidate.originPriorityScore ?? 0;
+                                  const ab = b.candidate.archiveSignalScore ?? b.candidate.originPriorityScore ?? 0;
+                                  if (aa !== ab) return ab - aa;
+                                }
                                 if (isOriginScan) {
                                   // Phase W: archive-first → era → origin score
                                   const ta = ORIGIN_SOURCE_TYPE_RANK[a.candidate.sourceType ?? ''] ?? 10;
@@ -2659,7 +2700,7 @@ export function ScannerConsoleClient({
                                     </button>
                                   </div>
                                 </div>
-                                {/* Origin artifact — archive age hero (Phase AC TASK 5) */}
+                                {/* Origin artifact — archive age hero (Phase AC/AE) */}
                                 {isOriginCard && (
                                   <div className="mb-3 flex items-center gap-3">
                                     <div className="flex flex-col">
@@ -2686,10 +2727,27 @@ export function ScannerConsoleClient({
                                         </p>
                                       )}
                                     </div>
+                                    {/* Phase AE TASK 7: archive signal score badge */}
+                                    {result.candidate.archiveSignalScore != null && (
+                                      <div className="ml-auto flex flex-col items-center">
+                                        <p className="text-[8px] font-black uppercase tracking-[0.3em] text-slate-600">Signal</p>
+                                        <span className={`text-[22px] font-black tabular-nums leading-none ${
+                                          result.candidate.archiveSignalScore >= 75 ? 'text-emerald-300/70'
+                                          : result.candidate.archiveSignalScore >= 55 ? 'text-amber-300/65'
+                                          : 'text-slate-600/60'
+                                        }`}>
+                                          {result.candidate.archiveSignalScore}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                                 {/* Title */}
                                 <p className="mb-1.5 text-[24px] font-bold leading-snug text-white">{result.candidate.title}</p>
+                                {/* DTS disclaimer */}
+                                {isDeepTruthScan && (
+                                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400/40">Archived claim — not verified · recovered internet artifact</p>
+                                )}
                                 {/* Why surfaced — prominent */}
                                 {analysis.surfacedBecause && (
                                   <p className="mb-2 text-[13px] leading-snug text-emerald-400/65">{analysis.surfacedBecause}</p>

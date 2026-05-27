@@ -241,6 +241,39 @@ function decodeHtmlEntities(str: string): string {
     .trim();
 }
 
+// Phase AE TASK 6: Extract the most narrative-dense paragraph from plain text.
+// Defined early because extractPageData uses it for its snippet.
+const NARRATIVE_SIGNALS_EARLY = [
+  'i saw', 'i heard', 'i was', 'we were', 'they told', 'he said', 'she said',
+  'the document', 'the file', 'the report', 'the signal', 'the incident',
+  'classified', 'leaked', 'recovered', 'witnessed', 'observed',
+  'suddenly', 'at that moment', 'without warning',
+];
+const SEO_JUNK_EARLY = [
+  'click here', 'subscribe', 'follow us', 'share this', 'newsletter',
+  'privacy policy', 'terms of service', 'all rights reserved',
+  'sign up', 'log in', 'home page', 'back to top',
+];
+function extractBestParagraph(text: string, maxLen = 500): string {
+  const paras = text
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim())
+    .filter((p) => p.length >= 60);
+
+  if (paras.length === 0) return text.slice(0, maxLen).trim();
+
+  let best = paras[0];
+  let bestScore = 0;
+  for (const p of paras) {
+    const lc = p.toLowerCase();
+    if (SEO_JUNK_EARLY.some((j) => lc.includes(j))) continue;
+    let score = Math.min(p.length / 20, 20);
+    for (const sig of NARRATIVE_SIGNALS_EARLY) if (lc.includes(sig)) score += 4;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return best.slice(0, maxLen);
+}
+
 function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
   const h = html.slice(0, 120_000);
 
@@ -284,23 +317,27 @@ function extractPageData(html: string, fallbackUrl: string): ExtractedPageData {
   const canonicalUrl = canonical?.[1]?.trim() ?? fallbackUrl;
 
   // Readable snippet — strip structural noise before extracting text
-  // Step 1: remove entire nav/header/footer/aside/script/style/form blocks
+  // Step 1: remove entire nav/header/footer/aside/script/style/form/menu blocks
   let contentHtml = h
-    .replace(/<(nav|header|footer|aside|script|style|noscript|iframe|form)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<(nav|header|footer|aside|script|style|noscript|iframe|form|select)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ');
 
-  // Step 2: prefer semantic content areas (<main> or <article>) for snippet
-  const mainMatch = contentHtml.match(/<(?:main|article)[^>]*>([\s\S]{80,15000}?)<\/(?:main|article)>/i);
+  // Step 2: prefer semantic content areas (<main>, <article>, or common content divs)
+  const mainMatch =
+    contentHtml.match(/<(?:main|article)[^>]*>([\s\S]{80,20000}?)<\/(?:main|article)>/i) ??
+    contentHtml.match(/<div[^>]{0,200}(?:id|class)=["'][^"']{0,40}(?:content|body|post|entry|story)[^"']{0,40}["'][^>]*>([\s\S]{120,15000}?)<\/div>/i);
   const workHtml  = mainMatch ? mainMatch[1] : contentHtml;
 
-  // Step 3: strip remaining tags, collapse whitespace, decode entities, take first 600 chars
-  const snippet = decodeHtmlEntities(
+  // Step 3: strip remaining tags, collapse whitespace, decode entities.
+  // Extract best paragraph rather than just first 600 chars — TASK 6.
+  const plainText = decodeHtmlEntities(
     workHtml
+      .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '')
       .replace(/<[^>]{0,1000}>/g, ' ')
       .replace(/\s{2,}/g, ' ')
-      .trim()
-      .slice(0, 600),
+      .trim(),
   );
+  const snippet = extractBestParagraph(plainText, 800);
 
   // Image URL — og:image > twitter:image  (absolute https:// URLs only; no binary stored)
   const ogImage  = h.match(/<meta[^>]{0,300}property=["']og:image["'][^>]{0,300}content=["']([^"']{1,500})["']/i)
@@ -381,6 +418,268 @@ function buildCategoryNote(categoryFocus: string[], title: string, description: 
   if (!matched.length) return `${categoryFocus[0]} (no keyword match — verify category)`;
   if (matched.length === 1) return `${matched[0]} (1 category match)`;
   return `${matched[0]} (matched ${matched.length}: ${matched.slice(0, 3).join(', ')})`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase AE — Deep Archive Extraction Engine helpers
+// ---------------------------------------------------------------------------
+
+// TASK 5: Conspiracy/origin vocabulary scoring.
+// Returns a 0–25 bonus for pages containing buried-document language.
+const CONSPIRACY_VOCAB = [
+  'witness', 'witnesses', 'classified', 'leaked', 'recovered', 'underground',
+  'disclosure', 'operation', 'project ', 'transmission', 'signal ', 'intercepted',
+  'archive', 'incident', 'unexplained', 'redacted', 'coverup', 'cover-up',
+  'declassified', 'whistleblower', 'informant', 'testimony', 'deposition',
+  'experiment', 'document', 'evidence', 'confirmation', 'sighting', 'encounter',
+  'abduction', 'implant', 'surveillance', 'intelligence', 'agency', 'military',
+  'saucer', 'ufo', 'craft', 'entity', 'alien', 'contact', 'implant',
+];
+function computeConspiracyVocabBonus(text: string): number {
+  const lc = text.toLowerCase();
+  let hits = 0;
+  for (const w of CONSPIRACY_VOCAB) {
+    if (lc.includes(w)) hits++;
+  }
+  return Math.min(hits * 2, 25);
+}
+
+// TASK 2: Detect and extract old forum thread structure from HTML.
+interface ForumExtract {
+  isForumThread: boolean;
+  opText?:       string;  // opening post text
+  replyCount?:   number;
+  bestReply?:    string;  // longest meaningful reply
+  threadTitle?:  string;
+}
+function detectForumStructure(html: string): ForumExtract {
+  const h = html.slice(0, 80_000);
+  const lc = h.toLowerCase();
+
+  // Detect forum indicators
+  const forumIndicators = [
+    'class="post"', 'class="message"', 'class="postbody"', 'class="postmessage"',
+    'class="post-content"', 'class="post_body"', 'class="postText"',
+    'id="post', 'data-postid', 'class="thread"', 'class="reply"',
+    '<td class="post', 'class="userpost"', 'class="forumpost"',
+    'posted by', 'joined:', 'posts:', 'member since',
+  ];
+  const isForumThread = forumIndicators.some((f) => lc.includes(f.toLowerCase()));
+
+  if (!isForumThread) return { isForumThread: false };
+
+  // Count posts/replies
+  const postCountMatch = h.match(/(\d+)\s*(?:replies|posts|messages|responses)/i);
+  const replyCount = postCountMatch ? parseInt(postCountMatch[1], 10) : undefined;
+
+  // Extract post text blocks — look for common forum post containers
+  const postBlockRe = /<(?:div|td)[^>]{0,200}(?:class|id)=["'][^"']{0,60}(?:post|message|postbody|postText|post-content)[^"']{0,60}["'][^>]*>([\s\S]{20,3000}?)<\/(?:div|td)>/gi;
+  const posts: string[] = [];
+  let pm: RegExpExecArray | null;
+  while ((pm = postBlockRe.exec(h)) !== null && posts.length < 8) {
+    const stripped = pm[1]
+      .replace(/<(blockquote|div|table|script|style)[^>]*>[\s\S]*?<\/\1>/gi, '')
+      .replace(/<[^>]{0,200}>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (stripped.length >= 40) posts.push(stripped);
+  }
+
+  if (posts.length === 0) return { isForumThread, replyCount };
+
+  const opText   = posts[0].slice(0, 500);
+  const bestReply = posts
+    .slice(1)
+    .sort((a, b) => b.length - a.length)[0]
+    ?.slice(0, 400);
+
+  return { isForumThread, opText, replyCount, bestReply };
+}
+
+// TASK 1/4: Deep content extraction for archive pages.
+// Returns extended plain-text content, URL depth score, and content richness.
+interface ArchiveContentResult {
+  mainText:       string;   // best extracted body text (up to 1500 chars)
+  urlDepthScore:  number;   // 0–15: deeper paths = better
+  contentScore:   number;   // 0–20: longer, paragraph-rich = better
+  isNavigationPage: boolean; // true if page looks like a category/portal/index
+  forumData?:     ForumExtract;
+}
+function extractArchiveContent(html: string, url: string): ArchiveContentResult {
+  const h = html.slice(0, 150_000);
+
+  // URL depth scoring — more path segments = likely a content page
+  let urlDepthScore = 0;
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split('/').filter(Boolean);
+    urlDepthScore = Math.min(segments.length * 3, 15);
+    // Bonus for known content-path signals
+    const deepSignals = ['/thread/', '/post/', '/article/', '/report/', '/file/', '/story/', '/view/', '/read/', '/doc/'];
+    if (deepSignals.some((s) => u.pathname.toLowerCase().includes(s))) urlDepthScore = Math.min(urlDepthScore + 5, 15);
+  } catch { /* ignore */ }
+
+  // Navigation page detection
+  const NAV_PATTERNS = [
+    'class="index"', 'class="category"', 'class="categories"', 'class="portal"',
+    'class="sitemap"', 'class="directory"', 'class="nav"', 'class="navigation"',
+    '<ul class="menu', '<ul class="nav',
+  ];
+  const lc = h.toLowerCase();
+  const isNavigationPage = NAV_PATTERNS.filter((p) => lc.includes(p)).length >= 2;
+
+  // Strip Wayback toolbar, nav blocks, sidebars
+  let contentHtml = h
+    .replace(/<!-- BEGIN WAYBACK TOOLBAR INSERT -->[\s\S]*?<!-- END WAYBACK TOOLBAR INSERT -->/gi, '')
+    .replace(/<(nav|header|footer|aside|script|style|noscript|iframe|form|select|ul[^>]{0,60}(?:class|id)=["'][^"']{0,40}(?:nav|menu|sidebar|related)[^"']{0,40}["'])[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+
+  // Forum detection
+  const forumData = detectForumStructure(contentHtml);
+
+  // If it's a forum thread, build content from OP + best reply
+  let mainText = '';
+  if (forumData.isForumThread && forumData.opText) {
+    const parts = [forumData.opText];
+    if (forumData.bestReply) parts.push(`— Reply: ${forumData.bestReply}`);
+    mainText = parts.join('\n\n').slice(0, 1500);
+  }
+
+  // Otherwise try semantic content areas, then <body>
+  if (!mainText) {
+    // Prefer <article>, <main>, then common content div patterns
+    const contentMatch =
+      contentHtml.match(/<(?:article|main)[^>]*>([\s\S]{120,20000}?)<\/(?:article|main)>/i) ??
+      contentHtml.match(/<div[^>]{0,200}(?:id|class)=["'][^"']{0,40}(?:content|body|main|post|article|entry|story)[^"']{0,40}["'][^>]*>([\s\S]{120,15000}?)<\/div>/i);
+
+    const workHtml = contentMatch ? contentMatch[1] : contentHtml;
+
+    // Strip blockquote/quoted-reply junk, then extract text
+    const stripped = workHtml
+      .replace(/<blockquote[^>]*>[\s\S]*?<\/blockquote>/gi, '')
+      .replace(/<(table|ul|ol|dl)[^>]{0,100}(?:nav|menu|list|related|sidebar)[^>]{0,100}>([\s\S]*?)<\/\1>/gi, '')
+      .replace(/<[^>]{0,1000}>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    // Pick best paragraph rather than just first N chars
+    mainText = extractBestParagraph(decodeHtmlEntities(stripped), 1500);
+  }
+
+  // Content quality score: paragraph count + length
+  const paraCount = (mainText.match(/[.!?]\s+[A-Z]/g) ?? []).length;
+  const contentScore = Math.min(Math.floor(mainText.length / 75) + paraCount, 20);
+
+  return { mainText, urlDepthScore, contentScore, isNavigationPage, forumData };
+}
+
+// TASK 3: Parse a raw BBS text artifact — detect headers, extract best narrative section.
+interface BBSArtifact {
+  title:        string;       // derived from header or filename
+  excerpt:      string;       // best narrative section (up to 600 chars)
+  isIndexFile:  boolean;      // true if file looks like a dir/index listing
+  headerLines:  string[];     // BBS header fields found (From, Subject, etc.)
+  hasBBSHeader: boolean;
+}
+function parseBBSTextArtifact(rawText: string, filename: string, category: string): BBSArtifact {
+  // Strip ANSI codes and control characters, normalise line endings
+  const cleaned = rawText
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    .trim();
+
+  // Index file detection — lots of filenames + sizes = directory listing
+  const filenameLineCount = (cleaned.match(/^\S+\.(txt|doc|zip|com|exe|bas|asm)\s+\d/gim) ?? []).length;
+  const isIndexFile = filenameLineCount >= 5 || cleaned.length < 80;
+
+  // BBS header detection (Usenet / mailing list / BBS post format)
+  const HEADER_PATTERNS = [/^From:\s*(.+)/im, /^Subject:\s*(.+)/im, /^Date:\s*(.+)/im, /^Message-ID:\s*(.+)/im, /^Organization:\s*(.+)/im, /^Newsgroups:\s*(.+)/im];
+  const headerLines: string[] = [];
+  for (const pat of HEADER_PATTERNS) {
+    const m = cleaned.match(pat);
+    if (m) headerLines.push(m[0].trim());
+  }
+  const hasBBSHeader = headerLines.length >= 2;
+
+  // Extract title from Subject header, or filename
+  let title = '';
+  const subjectMatch = cleaned.match(/^Subject:\s*(.+)/im);
+  if (subjectMatch) {
+    title = subjectMatch[1].trim().replace(/^Re:\s*/i, '').slice(0, 80);
+  }
+  if (!title) {
+    title = filename
+      .replace(/\.txt$/i, '')
+      .replace(/[-_.]/g, ' ')
+      .replace(/\b([a-z])/g, (c) => c.toUpperCase())
+      .trim()
+      .slice(0, 80) || `BBS Archive · ${category}`;
+  }
+
+  // Find best narrative section — skip header block (first 10 lines if they look like headers)
+  const lines = cleaned.split('\n');
+  const bodyStartIdx = hasBBSHeader
+    ? lines.findIndex((l, i) => i > 0 && l.trim() === '') + 1  // first blank line after headers
+    : 0;
+  const body = lines.slice(Math.max(bodyStartIdx, 0)).join('\n').trim();
+
+  // Skip ASCII art blocks (more than 30% special chars = art/junk)
+  const excerpt = extractBestParagraph(body.replace(/[|\\\/+\-=*#@^~<>]{4,}/g, ' '), 600);
+
+  return { title, excerpt: excerpt.slice(0, 600), isIndexFile, headerLines, hasBBSHeader };
+}
+
+// TASK 7: Composite archive signal score — combines all AE signals into one 0–100 score.
+interface ArchiveSignalOpts {
+  archiveYear?:       number;
+  sourceType?:        string;
+  contentScore?:      number;   // 0–20 from extractArchiveContent
+  urlDepthScore?:     number;   // 0–15
+  isForumThread?:     boolean;
+  hasBBSHeader?:      boolean;
+  storyScore?:        number;   // 0–100 from scoreStoryHeuristics
+  conspVocabBonus?:   number;   // 0–25 from computeConspiracyVocabBonus
+  langBonus?:         number;   // –15 to +15 from computePreSocialLanguageBonus
+  isPreSocialEra?:    boolean;
+  isNavigationPage?:  boolean;
+  contentLength?:     number;   // raw text char count
+}
+function computeArchiveSignalScore(opts: ArchiveSignalOpts): number {
+  let score = 40; // neutral baseline
+
+  // Age bonus
+  if (opts.archiveYear != null) {
+    if      (opts.archiveYear <= 1999) score += 25;
+    else if (opts.archiveYear <= 2004) score += 18;
+    else if (opts.archiveYear <= 2010) score += 12;
+    else if (opts.archiveYear <= 2015) score +=  5;
+    else                               score -= 10;
+  }
+
+  // Source type bonus
+  if (opts.sourceType === 'bbs')          score += 20;
+  else if (opts.sourceType === 'wayback') score +=  8;
+  else if (opts.sourceType === 'archive') score +=  5;
+
+  // Content quality signals
+  if (opts.contentScore  != null) score += opts.contentScore;     // 0–20
+  if (opts.urlDepthScore != null) score += opts.urlDepthScore;    // 0–15
+  if (opts.isForumThread)         score += 12;
+  if (opts.hasBBSHeader)          score += 10;
+  if (opts.conspVocabBonus != null) score += opts.conspVocabBonus; // 0–25
+  if (opts.langBonus       != null) score += opts.langBonus;       // –15 to +15
+
+  // Story heuristics
+  if (opts.storyScore != null) score += Math.floor(opts.storyScore / 5); // 0–20
+
+  // Navigation/index page penalty
+  if (opts.isNavigationPage) score -= 20;
+
+  // Very short content penalty
+  if (opts.contentLength != null && opts.contentLength < 150) score -= 15;
+
+  return Math.min(Math.max(Math.round(score), 0), 100);
 }
 
 function toSignalSourceType(scannerType: string): import('@/lib/supabase/types').SignalSourceType {
@@ -1428,6 +1727,44 @@ export async function autoEnableOriginSourcesAction(): Promise<{ enabled: string
   return { enabled, errors };
 }
 
+// Phase AD: enable all archive sources relevant to Deep Truth Scanner.
+// Includes medium-risk Wayback/archive sources in addition to safe low-risk ones.
+// Keeps high-risk live-forum and political sources disabled.
+export async function autoEnableDeepTruthSourcesAction(): Promise<{ enabled: string[]; errors: string[] }> {
+  const DTS_NAME_FRAGMENTS = [
+    // Pre-existing safe sources
+    'geocities', 'angelfire', 'tripod', 'fortunecity', 'textfiles', 'nicap', 'nuforc',
+    'mufon', 'cufon', 'parascope', 'anomalist', 'fortean', 'coast to coast',
+    'coasttocoast', 'virtuallystrange', 'ufo updates', 'friedman', 'earthfiles',
+    'crystalinks', 'black vault', 'erowid',
+    // Deep Truth extra targets
+    'bibliotecapleyades', 'rense', 'abovetopsecret', 'projectcamelot',
+    'projectavalon', 'majesticdocuments', 'whale.to', 'surfingtheapocalypse',
+    'educate-yourself', 'educateyourself', 'stopthecrime', 'alienshift',
+    'cydonia', 'hyper', 'nexusmagazine', 'nexus magazine',
+    'internet archive', 'archive.org',
+  ];
+  const allSources = await getScannerSources();
+  // For DTS enable: low AND medium risk archive types; skip reddit and high-risk only
+  const toEnable = allSources.filter((s) => {
+    if (s.enabled) return false;
+    if (s.risk_level === 'high') return false;
+    const isArchiveType = ['wayback', 'bbs', 'archive', 'archive_forum', 'mediawiki'].includes(s.source_type ?? '');
+    const isReddit = s.source_type === 'reddit';
+    if (!isArchiveType || isReddit) return false;
+    const lc = s.name.toLowerCase();
+    return DTS_NAME_FRAGMENTS.some((f) => lc.includes(f));
+  });
+  const enabled: string[] = [];
+  const errors:  string[] = [];
+  for (const s of toEnable) {
+    const r = await toggleScannerSource(s.id, true);
+    if ('ok' in r) enabled.push(s.name);
+    else errors.push(`${s.name}: ${r.error}`);
+  }
+  return { enabled, errors };
+}
+
 // ---------------------------------------------------------------------------
 // Fetch session — iterates enabled sources, fetches one page each.
 //
@@ -1459,6 +1796,8 @@ export async function runFetchSessionAction(
     scanMode?: ScanMode;
     /** Phase AB: origin scan — raises wayback link cap, enables quality filter */
     isOriginScan?: boolean;
+    /** Phase AD: deep truth scanner — hard archive-only mode, rejects Reddit/modern content */
+    isDeepTruth?: boolean;
   },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
@@ -1489,6 +1828,8 @@ export async function runFetchSessionAction(
   const unseenOnlyMode = mode === 'unseen-only';
   // Phase AB: origin scan — broader Wayback discovery + quality filter
   const effectiveOriginScan = options?.isOriginScan === true;
+  // Phase AD: deep truth scanner — archive-only, hard rejects modern/Reddit content
+  const effectiveDeepTruth  = options?.isDeepTruth  === true;
 
   // One DB query to load all sources; avoids N round trips inside the loop.
   const allSources = await getScannerSources();
@@ -1512,7 +1853,7 @@ export async function runFetchSessionAction(
   // Diversity cap: max PER_SOURCE_CANDIDATE_CAP results per source (excludes errors).
   // Unseen-only mode and origin scan raise the cap so we dig deeper through each source.
   const ARCHIVE_TYPES_SET = new Set(['wayback', 'bbs', 'archive', 'archive_forum']);
-  const effectivePerSourceCap = (unseenOnlyMode || effectiveOriginScan) ? PER_SOURCE_CANDIDATE_CAP + 3 : PER_SOURCE_CANDIDATE_CAP;
+  const effectivePerSourceCap = (unseenOnlyMode || effectiveOriginScan || effectiveDeepTruth) ? PER_SOURCE_CANDIDATE_CAP + 3 : PER_SOURCE_CANDIDATE_CAP;
   const perSourceCount = new Map<string, number>();
 
   const results: SessionSourceResult[] = [];
@@ -1609,7 +1950,7 @@ export async function runFetchSessionAction(
         results.push({ sourceId, sourceName: source.name, status: 'error', error: 'Wayback source requires a specific domain URL as base_url (e.g. "https://oldsite.example.com") — not the archive root.' });
         continue;
       }
-      const waybackDisc = await discoverWaybackLinks(source, effectiveOriginScan);
+      const waybackDisc = await discoverWaybackLinks(source, effectiveOriginScan || effectiveDeepTruth, effectiveDeepTruth);
       if ('error' in waybackDisc) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'wayback-cdx', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [], errorMessage: waybackDisc.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: waybackDisc.error });
@@ -1711,7 +2052,7 @@ export async function runFetchSessionAction(
 
     // BBS / Textfiles.com connector — Phase O origin scan
     if (isTextfilesSource(source)) {
-      const bbsResult = await fetchTextfilesMultipleCandidates(source, effectiveOriginScan);
+      const bbsResult = await fetchTextfilesMultipleCandidates(source, effectiveOriginScan || effectiveDeepTruth);
       if (bbsResult.error && bbsResult.candidates.length === 0) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'bbs-textfiles', linksDiscovered: 0, pagesFetched: bbsResult.debugInfo.filesFetched, candidatesPassed: 0, candidatesRejected: bbsResult.debugInfo.filesFetched, rejectReasons: [bbsResult.error.slice(0, 100)], errorMessage: bbsResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: bbsResult.error });
@@ -1984,6 +2325,50 @@ export async function runFetchSessionAction(
       const excerptLen = (r.candidate.summary ?? '').trim().length;
       if (excerptLen < 100) {
         r.candidate.badCandidateReason = `Archive stub — too short (${excerptLen} chars), likely navigation or index page`;
+      }
+    }
+  }
+
+  // Phase AD: Deep Truth Scanner — hard-reject modern, Reddit, or undated content.
+  if (effectiveDeepTruth) {
+    const DREAM_JUNK = [
+      'dream meaning', 'dream interpretation', 'what does it mean to dream',
+      'dream about', 'dreaming of', 'lucid dreaming tips', 'dream journal',
+      'dream dictionary', 'dreams and their meanings',
+    ];
+    const MODERN_JUNK = [
+      'tiktok', 'instagram', 'twitter thread', 'youtube shorts',
+      'going viral', 'trending now', 'breaking:', 'just posted',
+    ];
+    for (const r of results) {
+      if (r.status === 'error' || r.candidate.badCandidateReason) continue;
+      const st = r.candidate.sourceType ?? '';
+      const lc = (`${r.candidate.title} ${r.candidate.summary}`).toLowerCase();
+
+      // Hard-reject Reddit regardless of how it slipped through
+      if (st === 'reddit') {
+        r.candidate.badCandidateReason = 'Deep Truth: Reddit excluded from this mode';
+        continue;
+      }
+      // Hard-reject candidates with no archive year from non-BBS sources
+      if (st !== 'bbs' && !r.candidate.archiveYear && !r.candidate.isArchived) {
+        r.candidate.badCandidateReason = 'Deep Truth: no archive provenance — undated content excluded';
+        continue;
+      }
+      // Hard-reject post-2015 content (unless BBS which is always pre-social)
+      if (st !== 'bbs' && r.candidate.archiveYear && r.candidate.archiveYear > 2015) {
+        r.candidate.badCandidateReason = `Deep Truth: too recent (${r.candidate.archiveYear}) — only pre-2015 archive content`;
+        continue;
+      }
+      // Hard-reject dream interpretation junk
+      if (DREAM_JUNK.some((p) => lc.includes(p))) {
+        r.candidate.badCandidateReason = 'Deep Truth: dream interpretation content — not an origin signal';
+        continue;
+      }
+      // Hard-reject modern social/media junk
+      if (MODERN_JUNK.some((p) => lc.includes(p))) {
+        r.candidate.badCandidateReason = 'Deep Truth: modern social content — not an archive artifact';
+        continue;
       }
     }
   }
@@ -2366,9 +2751,20 @@ const WAYBACK_ERA_WINDOWS: Array<[number, number]> = [
   [2010, 2012],
 ];
 
+// Phase AD: topic path fragments rotated during Deep Truth Scanner Wayback scans.
+const DTS_TOPIC_PATH_HINTS = [
+  'ufo', 'roswell', 'area51', 'area-51', 'majestic', 'mkultra', 'mk-ultra',
+  'montauk', 'haarp', 'underground', 'blackproject', 'black-project',
+  'mindcontrol', 'mind-control', 'occult', 'prophecy', 'annunaki', 'anunnaki',
+  'atlantis', 'cattle', 'disclosure', 'ritual', 'forbidden', 'files', 'archive',
+  'conspiracy', 'alien', 'reptilian', 'illuminati', 'nwo', 'chemtrail',
+  'coverup', 'cover-up', 'secret', 'classified', 'whistleblower',
+];
+
 async function discoverWaybackLinks(
-  source: DbScannerSource,
+  source:      DbScannerSource,
   isOriginScan = false,
+  isDeepTruth  = false,
 ): Promise<{ links: DiscoveredLink[]; topicGroup?: string; topicGroupName?: string } | { error: string }> {
   const baseHostLower = (source.base_url ?? '').toLowerCase();
   const isOldWebSource = OLD_WEB_DOMAINS.some((d) => baseHostLower.includes(d));
@@ -2383,7 +2779,16 @@ async function discoverWaybackLinks(
   const PRE_SOCIAL_WINDOWS: Array<[number, number]> = [
     [1996, 1999], [1997, 2001], [1998, 2003], [2000, 2004], [2002, 2006], [2005, 2010],
   ];
-  if (isOldWebSource || isOriginScan) {
+  // Phase AD: Deep Truth Scanner — 100% pre-2015, 80% pre-2005
+  const DTS_WINDOWS: Array<[number, number]> = [
+    [1996, 1999], [1997, 2001], [1998, 2003], [2000, 2004], [2002, 2006], [2005, 2010], [2008, 2012],
+  ];
+  if (isDeepTruth) {
+    const win = Math.random() < 0.80
+      ? DTS_WINDOWS.slice(0, 6)[Math.floor(Math.random() * 6)]  // pre-2010 with 80% probability
+      : DTS_WINDOWS[6];                                          // 2008-2012 fallback
+    [fromYear, toYear] = win;
+  } else if (isOldWebSource || isOriginScan) {
     const biasToPreSocial = isOriginScan ? 0.95 : 0.75;
     if (Math.random() < biasToPreSocial) {
       if (isOriginScan) {
@@ -2399,8 +2804,8 @@ async function discoverWaybackLinks(
     }
   }
 
-  // Phase AC: origin scan fetches 200 CDX snapshots for maximum depth; Phase W: randomise offset
-  const cdxLimit  = isOriginScan ? 200 : 100;
+  // Phase AC: origin/DTS scan fetches 200 CDX snapshots for maximum depth; Phase W: randomise offset
+  const cdxLimit  = (isOriginScan || isDeepTruth) ? 200 : 100;
   const cdxOffset = Math.floor(Math.random() * 40);
   const result = await searchWaybackSnapshots(source.base_url!, cdxLimit, fromYear, toYear, cdxOffset > 0 ? cdxOffset : undefined);
   if ('error' in result) return result;
@@ -2443,7 +2848,8 @@ async function discoverWaybackLinks(
   };
 
   // Topic path-hint filtering — prefer topic-relevant URLs; fall back to all valid.
-  const pathHints  = topic.pathHints;
+  // Phase AD: Deep Truth Scanner rotates its own deep-conspiracy topic path hints.
+  const pathHints  = isDeepTruth ? DTS_TOPIC_PATH_HINTS : topic.pathHints;
   const urlLower   = (u: string) => u.toLowerCase();
   const topicMatch = (u: string) => pathHints.some((h) => urlLower(u).includes(h));
 
@@ -2460,10 +2866,10 @@ async function discoverWaybackLinks(
   else if (deepFiltered.length >= 3)  candidateSnaps = deepFiltered;
   else                               candidateSnaps = validSnaps;
 
-  // Phase AC: per-domain diversity cap — origin scan allows more deep-path results.
-  const perDomainDeepCap  = isOriginScan ? 5 : 3;
-  const perDomainShallowCap = isOriginScan ? 3 : 2;
-  const maxLinks = isOriginScan ? 50 : 30;
+  // Phase AC/AD: per-domain diversity cap — origin/DTS scan allows more deep-path results.
+  const perDomainDeepCap    = (isOriginScan || isDeepTruth) ? 5 : 3;
+  const perDomainShallowCap = (isOriginScan || isDeepTruth) ? 3 : 2;
+  const maxLinks            = (isOriginScan || isDeepTruth) ? 50 : 30;
   const domainCount = new Map<string, number>();
   const links: DiscoveredLink[] = [];
 
@@ -2545,17 +2951,27 @@ async function fetchWaybackPagePreview(
     return { error: `Wayback page fetch — ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  // Task 5: Strip Wayback Machine navigation toolbar before extracting content.
-  // The Wayback toolbar injects a large <div id="wm-ipp-base"> block and several
-  // script/style tags that pollute meta extraction and snippet scoring.
-  const cleanedHtml = stripWaybackNavigation(html);
+  // Phase AE: deep archive extraction — strip toolbar, run deep content + forum detection.
+  const cleanedHtml  = stripWaybackNavigation(html);
+  const archContent  = extractArchiveContent(cleanedHtml, url);
 
   const extracted  = extractPageData(cleanedHtml, url);
   const title      = cleanTitle(extracted.title) || source.name;
-  const summary    = buildSummary(extracted.description, extracted.snippet);
+
+  // Phase AE TASK 6: prefer archContent.mainText over generic snippet when longer + richer
+  const richBody = archContent.mainText.length > (extracted.snippet?.length ?? 0)
+    ? archContent.mainText
+    : (extracted.snippet ?? '');
+  const summary    = buildSummary(extracted.description, richBody);
+
   const conf       = scoreExtractionConfidence(title, summary);
   const quality    = candidatePassesQuality(url, title, summary);
   const badCheck   = detectBadCandidate(url, title, summary);
+
+  // Phase AE TASK 4: navigation/portal pages are low-value — mark as bad candidate
+  if (archContent.isNavigationPage && !badCheck.bad) {
+    return { error: 'Archive navigation page — no narrative content extracted' };
+  }
 
   if (!quality.pass) {
     return { error: `Quality filter: ${quality.reason}` };
@@ -2566,9 +2982,11 @@ async function fetchWaybackPagePreview(
   const origUrlMatch = url.match(/\/web\/\d{14}\/(https?:\/\/[^/\s]+)/);
   try { if (origUrlMatch) originalDomain = new URL(origUrlMatch[1]).hostname; } catch { /* ignore */ }
 
-  const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
-  const langBonus  = computePreSocialLanguageBonus(`${title} ${summary}`);
-  const waybackScore = Math.min(heuristics.storyScore + 5 + langBonus, 100); // archived + language bonus
+  const heuristics     = scoreStoryHeuristics(`${title} ${summary}`);
+  const langBonus      = computePreSocialLanguageBonus(`${title} ${summary}`);
+  // Phase AE TASK 5: conspiracy vocabulary bonus
+  const conspVocab     = computeConspiracyVocabBonus(`${title} ${summary}`);
+  const waybackScore   = Math.min(heuristics.storyScore + 5 + langBonus + Math.floor(conspVocab / 3), 100);
 
   // Origin priority scoring — Wayback snapshots get the isArchivedWayback bonus
   const originResult = computeOriginPriorityScore(waybackScore, {
@@ -2580,37 +2998,60 @@ async function fetchWaybackPagePreview(
 
   const firstSeenYear = originResult.archiveYear;
 
-  // Task 7: Quality safety framing — archived origin content must be labelled
-  // as internet artifact / archived claim, never presented as established fact.
+  // Phase AE TASK 7: composite archive signal score
+  const archiveSignalScore = computeArchiveSignalScore({
+    archiveYear:      originResult.archiveYear,
+    sourceType:       'wayback',
+    contentScore:     archContent.contentScore,
+    urlDepthScore:    archContent.urlDepthScore,
+    isForumThread:    archContent.forumData?.isForumThread,
+    storyScore:       heuristics.storyScore,
+    conspVocabBonus:  conspVocab,
+    langBonus,
+    isPreSocialEra:   originResult.isPreSocialEra,
+    isNavigationPage: archContent.isNavigationPage,
+    contentLength:    summary.length,
+  });
+
   const isOldWeb = originalDomain ? OLD_WEB_DOMAINS.some((d) => originalDomain!.includes(d)) : false;
   const originFraming = isOldWeb || (firstSeenYear != null && firstSeenYear < 2010)
     ? 'Internet artifact — archived claim from the early web. Content is not verified or endorsed. Curator review required before publishing.'
     : 'Archived origin signal. Content is not verified or endorsed. Curator review required.';
+
+  // Build forum-aware capture notes
+  const forumNote = archContent.forumData?.isForumThread
+    ? ` Forum thread detected${archContent.forumData.replyCount != null ? ` · ${archContent.forumData.replyCount} replies` : ''}.`
+    : '';
 
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
     sourceUrl:            extracted.canonicalUrl || url,
     category:             source.category_focus[0] ?? 'Internet Lore',
-    tags:                 ['scanner-source', 'wayback', 'archived', 'discovered-link', 'internet-artifact'],
+    tags:                 [
+      'scanner-source', 'wayback', 'archived', 'discovered-link', 'internet-artifact',
+      ...(archContent.forumData?.isForumThread ? ['forum-thread'] : []),
+      ...(originResult.isPreSocialEra         ? ['pre-social']   : []),
+    ],
     anomalyScore:         5,
     categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
     extractionConfidence: conf.confidence,
     extractionWarning:    conf.warning ?? undefined,
     sourceType:           'wayback',
     isArchived:           true,
-    archivedAt:           archivedAt,
+    archivedAt,
     passReason:           quality.reason,
     badCandidateReason:   badCheck.bad ? badCheck.reason : undefined,
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Archived via Wayback Machine · ${source.name}`,
-    captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}${topicGroupName ? ` · topic: ${topicGroupName}` : ''}. ${originFraming} Raw HTML not stored.`,
+    captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}${topicGroupName ? ` · topic: ${topicGroupName}` : ''}.${forumNote} ${originFraming} Raw HTML not stored.`,
     originalDomain,
     storyScore:           waybackScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
     finalPriorityScore:   computeFinalPriorityScore(waybackScore, { isArchived: true, isBadCandidate: badCheck.bad }),
     originPriorityScore:  originResult.score,
+    archiveSignalScore,
     sourceEra:            originResult.era,
     archiveYear:          originResult.archiveYear,
     isPreSocialEra:       originResult.isPreSocialEra,
@@ -2842,42 +3283,53 @@ async function fetchTextfilesMultipleCandidates(
 
       filesFetched++;
 
-      // Strip ANSI codes and control characters, normalise line endings
-      const cleaned = rawText
-        .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')  // ANSI escape sequences
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-        .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-        .trim();
+      // Phase AE TASK 3: use structured BBS artifact parser
+      const filename   = txtUrl.split('/').pop() ?? 'unknown.txt';
+      const bbsArtifact = parseBBSTextArtifact(rawText, filename, category);
 
-      if (cleaned.length < 60) continue;
+      // Skip index/directory files and files that are too short
+      if (bbsArtifact.isIndexFile) continue;
+      if (bbsArtifact.excerpt.length < 60) continue;
 
-      // First 600 chars only — do NOT store full BBS text
-      const excerpt = cleaned.slice(0, 600).trim();
+      const { title, excerpt } = bbsArtifact;
 
-      // Derive title from filename
-      const filename = txtUrl.split('/').pop() ?? 'unknown.txt';
-      const rawTitle = filename
-        .replace(/\.txt$/i, '')
-        .replace(/[-_\.]/g, ' ')
-        .replace(/\b([a-z])/g, (c) => c.toUpperCase());
-      const title = (rawTitle.slice(0, 80) || `BBS Archive · ${category}`).trim();
+      const heuristics     = scoreStoryHeuristics(`${title} ${excerpt}`);
+      const langBonus      = computePreSocialLanguageBonus(`${title} ${excerpt}`);
+      // Phase AE TASK 5: conspiracy vocabulary bonus
+      const conspVocab     = computeConspiracyVocabBonus(`${title} ${excerpt}`);
+      const bbsBaseScore   = Math.min(heuristics.storyScore + langBonus + Math.floor(conspVocab / 4), 100);
+      const originResult   = computeOriginPriorityScore(bbsBaseScore, { sourceType: 'bbs' });
+      const conf           = scoreExtractionConfidence(title, excerpt);
 
-      const heuristics   = scoreStoryHeuristics(`${title} ${excerpt}`);
-      const langBonus    = computePreSocialLanguageBonus(`${title} ${excerpt}`);
-      const bbsBaseScore = Math.min(heuristics.storyScore + langBonus, 100);
-      const originResult = computeOriginPriorityScore(bbsBaseScore, { sourceType: 'bbs' });
-      const conf         = scoreExtractionConfidence(title, excerpt);
+      // Phase AE TASK 7: archive signal score for BBS artifacts
+      const archiveSignalScore = computeArchiveSignalScore({
+        sourceType:       'bbs',
+        hasBBSHeader:     bbsArtifact.hasBBSHeader,
+        storyScore:       heuristics.storyScore,
+        conspVocabBonus:  conspVocab,
+        langBonus,
+        isPreSocialEra:   true,
+        contentLength:    excerpt.length,
+      });
 
       // Phase V: map textfiles category to nearest topic group
       const bbsTopicGroup = BBS_CATEGORY_TOPIC[category] ?? 'internet-lore';
       const bbsTopicName  = BBS_CATEGORY_TOPIC_NAME[category] ?? 'Internet Lore';
 
+      // Build summary with BBS header context if available
+      const headerCtx = bbsArtifact.hasBBSHeader && bbsArtifact.headerLines.length > 0
+        ? `[${bbsArtifact.headerLines.slice(0, 2).join(' · ')}] `
+        : '';
       const candidate: FetchedCandidate = {
         title,
-        summary:              `[BBS/TEXT ARTIFACT — ${category}] ${excerpt.slice(0, 480)}`,
+        summary:              `[BBS/TEXT ARTIFACT — ${category}] ${headerCtx}${excerpt.slice(0, 480)}`,
         sourceUrl:            txtUrl,
         category:             source.category_focus[0] ?? 'Internet Lore',
-        tags:                 ['scanner-source', 'bbs', 'textfiles', 'archive', category, 'internet-artifact', 'text-artifact'],
+        tags:                 [
+          'scanner-source', 'bbs', 'textfiles', 'archive', category,
+          'internet-artifact', 'text-artifact',
+          ...(bbsArtifact.hasBBSHeader ? ['usenet', 'bbs-header'] : []),
+        ],
         anomalyScore:         5,
         categoryNote:         `BBS/TEXT ARTIFACT · textfiles.com/${category} · ${filename}`,
         extractionConfidence: conf.confidence,
@@ -2886,17 +3338,18 @@ async function fetchTextfilesMultipleCandidates(
         isArchived:           true,
         passReason:           'BBS/TEXT ARTIFACT — origin scan',
         attributionText:      `Textfiles.com BBS Archive · ${category} · ${filename}`,
-        captureNotes:         `BBS/pre-internet text file from textfiles.com/${category}/. First 600 chars only — full text not stored. Authors are anonymous by BBS convention. Internet artifact — archived claim, not verified, not endorsed.`,
+        captureNotes:         `BBS/pre-internet text file from textfiles.com/${category}/. Best narrative section extracted — full text not stored. Authors are anonymous by BBS convention.${bbsArtifact.hasBBSHeader ? ' Usenet/BBS headers detected.' : ''} Internet artifact — archived claim, not verified, not endorsed.`,
         storyScore:           heuristics.storyScore,
         storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
         originPriorityScore:  originResult.score,
+        archiveSignalScore,
         sourceEra:            originResult.era,
-        archiveYear:          undefined,  // BBS era — no single archive year
-        isPreSocialEra:       true,       // BBS artifacts are always pre-social
+        archiveYear:          undefined,
+        isPreSocialEra:       true,
         finalPriorityScore:   originResult.score,
         topicGroup:           bbsTopicGroup,
         topicGroupName:       bbsTopicName,
-        firstSeenYear:        undefined,  // pre-web BBS — no reliable first-seen year
+        firstSeenYear:        undefined,
       };
 
       candidates.push(candidate);
