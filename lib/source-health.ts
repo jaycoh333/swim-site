@@ -23,6 +23,11 @@ export interface SourceHealthRecord {
   lastSuccessAt:    string | null; // ISO timestamp
   lastFailAt:       string | null;
   status:           'healthy' | 'weak' | 'unknown';
+  // Phase AF: extended archive quality metrics
+  avgArchiveYear?:  number;   // rolling avg year of archive captures
+  avgArtifactScore?: number;  // rolling avg archiveSignalScore
+  duplicateRate?:   number;   // 0–1 fraction of results that were duplicates
+  modernPct?:       number;   // 0–1 fraction of results that were modern-era (post-2015)
 }
 
 export type HealthCache = Record<string, SourceHealthRecord>;
@@ -44,11 +49,19 @@ function saveHealthCache(cache: HealthCache): void {
   }
 }
 
+export interface SourceResultMeta {
+  archiveYear?:       number;
+  artifactScore?:     number;
+  isDuplicate?:       boolean;
+  isModern?:          boolean;
+}
+
 export function recordSourceResult(
   sourceId:       string,
   sourceName:     string,
   success:        boolean,
   candidatesFound = 0,
+  meta?: SourceResultMeta,
 ): void {
   const cache = loadHealthCache();
   const now   = new Date().toISOString();
@@ -60,17 +73,41 @@ export function recordSourceResult(
 
   let updated: SourceHealthRecord;
   if (success) {
+    const n = prev.successCount + 1;
     const newAvg = prev.successCount === 0
       ? candidatesFound
-      : Math.round((prev.avgCandidates * prev.successCount + candidatesFound) / (prev.successCount + 1));
+      : Math.round((prev.avgCandidates * prev.successCount + candidatesFound) / n);
+
+    const newAvgYear = meta?.archiveYear != null
+      ? Math.round(((prev.avgArchiveYear ?? meta.archiveYear) * (n - 1) + meta.archiveYear) / n)
+      : prev.avgArchiveYear;
+
+    const newAvgArtifact = meta?.artifactScore != null
+      ? Math.round(((prev.avgArtifactScore ?? meta.artifactScore) * (n - 1) + meta.artifactScore) / n)
+      : prev.avgArtifactScore;
+
+    const prevDupRate   = prev.duplicateRate ?? 0;
+    const newDupRate    = meta?.isDuplicate != null
+      ? (prevDupRate * (n - 1) + (meta.isDuplicate ? 1 : 0)) / n
+      : prev.duplicateRate;
+
+    const prevModernPct = prev.modernPct ?? 0;
+    const newModernPct  = meta?.isModern != null
+      ? (prevModernPct * (n - 1) + (meta.isModern ? 1 : 0)) / n
+      : prev.modernPct;
+
     updated = {
       ...prev,
       sourceName,
-      successCount:     prev.successCount + 1,
+      successCount:     n,
       consecutiveFails: 0,
       avgCandidates:    newAvg,
       lastSuccessAt:    now,
-      status:           prev.successCount + 1 >= 2 ? 'healthy' : 'unknown',
+      status:           n >= 2 ? 'healthy' : 'unknown',
+      avgArchiveYear:   newAvgYear,
+      avgArtifactScore: newAvgArtifact,
+      duplicateRate:    newDupRate,
+      modernPct:        newModernPct,
     };
   } else {
     const newFails = prev.consecutiveFails + 1;

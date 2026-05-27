@@ -12,7 +12,13 @@ import {
   discoverSourceLinksAction,
   fetchDiscoveredLinkPreviewAction,
   batchFetchDiscoveredLinksAction,
+  getScannerSourcesAction,
+  autoEnableDeepTruthSourcesAction,
+  enableArchiveSourcesAction,
+  enableAllScannerSourcesAction,
+  disableHighRiskSourcesAction,
 } from '@/app/actions';
+import { classifySourceTaxonomy, getTaxonomyMeta } from '@/lib/source-taxonomy';
 import { AdminFlowBanner } from '@/components/AdminFlowBanner';
 import { AdminNav } from '@/components/AdminNav';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
@@ -54,6 +60,23 @@ const RISK_BG: Record<ScannerRiskLevel, string> = {
   medium: 'rgba(215,168,92,0.08)',
   high:   'rgba(255,107,107,0.08)',
 };
+
+const TAX_COLORS: Record<string, string> = {
+  bbs_archive:       '#a78bfa',
+  ufo_database:      '#38bdf8',
+  document_archive:  '#34d399',
+  conspiracy_archive:'#f59e0b',
+  forum_archive:     '#f97316',
+  occult_archive:    '#a855f7',
+  usenet_archive:    '#2dd4bf',
+  old_web:           '#eab308',
+  modern_forum:      '#94a3b8',
+  fiction_lore:      '#ec4899',
+  media_collection:  '#94a3b8',
+  unknown:           '#64748b',
+};
+
+const DTS_ARCHIVE_TYPES = ['wayback', 'bbs', 'archive', 'archive_forum', 'mediawiki'];
 
 // ---------------------------------------------------------------------------
 // Single-source fetch state types
@@ -1215,6 +1238,103 @@ function BatchResultsPanel({ entries, onStatusChange, onClose }: BatchResultsPan
 }
 
 // ---------------------------------------------------------------------------
+// SourceRow — compact list row; expandable Details panel with full SourceCard
+// ---------------------------------------------------------------------------
+
+function SourceRow({ source, onToggled, onUpdated, onFetched }: SourceCardProps) {
+  const [showDetails, setShowDetails] = useState(false);
+  const [togglePending, startToggle]  = useTransition();
+
+  const taxonomy = classifySourceTaxonomy(source.source_type ?? '', source.name);
+  const taxMeta  = getTaxonomyMeta(taxonomy);
+  const taxColor = TAX_COLORS[taxonomy] ?? '#64748b';
+
+  function handleToggle() {
+    startToggle(async () => {
+      const result = await toggleScannerSourceAction(source.id, !source.enabled);
+      if ('error' in result) return;
+      onToggled(source.id, !source.enabled);
+    });
+  }
+
+  const scannedLabel = source.last_scanned_at
+    ? new Date(source.last_scanned_at).toLocaleDateString()
+    : 'Never';
+
+  return (
+    <div
+      className="overflow-hidden"
+      style={{
+        background: 'rgba(8,12,6,0.92)',
+        border:     '1px solid rgba(134,212,110,0.10)',
+        borderLeft: `3px solid ${RISK_COLORS[source.risk_level]}`,
+      }}
+    >
+      {/* ── COMPACT ROW ── */}
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        {/* Name + badges */}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[15px] font-semibold text-white">{source.name}</span>
+            <span
+              className="shrink-0 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider"
+              style={{ color: taxColor, background: `${taxColor}18`, border: `1px solid ${taxColor}35` }}
+            >
+              {taxMeta.label}
+            </span>
+            {source.enabled && (
+              <span
+                className="shrink-0 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider"
+                style={{ color: '#86d46e', background: 'rgba(134,212,110,0.10)', border: '1px solid rgba(134,212,110,0.28)' }}
+              >
+                enabled
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px] text-slate-600">
+            <span className="uppercase">{source.source_type}</span>
+            <span>·</span>
+            <span>{source.risk_level} risk</span>
+            <span>·</span>
+            <span>scanned: {scannedLabel}</span>
+          </div>
+        </div>
+
+        {/* Enable / Disable toggle */}
+        <button
+          onClick={handleToggle}
+          disabled={togglePending}
+          className="shrink-0 px-4 py-2 text-[13px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40"
+          style={
+            source.enabled
+              ? { color: '#ff6b6b', background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.28)' }
+              : { color: '#86d46e', background: 'rgba(134,212,110,0.08)', border: '1px solid rgba(134,212,110,0.28)' }
+          }
+        >
+          {togglePending ? '…' : source.enabled ? 'Disable' : 'Enable'}
+        </button>
+
+        {/* Details toggle */}
+        <button
+          onClick={() => setShowDetails((v) => !v)}
+          className="shrink-0 px-3 py-2 text-[12px] font-medium text-slate-500 transition-colors hover:text-slate-300"
+          style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+        >
+          {showDetails ? '▲ Hide' : '▼ Details'}
+        </button>
+      </div>
+
+      {/* ── DETAILS PANEL ── */}
+      {showDetails && (
+        <div className="border-t border-white/8">
+          <SourceCard source={source} onToggled={onToggled} onUpdated={onUpdated} onFetched={onFetched} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SourceCard — single source card
 // ---------------------------------------------------------------------------
 
@@ -1798,9 +1918,21 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
   const [sessionPending, startSession]  = useTransition();
   const [sessionError, setSessionError] = useState<string | null>(null);
 
+  const [bulkPending, startBulk]   = useTransition();
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+
   const enabledCount   = sources.filter((s) => s.enabled).length;
   const enabledWithUrl = sources.filter((s) => s.enabled && s.base_url).length;
   const highRiskCount  = sources.filter((s) => s.risk_level === 'high').length;
+  const disabledCount  = sources.length - enabledCount;
+  const fictionCount   = sources.filter(
+    (s) => classifySourceTaxonomy(s.source_type ?? '', s.name) === 'fiction_lore',
+  ).length;
+  const dtsEligibleCount = sources.filter((s) => {
+    if (s.risk_level === 'high') return false;
+    if (!DTS_ARCHIVE_TYPES.includes(s.source_type ?? '')) return false;
+    return classifySourceTaxonomy(s.source_type ?? '', s.name) !== 'fiction_lore';
+  }).length;
 
   function handleToggled(id: string, enabled: boolean) {
     setSources((prev) => prev.map((s) => (s.id === id ? { ...s, enabled } : s)));
@@ -1851,6 +1983,63 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
       ]);
       setShowAddForm(false);
       router.refresh();
+    });
+  }
+
+  async function refreshSources() {
+    const updated = await getScannerSourcesAction();
+    setSources(updated);
+  }
+
+  function handleBulkDeepTruth() {
+    setBulkMessage(null);
+    startBulk(async () => {
+      const r = await autoEnableDeepTruthSourcesAction();
+      setBulkMessage(
+        r.enabled.length > 0
+          ? `Enabled ${r.enabled.length} Deep Truth source${r.enabled.length !== 1 ? 's' : ''}`
+          : 'No new Deep Truth sources to enable',
+      );
+      if (r.enabled.length > 0) await refreshSources();
+    });
+  }
+
+  function handleBulkArchive() {
+    setBulkMessage(null);
+    startBulk(async () => {
+      const r = await enableArchiveSourcesAction();
+      setBulkMessage(
+        r.enabled.length > 0
+          ? `Enabled ${r.enabled.length} archive source${r.enabled.length !== 1 ? 's' : ''}`
+          : 'No new archive sources to enable',
+      );
+      if (r.enabled.length > 0) await refreshSources();
+    });
+  }
+
+  function handleBulkEnableAll() {
+    setBulkMessage(null);
+    startBulk(async () => {
+      const r = await enableAllScannerSourcesAction();
+      setBulkMessage(
+        r.enabled.length > 0
+          ? `Enabled ${r.enabled.length} source${r.enabled.length !== 1 ? 's' : ''}`
+          : 'No new sources to enable',
+      );
+      if (r.enabled.length > 0) await refreshSources();
+    });
+  }
+
+  function handleBulkDisableHighRisk() {
+    setBulkMessage(null);
+    startBulk(async () => {
+      const r = await disableHighRiskSourcesAction();
+      setBulkMessage(
+        r.disabled.length > 0
+          ? `Disabled ${r.disabled.length} high-risk source${r.disabled.length !== 1 ? 's' : ''}`
+          : 'No high-risk sources were enabled',
+      );
+      if (r.disabled.length > 0) await refreshSources();
     });
   }
 
@@ -1913,20 +2102,37 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {/* Stats pills */}
-            <div className="hidden items-center gap-2.5 sm:flex">
+            <div className="hidden items-center gap-2 sm:flex flex-wrap">
               <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
                 <span className="text-[22px] font-bold text-white">{sources.length}</span>
                 <span className="text-[14px] text-slate-500">total</span>
               </div>
               <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
-                <span
-                  className="text-[22px] font-bold"
-                  style={{ color: enabledCount > 0 ? '#34d399' : 'rgba(52,211,153,0.30)' }}
-                >
+                <span className="text-[22px] font-bold" style={{ color: enabledCount > 0 ? '#34d399' : 'rgba(52,211,153,0.30)' }}>
                   {enabledCount}
                 </span>
-                <span className="text-[14px] text-slate-500">enabled</span>
+                <span className="text-[14px] text-slate-500">on</span>
               </div>
+              <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                <span className="text-[22px] font-bold text-slate-500">{disabledCount}</span>
+                <span className="text-[14px] text-slate-600">off</span>
+              </div>
+              <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                <span className="text-[18px] font-bold" style={{ color: '#38bdf8' }}>{dtsEligibleCount}</span>
+                <span className="text-[13px] text-slate-600">dts</span>
+              </div>
+              {fictionCount > 0 && (
+                <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                  <span className="text-[18px] font-bold" style={{ color: '#ec4899' }}>{fictionCount}</span>
+                  <span className="text-[13px] text-slate-600">lore</span>
+                </div>
+              )}
+              {highRiskCount > 0 && (
+                <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-2">
+                  <span className="text-[18px] font-bold" style={{ color: '#ff6b6b' }}>{highRiskCount}</span>
+                  <span className="text-[13px] text-slate-600">high risk</span>
+                </div>
+              )}
             </div>
 
             {/* Add Source */}
@@ -2000,6 +2206,54 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
         {/* Operator flow */}
         <div className="mb-5">
           <AdminFlowBanner currentStep={1} />
+        </div>
+
+        {/* ── BULK SOURCE ACTIONS ── */}
+        <div className="mb-5">
+          <div className="mb-2 flex flex-wrap gap-2">
+            <button
+              onClick={handleBulkDeepTruth}
+              disabled={bulkPending}
+              className="px-4 py-2.5 text-[13px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40"
+              style={{ color: '#38bdf8', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.28)' }}
+            >
+              {bulkPending ? '…' : 'Enable Deep Truth Sources'}
+            </button>
+            <button
+              onClick={handleBulkArchive}
+              disabled={bulkPending}
+              className="px-4 py-2.5 text-[13px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40"
+              style={{ color: '#a78bfa', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.28)' }}
+            >
+              {bulkPending ? '…' : 'Enable Archive Sources'}
+            </button>
+            <button
+              onClick={handleBulkEnableAll}
+              disabled={bulkPending}
+              className="px-4 py-2.5 text-[13px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40"
+              style={{ color: '#86d46e', background: 'rgba(134,212,110,0.08)', border: '1px solid rgba(134,212,110,0.28)' }}
+            >
+              {bulkPending ? '…' : 'Enable All Non-Fiction Sources'}
+            </button>
+            <button
+              onClick={handleBulkDisableHighRisk}
+              disabled={bulkPending}
+              className="px-4 py-2.5 text-[13px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40"
+              style={{ color: '#ff6b6b', background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.28)' }}
+            >
+              {bulkPending ? '…' : 'Disable High Risk'}
+            </button>
+            <a
+              href="/scanner"
+              className="px-4 py-2.5 text-[13px] font-bold uppercase tracking-wider transition-colors"
+              style={{ color: '#94a3b8', background: 'rgba(148,163,184,0.06)', border: '1px solid rgba(148,163,184,0.18)' }}
+            >
+              ← Back to Console
+            </a>
+          </div>
+          {bulkMessage && (
+            <p className="text-[13px] text-slate-400">{bulkMessage}</p>
+          )}
         </div>
 
         {/* ── SECONDARY ACTION CARDS ── */}
@@ -2124,9 +2378,9 @@ export function ScannerSourcesClient({ sources: initialSources }: ScannerSources
                   </span>
                   <div className="h-px flex-1" style={{ background: `${RISK_COLORS[risk]}30` }} />
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-2">
                   {group.map((source) => (
-                    <SourceCard
+                    <SourceRow
                       key={source.id}
                       source={source}
                       onToggled={handleToggled}

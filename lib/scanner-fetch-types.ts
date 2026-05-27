@@ -56,6 +56,10 @@ export interface FetchedCandidate {
   firstSeenYear?:       number;    // earliest known year this content appeared online
   // Phase AC: pre-social era flag
   isPreSocialEra?:      boolean;   // true when content is from ≤2010 (pre-social internet era)
+  // Phase AF: source taxonomy and fiction classification
+  sourceTaxonomy?:      string;    // SourceTaxonomy — computed from source_type + name
+  isFictionLarp?:       boolean;   // true when fiction/LARP patterns detected in content
+  documentSignalScore?: number;    // 0–20 FOIA/case report/transcript signal boost
   // Phase Y lineage fields
   signalFingerprint?:   string;    // content fingerprint for narrative lineage detection
   originStatus?:        'possible-origin' | 'related-signal' | 'mirror' | 'earlier-variant'; // lineage role

@@ -53,6 +53,12 @@ import {
 import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 import { recordSourceResult } from '@/lib/source-health';
+import {
+  classifySourceTaxonomy,
+  detectFictionOrLarp,
+  detectDocumentSignals,
+  isDeepSourceTarget,
+} from '@/lib/source-taxonomy';
 import { loadSeenUrls, recordSeenUrls, getScanMemoryStats, clearScanMemory } from '@/lib/scan-memory';
 import type { ScanMemoryStats } from '@/lib/scan-memory';
 import { pickRandomTopicGroup } from '@/lib/origin-topic-seeds';
@@ -894,6 +900,9 @@ async function fetchRedditSourcePreview(
   const postedAt = new Date(p.created_utc * 1000).toISOString().slice(0, 10);
   const bad      = detectBadCandidate(postUrl, cleanedTitle, summary);
 
+  // Phase AF: taxonomy classification for Reddit candidates
+  const redditTaxonomy = classifySourceTaxonomy('reddit', source.name);
+
   const candidate: FetchedCandidate = {
     title:                cleanedTitle,
     summary,
@@ -919,6 +928,7 @@ async function fetchRedditSourcePreview(
     redditPostedAt:       postedAt,
     storyScore:           scored[0].totalScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+    sourceTaxonomy:       redditTaxonomy,
   };
 
   return { candidate };
@@ -1765,6 +1775,62 @@ export async function autoEnableDeepTruthSourcesAction(): Promise<{ enabled: str
   return { enabled, errors };
 }
 
+// Phase AH: enable all archive-safe sources (wayback/bbs/archive types), low/medium risk, no fiction_lore.
+export async function enableArchiveSourcesAction(): Promise<{ enabled: string[]; errors: string[] }> {
+  const ARCHIVE_TYPES = ['wayback', 'bbs', 'archive', 'archive_forum', 'mediawiki'];
+  const allSources = await getScannerSources();
+  const toEnable = allSources.filter((s) => {
+    if (s.enabled) return false;
+    if (s.risk_level === 'high') return false;
+    if (!ARCHIVE_TYPES.includes(s.source_type ?? '')) return false;
+    return classifySourceTaxonomy(s.source_type ?? '', s.name) !== 'fiction_lore';
+  });
+  const enabled: string[] = [];
+  const errors:  string[] = [];
+  for (const s of toEnable) {
+    const r = await toggleScannerSource(s.id, true);
+    if ('ok' in r) enabled.push(s.name);
+    else errors.push(`${s.name}: ${r.error}`);
+  }
+  return { enabled, errors };
+}
+
+// Phase AH: enable all sources except high-risk and fiction/lore taxonomy.
+export async function enableAllScannerSourcesAction(): Promise<{ enabled: string[]; errors: string[] }> {
+  const allSources = await getScannerSources();
+  const toEnable = allSources.filter((s) => {
+    if (s.enabled) return false;
+    if (s.risk_level === 'high') return false;
+    return classifySourceTaxonomy(s.source_type ?? '', s.name) !== 'fiction_lore';
+  });
+  const enabled: string[] = [];
+  const errors:  string[] = [];
+  for (const s of toEnable) {
+    const r = await toggleScannerSource(s.id, true);
+    if ('ok' in r) enabled.push(s.name);
+    else errors.push(`${s.name}: ${r.error}`);
+  }
+  return { enabled, errors };
+}
+
+// Phase AH: disable all high-risk and fiction/lore sources.
+export async function disableHighRiskSourcesAction(): Promise<{ disabled: string[]; errors: string[] }> {
+  const allSources = await getScannerSources();
+  const toDisable = allSources.filter((s) => {
+    if (!s.enabled) return false;
+    if (s.risk_level === 'high') return true;
+    return classifySourceTaxonomy(s.source_type ?? '', s.name) === 'fiction_lore';
+  });
+  const disabled: string[] = [];
+  const errors:   string[] = [];
+  for (const s of toDisable) {
+    const r = await toggleScannerSource(s.id, false);
+    if ('ok' in r) disabled.push(s.name);
+    else errors.push(`${s.name}: ${r.error}`);
+  }
+  return { disabled, errors };
+}
+
 // ---------------------------------------------------------------------------
 // Fetch session — iterates enabled sources, fetches one page each.
 //
@@ -2368,6 +2434,16 @@ export async function runFetchSessionAction(
       // Hard-reject modern social/media junk
       if (MODERN_JUNK.some((p) => lc.includes(p))) {
         r.candidate.badCandidateReason = 'Deep Truth: modern social content — not an archive artifact';
+        continue;
+      }
+      // Phase AF: hard-reject fiction_lore and modern_forum taxonomy in DTS
+      const tax = r.candidate.sourceTaxonomy;
+      if (tax === 'fiction_lore') {
+        r.candidate.badCandidateReason = 'Deep Truth: fiction/lore source — excluded from archive mode';
+        continue;
+      }
+      if (tax === 'modern_forum') {
+        r.candidate.badCandidateReason = 'Deep Truth: modern forum source — excluded from archive mode';
         continue;
       }
     }
@@ -3023,6 +3099,11 @@ async function fetchWaybackPagePreview(
     ? ` Forum thread detected${archContent.forumData.replyCount != null ? ` · ${archContent.forumData.replyCount} replies` : ''}.`
     : '';
 
+  // Phase AF: taxonomy + fiction + document signal
+  const waybackTaxonomy     = classifySourceTaxonomy('wayback', source.name);
+  const waybackFiction      = detectFictionOrLarp(`${title} ${summary}`);
+  const waybackDocSignal    = detectDocumentSignals(`${title} ${summary}`);
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -3058,6 +3139,9 @@ async function fetchWaybackPagePreview(
     topicGroup,
     topicGroupName,
     firstSeenYear,
+    sourceTaxonomy:       waybackTaxonomy,
+    isFictionLarp:        waybackFiction.isFiction || undefined,
+    documentSignalScore:  waybackDocSignal > 0 ? waybackDocSignal : undefined,
   };
 
   return { candidate };
@@ -3110,6 +3194,10 @@ async function fetchMediaWikiPagePreview(
 
   const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
 
+  // Phase AF: taxonomy + fiction + document signal for MediaWiki
+  const wikiTaxonomy  = classifySourceTaxonomy('mediawiki', source.name);
+  const wikiDocSignal = detectDocumentSignals(`${title} ${summary}`);
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -3131,6 +3219,8 @@ async function fetchMediaWikiPagePreview(
     storyScore:           heuristics.storyScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
     finalPriorityScore:   computeFinalPriorityScore(heuristics.storyScore, { isBadCandidate: badCheck.bad }),
+    sourceTaxonomy:       wikiTaxonomy,
+    documentSignalScore:  wikiDocSignal > 0 ? wikiDocSignal : undefined,
   };
 
   return { candidate };
@@ -3320,6 +3410,12 @@ async function fetchTextfilesMultipleCandidates(
       const headerCtx = bbsArtifact.hasBBSHeader && bbsArtifact.headerLines.length > 0
         ? `[${bbsArtifact.headerLines.slice(0, 2).join(' · ')}] `
         : '';
+
+      // Phase AF: taxonomy + fiction + document signal for BBS artifacts
+      const bbsTaxonomy  = classifySourceTaxonomy('bbs', source.name);
+      const bbsFiction   = detectFictionOrLarp(`${title} ${excerpt}`);
+      const bbsDocSignal = detectDocumentSignals(`${title} ${excerpt}`);
+
       const candidate: FetchedCandidate = {
         title,
         summary:              `[BBS/TEXT ARTIFACT — ${category}] ${headerCtx}${excerpt.slice(0, 480)}`,
@@ -3350,6 +3446,9 @@ async function fetchTextfilesMultipleCandidates(
         topicGroup:           bbsTopicGroup,
         topicGroupName:       bbsTopicName,
         firstSeenYear:        undefined,
+        sourceTaxonomy:       bbsTaxonomy,
+        isFictionLarp:        bbsFiction.isFiction || undefined,
+        documentSignalScore:  bbsDocSignal > 0 ? bbsDocSignal : undefined,
       };
 
       candidates.push(candidate);

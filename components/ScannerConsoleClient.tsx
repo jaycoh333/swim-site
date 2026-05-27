@@ -15,6 +15,7 @@ import {
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
 import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, PRESET_DEEP_TRUTH, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
+import { isDeepSourceTarget, getTaxonomyMeta, type SourceTaxonomy } from '@/lib/source-taxonomy';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
@@ -813,7 +814,7 @@ export function ScannerConsoleClient({
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
   const [showPresetTest,    setShowPresetTest]    = useState<boolean>(false);
-  const [activeTab,         setActiveTab]         = useState<'strong' | 'needs-review' | 'low-signal' | 'blocked'>('strong');
+  const [activeTab,         setActiveTab]         = useState<'strong' | 'needs-review' | 'low-signal' | 'blocked' | 'lore-layer'>('strong');
   const [selectedUrls,      setSelectedUrls]      = useState<Set<string>>(new Set());
   const [showSeen,          setShowSeen]          = useState<boolean>(false);
 
@@ -849,7 +850,7 @@ export function ScannerConsoleClient({
 
   // Phase P: collapsed complexity
   const [showMoreResults, setShowMoreResults] = useState(false);
-  const [moreTab,         setMoreTab]         = useState<'needs-review' | 'low-signal' | 'blocked'>('needs-review');
+  const [moreTab,         setMoreTab]         = useState<'needs-review' | 'low-signal' | 'blocked' | 'lore-layer'>('needs-review');
   const [showReviewQueue, setShowReviewQueue] = useState(false);
 
   // Phase Q: live scan feel + animation
@@ -1068,10 +1069,15 @@ export function ScannerConsoleClient({
       ...sorted.filter((s) =>  lastScanSrcIds.has(s.id)),
     ];
 
-    // Origin/DTS scan: sort BBS → Wayback → archive_forum → archive first for archive dominance
+    // Origin/DTS scan: sort BBS → Wayback → archive_forum → archive first;
+    // deep source targets (textfiles, NICAP, NUFORC, sacred-texts, etc.) get a -10 bonus
     const ORIGIN_TYPE_RANK: Record<string, number> = { bbs: 0, wayback: 1, archive_forum: 2, archive: 3, mediawiki: 4 };
     const originSorted = (isOriginPreset || isDeepTruthPreset)
-      ? [...fairSorted].sort((a, b) => (ORIGIN_TYPE_RANK[a.source_type] ?? 9) - (ORIGIN_TYPE_RANK[b.source_type] ?? 9))
+      ? [...fairSorted].sort((a, b) => {
+          const typeA = (ORIGIN_TYPE_RANK[a.source_type] ?? 9) - (isDeepSourceTarget(a.name) ? 10 : 0);
+          const typeB = (ORIGIN_TYPE_RANK[b.source_type] ?? 9) - (isDeepSourceTarget(b.name) ? 10 : 0);
+          return typeA - typeB;
+        })
       : fairSorted;
 
     // Origin/DTS scan gets a higher cap (20) to surface more archive sources
@@ -1582,10 +1588,21 @@ export function ScannerConsoleClient({
                   )}
                 </div>
                 {activeScanSources.length === 0 ? (
-                  <div>
+                  <div className="space-y-2">
                     <p className="text-[13px] text-slate-500">No enabled sources match this preset.</p>
-                    <a href="/scanner/sources" className="mt-1.5 inline-block text-[12px] text-emerald-400/70 underline-offset-2 hover:text-emerald-400 hover:underline">
-                      Add sources →
+                    {activePreset === PRESET_DEEP_TRUTH && (
+                      <button
+                        onClick={async () => {
+                          const r = await autoEnableDeepTruthSourcesAction();
+                          if (r.enabled.length > 0) window.location.reload();
+                        }}
+                        className="w-full rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-[12px] font-bold uppercase tracking-wider text-sky-400 transition-colors hover:bg-sky-500/12"
+                      >
+                        Enable Deep Truth Sources
+                      </button>
+                    )}
+                    <a href="/scanner/sources" className="inline-block text-[12px] text-emerald-400/70 underline-offset-2 hover:text-emerald-400 hover:underline">
+                      Manage sources →
                     </a>
                   </div>
                 ) : (
@@ -1644,6 +1661,24 @@ export function ScannerConsoleClient({
                     <span className="text-[12px] text-slate-600">+{enabledSources.length - 6} more</span>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* DTS low-source shortcut */}
+            {activePreset === PRESET_DEEP_TRUTH && activeScanSources.length > 0 && activeScanSources.length < 5 && (
+              <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] px-4 py-3">
+                <p className="mb-2 text-[12px] text-sky-400/70">
+                  Only {activeScanSources.length} DTS source{activeScanSources.length !== 1 ? 's' : ''} enabled — enable more for better coverage.
+                </p>
+                <button
+                  onClick={async () => {
+                    const r = await autoEnableDeepTruthSourcesAction();
+                    if (r.enabled.length > 0) window.location.reload();
+                  }}
+                  className="w-full rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-[12px] font-bold uppercase tracking-wider text-sky-400 transition-colors hover:bg-sky-500/12"
+                >
+                  Enable Deep Truth Sources
+                </button>
               </div>
             )}
 
@@ -2079,6 +2114,10 @@ export function ScannerConsoleClient({
                 r.status !== 'error' && (r.candidate.isIndexPage || !!r.candidate.badCandidateReason)
               );
               const errorResults     = dedupedResults.filter((r) => r.status === 'error');
+              // Phase AF: fiction/lore candidates get their own Lore Layer section
+              const fictionResults   = filteredGoodResults.filter((r) =>
+                r.status !== 'error' && r.candidate.isFictionLarp === true
+              );
 
               // ── "Show seen" filter ────────────────────────────────────────────────
               function filterSeen<T extends SessionSourceResult>(arr: T[]): T[] {
@@ -2092,10 +2131,11 @@ export function ScannerConsoleClient({
                   return true;
                 });
               }
-              const visibleGood   = filterSeen(filteredGoodResults);
-              const visibleReview = filterSeen(needsReview);
-              const visibleLow    = filterSeen(lowSignalResults);
-              const visibleErrors = filterSeen(errorResults);
+              const visibleGood    = filterSeen(filteredGoodResults);
+              const visibleReview  = filterSeen(needsReview);
+              const visibleLow     = filterSeen(lowSignalResults);
+              const visibleErrors  = filterSeen(errorResults);
+              const visibleFiction = filterSeen(fictionResults);
 
               // ── Derived counts ────────────────────────────────────────────────────
               const queuedCnt       = [...candStates.values()].filter((s) => s.action === 'queued').length;
@@ -2123,36 +2163,42 @@ export function ScannerConsoleClient({
                 { id: 'strong'       as const, label: isDeepTruthScan ? 'Recovered Artifacts' : 'Strong Candidates', count: filteredGoodResults.length,      color: 'emerald' },
                 { id: 'needs-review' as const, label: 'Needs Review',      count: needsReview.length,      color: 'amber'   },
                 { id: 'low-signal'   as const, label: 'Low Signal',        count: lowSignalResults.length, color: 'slate'   },
+                ...(fictionResults.length > 0 ? [{ id: 'lore-layer' as const, label: 'Lore Layer', count: fictionResults.length, color: 'pink' }] : []),
                 { id: 'blocked'      as const, label: 'Blocked / Failed',  count: errorResults.length,     color: 'red'     },
-              ] as const;
+              ];
               const TAB_ACTIVE_CLS: Record<string, string> = {
                 emerald: 'border-emerald-400/70 bg-emerald-500/18 text-emerald-300',
                 amber:   'border-amber-400/70   bg-amber-500/18   text-amber-300',
                 slate:   'border-slate-400/50   bg-slate-500/16   text-slate-200',
                 red:     'border-red-400/70     bg-red-500/18     text-red-300',
+                pink:    'border-pink-400/70    bg-pink-500/18    text-pink-300',
               };
               const TAB_IDLE_CLS: Record<string, string> = {
                 emerald: 'border-white/8 bg-white/[0.02] text-slate-500 hover:border-emerald-500/30 hover:text-emerald-400/60',
                 amber:   'border-white/8 bg-white/[0.02] text-slate-500 hover:border-amber-500/30   hover:text-amber-400/60',
                 slate:   'border-white/8 bg-white/[0.02] text-slate-500 hover:border-slate-400/25   hover:text-slate-300',
                 red:     'border-white/8 bg-white/[0.02] text-slate-500 hover:border-red-500/30     hover:text-red-400/60',
+                pink:    'border-white/8 bg-white/[0.02] text-slate-500 hover:border-pink-500/30    hover:text-pink-400/60',
               };
               const TAB_BADGE_CLS: Record<string, string> = {
                 emerald: 'bg-emerald-500/28 text-emerald-200',
                 amber:   'bg-amber-500/28   text-amber-200',
                 slate:   'bg-slate-500/25   text-slate-300',
                 red:     'bg-red-500/28     text-red-200',
+                pink:    'bg-pink-500/28    text-pink-200',
               };
               const TAB_DESC: Record<string, string> = {
                 'strong':       'Best scanner finds. Queue these first.',
                 'needs-review': 'Possible stories. Human check recommended.',
                 'low-signal':   'Weak or generic results. Usually skip.',
+                'lore-layer':   'SCP, creepypasta, ARG, and fictional lore detected. Review before queuing.',
                 'blocked':      'Sources that failed, timed out, or were blocked.',
               };
               const TAB_DESC_CLS: Record<string, string> = {
                 'strong':       'text-emerald-400/65',
                 'needs-review': 'text-amber-400/65',
                 'low-signal':   'text-slate-500',
+                'lore-layer':   'text-pink-400/65',
                 'blocked':      'text-red-400/55',
               };
 
@@ -2668,6 +2714,39 @@ export function ScannerConsoleClient({
                                       {result.candidate.archiveYear}
                                     </span>
                                   )}
+                                  {/* Phase AF: taxonomy badge */}
+                                  {result.candidate.sourceTaxonomy && result.candidate.sourceTaxonomy !== 'unknown' && (() => {
+                                    const tm = getTaxonomyMeta(result.candidate.sourceTaxonomy as SourceTaxonomy);
+                                    const colorMap: Record<string, string> = {
+                                      violet: 'border-violet-500/30 bg-violet-500/8 text-violet-300/70',
+                                      sky:    'border-sky-500/30 bg-sky-500/8 text-sky-300/70',
+                                      emerald:'border-emerald-500/30 bg-emerald-500/8 text-emerald-300/70',
+                                      amber:  'border-amber-500/30 bg-amber-500/8 text-amber-300/70',
+                                      orange: 'border-orange-500/28 bg-orange-500/7 text-orange-300/70',
+                                      purple: 'border-purple-500/28 bg-purple-500/7 text-purple-300/70',
+                                      teal:   'border-teal-500/28 bg-teal-500/7 text-teal-300/70',
+                                      yellow: 'border-yellow-500/25 bg-yellow-500/7 text-yellow-300/70',
+                                      pink:   'border-pink-500/28 bg-pink-500/7 text-pink-300/70',
+                                      slate:  'border-slate-500/25 bg-slate-500/7 text-slate-400/70',
+                                    };
+                                    return (
+                                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${colorMap[tm.color] ?? colorMap.slate}`}>
+                                        {tm.label}
+                                      </span>
+                                    );
+                                  })()}
+                                  {/* Phase AF: document signal boost indicator */}
+                                  {(result.candidate.documentSignalScore ?? 0) > 0 && (
+                                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/8 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-emerald-300/70">
+                                      DOC SIGNAL
+                                    </span>
+                                  )}
+                                  {/* Phase AF: fiction/LARP flag */}
+                                  {result.candidate.isFictionLarp && (
+                                    <span className="rounded-full border border-pink-500/30 bg-pink-500/8 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-pink-300/70">
+                                      LORE/FICTION
+                                    </span>
+                                  )}
                                   {result.status === 'duplicate' && (
                                     <span className="rounded-full border border-amber-500/25 bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold text-amber-400">
                                       ⚠ duplicate
@@ -3011,6 +3090,7 @@ export function ScannerConsoleClient({
                           More
                           {needsReview.length > 0 && ` · ${needsReview.length} needs review`}
                           {lowSignalResults.length > 0 && ` · ${lowSignalResults.length} low signal`}
+                          {fictionResults.length > 0 && ` · ${fictionResults.length} lore`}
                           {errorResults.length > 0 && ` · ${errorResults.length} blocked`}
                         </span>
                         <span className="text-[11px] text-slate-700">{showMoreResults ? '▲' : '▼'}</span>
@@ -3027,6 +3107,11 @@ export function ScannerConsoleClient({
                             {lowSignalResults.length > 0 && (
                               <button onClick={() => setMoreTab('low-signal')} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${moreTab === 'low-signal' ? 'border-white/25 bg-white/[0.06] text-slate-300' : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20'}`}>
                                 Low Signal · {lowSignalResults.length}
+                              </button>
+                            )}
+                            {fictionResults.length > 0 && (
+                              <button onClick={() => setMoreTab('lore-layer')} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${moreTab === 'lore-layer' ? 'border-pink-500/35 bg-pink-500/10 text-pink-300' : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20'}`}>
+                                Lore Layer · {fictionResults.length}
                               </button>
                             )}
                             {errorResults.length > 0 && (
@@ -3087,6 +3172,63 @@ export function ScannerConsoleClient({
                                   <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
                                     className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[15px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
                                     Open Source ↗
+                                  </a>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
+
+                  {/* ── LORE LAYER ── */}
+                  {moreTab === 'lore-layer' && (
+                    visibleFiction.length === 0 ? (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
+                        <p className="text-[32px] font-bold text-slate-700">—</p>
+                        <p className="mt-2 text-[20px] font-bold text-slate-400">No fiction or lore detected</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <div className="rounded-xl border border-pink-500/18 bg-pink-500/[0.04] px-4 py-3">
+                          <p className="text-[17px] font-bold text-pink-300">Lore Layer</p>
+                          <p className="mt-0.5 text-[13px] text-pink-400/55">SCP, creepypasta, ARG, or LARP patterns detected. Review before queuing — fictional content.</p>
+                        </div>
+                        {visibleFiction.map((result) => {
+                          if (result.status === 'error') return null;
+                          const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                          return (
+                            <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-xl border border-pink-500/14 bg-white/[0.025]">
+                              <div className="flex items-center justify-between gap-2 border-b border-white/8 px-4 py-3">
+                                {result.candidate.sourceType && (
+                                  <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                    {result.candidate.sourceType.toUpperCase()}
+                                  </span>
+                                )}
+                                <span className="text-[14px] text-slate-500">{result.sourceName}</span>
+                                <span className="ml-auto rounded-full border border-pink-500/30 bg-pink-500/8 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-pink-300/80">
+                                  LORE/FICTION
+                                </span>
+                              </div>
+                              <div className="p-4">
+                                <SourcePreviewCard candidate={result.candidate} sourceName={result.sourceName} />
+                              </div>
+                              <div className="border-t border-white/8 px-4 py-3">
+                                <p className="mb-2.5 text-[12px] leading-snug text-slate-600">
+                                  Fiction/lore pattern detected. Queue only if this is a real firsthand account, not a story.
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    disabled={st.action === 'queueing' || st.action === 'queued'}
+                                    onClick={() => handleQueueCandidate(result)}
+                                    className="flex flex-1 min-h-[44px] items-center justify-center rounded-xl border border-pink-500/30 bg-pink-500/8 text-[15px] font-bold text-pink-300 transition-colors disabled:opacity-40 hover:bg-pink-500/15"
+                                  >
+                                    {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : 'Queue Anyway'}
+                                  </button>
+                                  <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                    className="flex min-h-[44px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
+                                    Open ↗
                                   </a>
                                 </div>
                               </div>
