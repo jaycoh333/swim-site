@@ -522,6 +522,10 @@ export function ScannerConsoleClient({
   const [publishError,  setPublishError]  = useState<string | null>(null);
   const [lastPublished, setLastPublished] = useState<PublishedResult | null>(null);
   const [copied,        setCopied]        = useState<'tg' | 'x' | null>(null);
+  const [lastApprovedId, setLastApprovedId] = useState<string | null>(null);
+  const scanColRef    = useRef<HTMLDivElement>(null);
+  const reviewColRef  = useRef<HTMLDivElement>(null);
+  const publishColRef = useRef<HTMLDivElement>(null);
 
   // ── Scan status message cycling ──────────────────────────────────────────
 
@@ -737,8 +741,9 @@ export function ScannerConsoleClient({
       const sig = reviewSignals.find((s) => s.id === signalId);
       if (sig) {
         setReadySignals((prev) => [{ ...sig, status: 'rebirth-ready' }, ...prev]);
+        setLastApprovedId(signalId);
         setApproveToast(sig.title);
-        setTimeout(() => setApproveToast(null), 4000);
+        setTimeout(() => setApproveToast(null), 8000);
       }
     }
     setReviewSignals((prev) => prev.filter((s) => s.id !== signalId));
@@ -850,27 +855,48 @@ export function ScannerConsoleClient({
       {queueToast && (
         <div className="mb-4 flex items-center gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-4">
           <span className="text-[22px]">✓</span>
-          <div>
-            <p className="text-[16px] font-bold text-emerald-300">Story queued for review</p>
+          <div className="min-w-0">
+            <p className="text-[16px] font-bold text-emerald-300">Story queued</p>
             <p className="text-[14px] text-emerald-400/60 line-clamp-1">{queueToast}</p>
           </div>
-          <div className="ml-auto flex gap-2">
-            <a href="/scanner/queue" className="flex min-h-[40px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[13px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
-              Open Review Queue →
-            </a>
+          <div className="ml-auto shrink-0">
+            <button
+              onClick={() => reviewColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="flex min-h-[40px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[13px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
+              Review Now →
+            </button>
           </div>
         </div>
       )}
 
-      {/* ── Approve toast ── */}
+      {/* ── TASK 3: Approve → READY TO PUBLISH banner ── */}
       {approveToast && (
-        <div className="mb-4 flex items-center gap-3 rounded-2xl border border-purple-500/30 bg-purple-500/10 px-5 py-4">
-          <span className="text-[22px]">✓</span>
-          <div>
-            <p className="text-[16px] font-bold text-purple-300">Approved — ready to publish</p>
-            <p className="text-[14px] text-purple-400/60 line-clamp-1">{approveToast}</p>
+        <div className="mb-4 overflow-hidden rounded-2xl border border-purple-500/35 bg-purple-500/[0.07]">
+          <div className="border-b border-purple-500/20 bg-purple-500/[0.10] px-5 py-4">
+            <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-purple-600">Story approved</p>
+            <p className="text-[26px] font-bold leading-tight text-purple-300">READY TO PUBLISH</p>
           </div>
-          <p className="ml-auto shrink-0 text-[13px] text-purple-400/50">moved to column 3 →</p>
+          <div className="p-5">
+            <p className="mb-4 text-[16px] leading-snug text-white line-clamp-2">{approveToast}</p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setApproveToast(null);
+                  if (lastApprovedId) setPrepareOpenId(lastApprovedId);
+                  publishColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+                className="flex w-full min-h-[56px] items-center justify-center rounded-2xl bg-purple-500 text-[18px] font-bold text-white transition-colors hover:bg-purple-400"
+              >
+                Open Publish Editor →
+              </button>
+              <button
+                onClick={() => setApproveToast(null)}
+                className="flex w-full min-h-[52px] items-center justify-center rounded-2xl border border-white/12 bg-white/[0.03] text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.06]"
+              >
+                Keep Reviewing
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -878,7 +904,7 @@ export function ScannerConsoleClient({
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
 
         {/* ══ 1 · SCAN ══ */}
-        <div className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+        <div ref={scanColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
 
           {/* Column header */}
           <div className="border-b border-white/8 px-6 py-5">
@@ -1691,17 +1717,25 @@ export function ScannerConsoleClient({
                                     <Spinner /> Queueing…
                                   </div>
                                 )}
+                                {/* ── TASK 1: Story Queued success card ── */}
                                 {st.action === 'queued' && (
-                                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4">
-                                    <p className="mb-1 text-[18px] font-bold text-emerald-300">✓ Queued for Review</p>
-                                    <p className="mb-3 text-[14px] text-emerald-400/60">Review it in column 2 → approve to publish.</p>
-                                    <div className="flex flex-wrap gap-2">
-                                      <a href="/scanner/queue" className="flex min-h-[46px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[14px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
-                                        Open Review Queue →
-                                      </a>
-                                      <button onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.candidate.sourceUrl); return next; })}
-                                        className="flex min-h-[46px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] text-slate-400 transition-colors hover:bg-white/[0.07]">
-                                        Continue Scanning
+                                  <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
+                                    <div className="border-b border-emerald-500/20 bg-emerald-500/[0.10] px-5 py-3">
+                                      <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Done</p>
+                                      <p className="text-[26px] font-bold leading-tight text-emerald-300">STORY QUEUED</p>
+                                    </div>
+                                    <div className="flex flex-col gap-2 p-4">
+                                      <button
+                                        onClick={() => reviewColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                                        className="flex w-full min-h-[56px] items-center justify-center rounded-2xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400"
+                                      >
+                                        Review Now →
+                                      </button>
+                                      <button
+                                        onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.candidate.sourceUrl); return next; })}
+                                        className="flex w-full min-h-[52px] items-center justify-center rounded-2xl border border-white/12 bg-white/[0.03] text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.06]"
+                                      >
+                                        Keep Scanning
                                       </button>
                                     </div>
                                   </div>
@@ -1973,24 +2007,21 @@ export function ScannerConsoleClient({
         </div>
 
         {/* ══ 2 · REVIEW ══ */}
-        <div className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+        <div ref={reviewColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
 
           <div className="border-b border-white/8 px-6 py-5">
             <div className="mb-1 flex items-center gap-3">
               <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-[15px] font-bold text-amber-400">
                 2
               </span>
-              <h2 className="text-[22px] font-bold text-white">Review</h2>
+              <h2 className="text-[22px] font-bold text-white">Review Stories</h2>
               {reviewSignals.length > 0 && (
                 <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-[14px] font-bold text-amber-300">
-                  {reviewSignals.length} queued
+                  {reviewSignals.length}
                 </span>
               )}
             </div>
-            <p className="text-[16px] font-bold text-amber-300/90">
-              Queued Stories
-            </p>
-            <p className="mt-0.5 text-[14px] text-slate-500">Approve for Publishing moves story to column 3</p>
+            <p className="text-[14px] text-slate-500">Read the source. Approve to publish. Reject to discard.</p>
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
@@ -2007,13 +2038,11 @@ export function ScannerConsoleClient({
             )}
 
             {reviewSignals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl border border-white/8 bg-white/[0.02] py-12 text-center">
-                <p className="text-[17px] font-semibold text-slate-500">No queued stories yet</p>
-                <p className="mt-2 text-[14px] text-slate-600">Run a scan and queue a candidate to see it here.</p>
-                <a
-                  href="/scanner/queue"
-                  className="mt-5 flex min-h-[44px] items-center justify-center rounded-xl border border-white/10 bg-white/5 px-5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
-                >
+              <div className="flex flex-col items-center justify-center rounded-2xl border border-white/8 bg-white/[0.02] py-14 text-center">
+                <p className="text-[20px] font-bold text-slate-500">No stories queued yet</p>
+                <p className="mt-2 text-[15px] text-slate-600">Scan sources and queue a candidate to see it here.</p>
+                <a href="/scanner/queue"
+                  className="mt-5 flex min-h-[48px] items-center justify-center rounded-xl border border-white/10 bg-white/5 px-6 text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
                   Open Full Queue →
                 </a>
               </div>
@@ -2022,82 +2051,50 @@ export function ScannerConsoleClient({
                 const isChanging = statusChanging === sig.id;
                 return (
                   <div key={sig.id} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-
-                    {/* Evidence image — top of card, dominant */}
-                    {sig.source_image_url && (
-                      <div className="relative h-36 w-full overflow-hidden">
-                        <img
-                          src={sig.source_image_url}
-                          alt=""
-                          className="h-full w-full object-cover opacity-70"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-                      </div>
-                    )}
-
-                    <div className="p-5">
-
-                      {/* "Recovered Story" label + category */}
-                      <div className="mb-2.5 flex items-start justify-between gap-3">
-                        <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[12px] font-bold uppercase tracking-wide text-emerald-400">
-                          Recovered Story
-                        </span>
-                        <span className="shrink-0 rounded-full bg-white/6 px-3 py-1 text-[12px] text-slate-500">
-                          {sig.category}
-                        </span>
-                      </div>
-
-                      {/* Title */}
-                      <p className="mb-1 text-[22px] font-bold leading-snug text-white">{sig.title}</p>
-
-                      {/* Attribution line */}
-                      <p className="mb-3 text-[14px] text-emerald-400/55">
-                        {sig.attribution_text ?? sig.source_name}
-                      </p>
-
-                      {/* Summary — quote panel */}
+                    {/* Header — source type + name + category */}
+                    <div className="flex items-center gap-2 border-b border-white/8 px-5 py-3">
+                      <span className={`rounded-full border px-2 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(sig.source_type)}`}>
+                        {sig.source_type.toUpperCase()}
+                      </span>
+                      <span className="text-[14px] text-slate-500">{sig.source_name}</span>
+                      <span className="ml-auto shrink-0 rounded-full bg-white/6 px-2.5 py-0.5 text-[12px] text-slate-500">{sig.category}</span>
+                    </div>
+                    {/* Body */}
+                    <div className="px-5 py-4">
+                      <p className="mb-3 text-[22px] font-bold leading-snug text-white">{sig.title}</p>
                       <div className="mb-3 rounded-xl border-l-2 border-amber-500/20 bg-white/[0.02] px-4 py-3">
-                        <p className="text-[16px] leading-relaxed text-slate-300 line-clamp-4">
-                          {sig.summary}
-                        </p>
+                        <p className="text-[17px] leading-relaxed text-slate-300 line-clamp-5">{sig.summary}</p>
                       </div>
-
-                      {/* Capture notes — evidence provenance */}
-                      {sig.source_capture_notes && (
-                        <div className="mb-3 rounded-xl border border-white/6 bg-white/[0.015] px-3 py-2">
-                          <p className="text-[11px] leading-relaxed text-slate-600">{sig.source_capture_notes}</p>
-                        </div>
-                      )}
-
-                      {/* Source type + reliability */}
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourceTypeBadgeCls(sig.source_type)}`}>
-                          {sig.source_type}
-                        </span>
-                        <span className="text-[11px] text-slate-600">{sourceReliabilityLabel(sig.source_type)}</span>
-                      </div>
-
-                      {/* Source URL */}
                       {sig.source_url && (
-                        <a
-                          href={sig.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mb-4 block truncate text-[11px] text-slate-700 transition-colors hover:text-slate-500"
-                        >
-                          {sig.source_url}
+                        <a href={sig.source_url} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2.5 text-[14px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300">
+                          <span className="truncate">{sig.source_url}</span>
+                          <span className="ml-auto shrink-0">↗</span>
                         </a>
                       )}
-
-                      {/* Action buttons */}
-                      <div className="flex flex-wrap gap-3">
-                        <button onClick={() => handleStatusChange(sig.id, 'rebirth-ready')} disabled={isChanging} className={BTN_APPROVE}>
-                          {isChanging ? <Spinner /> : 'Approve for Publishing'}
-                        </button>
-                        <button onClick={() => handleStatusChange(sig.id, 'rejected')}  disabled={isChanging} className={BTN_REJECT}>
+                    </div>
+                    {/* Actions */}
+                    <div className="flex flex-col gap-2 border-t border-white/8 p-4">
+                      <button
+                        onClick={() => handleStatusChange(sig.id, 'rebirth-ready')}
+                        disabled={isChanging}
+                        className="flex w-full min-h-[56px] items-center justify-center rounded-2xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400 disabled:opacity-50"
+                      >
+                        {isChanging ? <Spinner /> : 'Approve for Publishing'}
+                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleStatusChange(sig.id, 'rejected')}
+                          disabled={isChanging}
+                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/8 text-[16px] font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:opacity-40"
+                        >
                           Reject
                         </button>
-                        <button onClick={() => handleStatusChange(sig.id, 'archived')}  disabled={isChanging} className={BTN_ARCHIVE}>
+                        <button
+                          onClick={() => handleStatusChange(sig.id, 'archived')}
+                          disabled={isChanging}
+                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-2xl border border-white/12 bg-white/[0.03] text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.07] disabled:opacity-40"
+                        >
                           Archive
                         </button>
                       </div>
@@ -2110,21 +2107,21 @@ export function ScannerConsoleClient({
         </div>
 
         {/* ══ 3 · PUBLISH ══ */}
-        <div className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
+        <div ref={publishColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
 
           <div className="border-b border-white/8 px-6 py-5">
             <div className="mb-1 flex items-center gap-3">
               <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-500/20 text-[15px] font-bold text-purple-400">
                 3
               </span>
-              <h2 className="text-[22px] font-bold text-white">Publish</h2>
+              <h2 className="text-[22px] font-bold text-white">Publish Thread</h2>
               {readySignals.length > 0 && (
                 <span className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[14px] font-bold text-purple-300">
                   {readySignals.length}
                 </span>
               )}
             </div>
-            <p className="text-[15px] text-slate-500">Compose threads, then publish to SWIM</p>
+            <p className="text-[14px] text-slate-500">Edit the thread, then publish to SWIM. Copy social posts after.</p>
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
@@ -2147,103 +2144,64 @@ export function ScannerConsoleClient({
               </div>
             )}
 
-            {/* ── Publish success panel (TASKS 1–5) ── */}
+            {/* ── TASK 5: Publish success panel ── */}
             {lastPublished && (
               <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
-
-                {/* Header */}
-                <div className="border-b border-emerald-500/20 bg-emerald-500/[0.08] px-6 py-4">
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/25 text-[15px] font-bold text-emerald-400">✓</span>
-                    <p className="text-[18px] font-bold uppercase tracking-[0.12em] text-emerald-400">
-                      LIVE THREAD CREATED
-                    </p>
-                  </div>
+                <div className="border-b border-emerald-500/20 bg-emerald-500/[0.10] px-6 py-5">
+                  <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Published</p>
+                  <p className="text-[30px] font-bold leading-tight text-emerald-300">LIVE THREAD CREATED</p>
                 </div>
-
-                <div className="p-6">
-                  {/* Title */}
-                  <p className="mb-3 text-[20px] font-bold leading-snug text-white">
-                    {lastPublished.title}
-                  </p>
-
-                  {/* Meta — category, source, timestamp */}
-                  <div className="mb-5 flex flex-wrap gap-2">
-                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[12px] font-semibold text-emerald-300">
-                      {lastPublished.category}
-                    </span>
+                <div className="flex flex-col gap-3 p-5">
+                  <p className="text-[20px] font-bold leading-snug text-white">{lastPublished.title}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[13px] font-semibold text-emerald-300">{lastPublished.category}</span>
                     {lastPublished.sourceName && (
-                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[12px] text-slate-400">
-                        {lastPublished.sourceName}
-                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[13px] text-slate-400">{lastPublished.sourceName}</span>
                     )}
-                    <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-[12px] tabular-nums text-slate-500" suppressHydrationWarning>
-                      {new Date(lastPublished.publishedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
                   </div>
-
-                  {/* Primary action — Open Thread */}
                   {lastPublished.threadSlug ? (
-                    <a
-                      href={`/threads/${lastPublished.threadSlug}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mb-4 flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500/22 border border-emerald-500/45 text-[17px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/35"
-                    >
+                    <a href={`/threads/${lastPublished.threadSlug}`} target="_blank" rel="noopener noreferrer"
+                      className="flex w-full min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400">
                       Open Thread ↗
                     </a>
                   ) : (
-                    <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-[14px] text-amber-300">
-                      Thread created but slug was not returned — check /threads for the new post.
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-[14px] text-amber-300">
+                      Thread created — check /threads for the new post.
                     </div>
                   )}
-
-                  {/* X Post preview + copy */}
-                  <div className="mb-3">
-                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.20em] text-slate-500">X POST</p>
+                  <div>
+                    <p className="mb-1.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">X Post</p>
                     <div className="mb-2 overflow-hidden rounded-xl border border-white/8 bg-black/30 px-4 py-3">
-                      <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-slate-300 line-clamp-4">
-                        {lastPublished.xText}
-                      </pre>
+                      <pre className="whitespace-pre-wrap font-sans text-[14px] leading-relaxed text-slate-300 line-clamp-4">{lastPublished.xText}</pre>
                     </div>
-                    <button
-                      onClick={() => handleCopy(lastPublished.xText, 'x')}
-                      className={`flex min-h-[44px] w-full items-center justify-center rounded-xl border text-[14px] font-semibold transition-all ${
-                        copied === 'x'
-                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
-                          : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
-                      }`}
-                    >
-                      {copied === 'x' ? '✓ Copied to clipboard' : 'Copy X Post'}
+                    <button onClick={() => handleCopy(lastPublished.xText, 'x')}
+                      className={`flex w-full min-h-[52px] items-center justify-center rounded-2xl border text-[16px] font-semibold transition-all ${
+                        copied === 'x' ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300' : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+                      }`}>
+                      {copied === 'x' ? '✓ Copied' : 'Copy X Post'}
                     </button>
                   </div>
-
-                  {/* Telegram preview + copy */}
-                  <div className="mb-5">
-                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.20em] text-slate-500">TELEGRAM POST</p>
+                  <div>
+                    <p className="mb-1.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Telegram Post</p>
                     <div className="mb-2 overflow-hidden rounded-xl border border-white/8 bg-black/30 px-4 py-3">
-                      <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-slate-300 line-clamp-5">
-                        {lastPublished.telegramText}
-                      </pre>
+                      <pre className="whitespace-pre-wrap font-sans text-[14px] leading-relaxed text-slate-300 line-clamp-5">{lastPublished.telegramText}</pre>
                     </div>
-                    <button
-                      onClick={() => handleCopy(lastPublished.telegramText, 'tg')}
-                      className={`flex min-h-[44px] w-full items-center justify-center rounded-xl border text-[14px] font-semibold transition-all ${
-                        copied === 'tg'
-                          ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
-                          : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
-                      }`}
-                    >
-                      {copied === 'tg' ? '✓ Copied to clipboard' : 'Copy Telegram Post'}
+                    <button onClick={() => handleCopy(lastPublished.telegramText, 'tg')}
+                      className={`flex w-full min-h-[52px] items-center justify-center rounded-2xl border text-[16px] font-semibold transition-all ${
+                        copied === 'tg' ? 'border-sky-500/40 bg-sky-500/15 text-sky-300' : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+                      }`}>
+                      {copied === 'tg' ? '✓ Copied' : 'Copy Telegram Post'}
                     </button>
                   </div>
-
-                  {/* Continue reviewing */}
                   <button
-                    onClick={() => { setLastPublished(null); setCopied(null); }}
-                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.07] hover:text-slate-200"
+                    onClick={() => {
+                      setLastPublished(null);
+                      setCopied(null);
+                      scanColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                    className="flex w-full min-h-[52px] items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.07] hover:text-slate-200"
                   >
-                    Continue Reviewing
+                    Continue Scanning
                   </button>
                 </div>
               </div>
@@ -2252,8 +2210,9 @@ export function ScannerConsoleClient({
             {/* Empty state */}
             {readySignals.length === 0 && !lastPublished && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-[17px] text-slate-500">No signals ready to publish.</p>
-                <p className="mt-2 text-[15px] text-slate-600">Approve signals in Review first.</p>
+                <p className="text-[20px] font-bold text-slate-600">—</p>
+                <p className="mt-2 text-[18px] font-semibold text-slate-500">Nothing to publish yet</p>
+                <p className="mt-2 text-[14px] text-slate-600">Approve a story in Review to publish it here.</p>
               </div>
             )}
 
@@ -2293,50 +2252,48 @@ function ReadyCard({ signal, isOpen, isPublishing, onToggle, onPublish }: ReadyC
   const [category, setCategory] = useState(signal.category);
   const [tags,     setTags]     = useState(signal.tags.join(', '));
 
-  const inputCls = 'w-full rounded-xl border border-white/12 bg-white/[0.04] px-4 py-3 text-[15px] text-white placeholder:text-slate-600 focus:border-white/28 focus:outline-none transition-colors';
+  const inputCls = 'w-full rounded-xl border border-white/12 bg-white/[0.04] px-4 py-3.5 text-[16px] leading-normal text-white placeholder:text-slate-600 focus:border-white/28 focus:outline-none transition-colors';
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
+    <div className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.03]">
 
-      {/* Summary row — always visible */}
+      {/* Collapsed summary */}
       <div className="p-5">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <span className="rounded-full border border-purple-500/25 bg-purple-500/15 px-3 py-1 text-[13px] font-bold text-purple-300">
-            Ready
-          </span>
-          <span className="shrink-0 rounded-full bg-white/6 px-3 py-1 text-[13px] text-slate-500">
-            {signal.category}
-          </span>
+        <div className="mb-1 flex items-center gap-2">
+          <span className="rounded-full bg-white/6 px-2.5 py-0.5 text-[12px] text-slate-500">{signal.category}</span>
+          <span className="text-[13px] text-slate-600">{signal.source_name}</span>
         </div>
-        <p className="mb-1.5 text-[17px] font-bold leading-snug text-white">{signal.title}</p>
-        <p className="mb-4 text-[14px] text-slate-500">{signal.source_name}</p>
-        <button onClick={onToggle} className={`${BTN_PREPARE}`}>
-          {isOpen ? 'Close Editor' : 'Prepare Thread'}
+        <p className="mb-4 text-[19px] font-bold leading-snug text-white">{signal.title}</p>
+        <button
+          onClick={onToggle}
+          className="flex w-full min-h-[56px] items-center justify-center rounded-2xl border border-purple-500/40 bg-purple-500/12 text-[18px] font-bold text-purple-200 transition-colors hover:bg-purple-500/22"
+        >
+          {isOpen ? 'Close Editor' : 'Open Publish Editor'}
         </button>
       </div>
 
-      {/* Inline thread composer */}
+      {/* Thread composer — TASK 4 */}
       {isOpen && (
         <div className="border-t border-white/8 p-5">
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
 
             <div>
-              <label className="mb-2 block text-[14px] font-semibold text-slate-400">Title</label>
+              <label className="mb-2 block text-[15px] font-semibold text-slate-300">Public Thread Title</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
             </div>
 
             <div>
-              <label className="mb-2 block text-[14px] font-semibold text-slate-400">Body</label>
+              <label className="mb-2 block text-[15px] font-semibold text-slate-300">Public Thread Body</label>
               <textarea
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 rows={8}
-                className={`${inputCls} resize-y leading-relaxed`}
+                className={`${inputCls} resize-y`}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-[14px] font-semibold text-slate-400">Category</label>
+              <label className="mb-2 block text-[15px] font-semibold text-slate-300">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
@@ -2349,7 +2306,7 @@ function ReadyCard({ signal, isOpen, isPublishing, onToggle, onPublish }: ReadyC
             </div>
 
             <div>
-              <label className="mb-2 block text-[14px] font-semibold text-slate-400">
+              <label className="mb-2 block text-[15px] font-semibold text-slate-300">
                 Tags <span className="font-normal text-slate-600">comma separated</span>
               </label>
               <input
@@ -2360,32 +2317,38 @@ function ReadyCard({ signal, isOpen, isPublishing, onToggle, onPublish }: ReadyC
               />
             </div>
 
-            {/* Publish preview — live preview of how thread appears publicly */}
+            {/* Evidence / source attribution — read-only */}
+            {(signal.attribution_text || signal.source_url) && (
+              <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+                <p className="mb-1.5 text-[12px] font-bold uppercase tracking-widest text-slate-600">Source Attribution</p>
+                {signal.attribution_text && (
+                  <p className="text-[15px] text-slate-400">{signal.attribution_text}</p>
+                )}
+                {signal.source_url && (
+                  <a href={signal.source_url} target="_blank" rel="noopener noreferrer"
+                    className="mt-1 block truncate text-[13px] text-slate-600 transition-colors hover:text-slate-400">
+                    {signal.source_url} ↗
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* Live public preview */}
             <div>
-              <p className="mb-2 text-[12px] font-semibold uppercase tracking-widest text-slate-600">
-                How it will appear on SWIM
+              <p className="mb-2 text-[14px] font-semibold text-slate-400">
+                This is what the public thread will look like:
               </p>
               <div className="rounded-xl border border-white/8 bg-black/25 p-4">
                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                  <span className="rounded-sm bg-emerald-500/18 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-400">
-                    RECOVERED
-                  </span>
-                  <span className="rounded-sm bg-white/6 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    {category}
-                  </span>
+                  <span className="rounded-sm bg-emerald-500/18 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-400">RECOVERED</span>
+                  <span className="rounded-sm bg-white/6 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{category}</span>
                 </div>
-                <p className="mb-1.5 text-[15px] font-bold leading-snug text-white">
-                  {title || 'Untitled Thread'}
-                </p>
-                <p className="mb-2.5 text-[13px] leading-relaxed text-slate-400 line-clamp-3">
-                  {body || 'No body text yet.'}
-                </p>
+                <p className="mb-1.5 text-[16px] font-bold leading-snug text-white">{title || 'Untitled Thread'}</p>
+                <p className="mb-2.5 text-[14px] leading-relaxed text-slate-400 line-clamp-3">{body || 'No body text yet.'}</p>
                 {tags.trim() && (
                   <div className="mb-2 flex flex-wrap gap-1">
                     {tags.split(',').map((t) => t.trim()).filter(Boolean).map((tag) => (
-                      <span key={tag} className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-slate-500">
-                        #{tag}
-                      </span>
+                      <span key={tag} className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-slate-500">#{tag}</span>
                     ))}
                   </div>
                 )}
@@ -2398,7 +2361,7 @@ function ReadyCard({ signal, isOpen, isPublishing, onToggle, onPublish }: ReadyC
             <button
               onClick={() => onPublish({ title, body, category, tags })}
               disabled={isPublishing || !title.trim() || !body.trim()}
-              className={`${BTN_PUBLISH}`}
+              className="flex w-full min-h-[60px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-[20px] font-bold text-black transition-all hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isPublishing ? <><Spinner /> Publishing…</> : 'Publish to SWIM'}
             </button>
