@@ -267,6 +267,136 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
+  // ── Phase J new sources ─────────────────────────────────────────────────
+  {
+    id: 'src-018',
+    name: 'r/AskReddit',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/AskReddit/',
+    description:
+      'Anomaly-adjacent threads only — "have you ever experienced something you cannot explain", unexplained events, paranormal encounters asked to a mass audience. Requires strict keyword filtering; volume is enormous.',
+    category_focus: ['Paranormal', 'Weird Encounters', 'Consciousness'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit u/[handle] on r/AskReddit with post date. Summarize top answers — do not reproduce full comment threads.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-019',
+    name: 'r/creepyencounters',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/creepyencounters/',
+    description:
+      'First-person accounts of unexplained, disturbing real-world encounters. High narrative density — strong signal for weird encounters and eyewitness-testimony categories.',
+    category_focus: ['Paranormal', 'Weird Encounters'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/creepyencounters with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-020',
+    name: 'r/BackwoodsCreepy',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/BackwoodsCreepy/',
+    description:
+      'Strange and unsettling encounters in wilderness and rural settings: unexplained lights, missing persons mysteries, impossible sounds, and encounters in the deep woods.',
+    category_focus: ['Paranormal', 'Weird Encounters', 'Hidden History'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/BackwoodsCreepy with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-021',
+    name: 'r/Humanoidencounters',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/Humanoidencounters/',
+    description:
+      'Personal accounts of encounters with non-human humanoid entities — from Bigfoot-type cryptids to interdimensional beings and UAP-associated non-human intelligences.',
+    category_focus: ['Paranormal', 'UFOs', 'Weird Encounters'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/Humanoidencounters with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-022',
+    name: 'r/cryptids',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/cryptids/',
+    description:
+      'Discussion and sighting reports of cryptid creatures: Bigfoot, Dogman, Mothman, lake monsters, and other unclassified entities. Mix of eyewitness accounts and analysis.',
+    category_focus: ['Paranormal', 'Weird Encounters'],
+    risk_level: 'low',
+    refresh_cadence: 'weekly',
+    attribution_rules:
+      'Credit u/[handle] on r/cryptids with post date. Summarize — do not reproduce full post.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-023',
+    name: 'r/UFOs',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/UFOs/',
+    description:
+      'UAP sighting reports, government disclosure developments, FOIA releases, and whistleblower accounts. Active community with high-signal threads around congressional hearings and NHI claims.',
+    category_focus: ['UFOs', 'Whistleblower Files', 'Government', 'Hidden History'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/UFOs with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-024',
+    name: 'r/aliens',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/aliens/',
+    description:
+      'Discussion of extraterrestrial and NHI phenomena: abduction accounts, contact experiences, hybridization claims, and UAP/NHI intersection. Higher noise-to-signal ratio than r/UFOs.',
+    category_focus: ['UFOs', 'Paranormal', 'Consciousness'],
+    risk_level: 'low',
+    refresh_cadence: 'weekly',
+    attribution_rules:
+      'Credit u/[handle] on r/aliens with post date. Summarize — do not reproduce full post.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-025',
+    name: 'r/Dreams',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/Dreams/',
+    description:
+      'Shared dream experiences with unusual content: precognitive dreams, recurring archetypes, entity contact in dreams, and anomalous dream phenomena that resist conventional explanation.',
+    category_focus: ['Consciousness', 'Paranormal', 'Spirituality'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/Dreams with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  // ── Legacy / high-risk sources ──────────────────────────────────────────
   {
     id: 'src-008',
     name: 'GodLike Productions',

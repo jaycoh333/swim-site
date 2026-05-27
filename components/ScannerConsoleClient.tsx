@@ -121,6 +121,10 @@ function sourceTypeBadgeCls(type: string): string {
   return map[type] ?? 'border-slate-500/20 bg-slate-500/6 text-slate-400';
 }
 
+function normalizeTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
 function sourceReliabilityLabel(sourceType: string): string {
   const map: Record<string, string> = {
     reddit:     'Community posts',
@@ -319,6 +323,9 @@ export function ScannerConsoleClient({
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
   const [showPresetTest,    setShowPresetTest]    = useState<boolean>(false);
+  const [activeTab,         setActiveTab]         = useState<'strong' | 'needs-review' | 'low-signal' | 'blocked'>('strong');
+  const [selectedUrls,      setSelectedUrls]      = useState<Set<string>>(new Set());
+  const [showSeen,          setShowSeen]          = useState<boolean>(false);
 
   // Review state
   const [reviewSignals,  setReviewSignals]  = useState<DbRecoveredSignal[]>(initialReviewSignals);
@@ -358,6 +365,13 @@ export function ScannerConsoleClient({
     }, 1800);
     return () => window.clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanPhase]);
+
+  useEffect(() => {
+    if (scanPhase === 'done') {
+      setActiveTab('strong');
+      setSelectedUrls(new Set());
+    }
   }, [scanPhase]);
 
   // ── Preset helpers ───────────────────────────────────────────────────────
@@ -954,18 +968,30 @@ export function ScannerConsoleClient({
               <p className="text-center text-[15px] text-slate-500">No results returned from sources.</p>
             )}
 
-            {/* Scan results — grouped by quality */}
+            {/* Scan results — tabbed */}
             {scanPhase === 'done' && scanResults.length > 0 && (() => {
-              // Build good results interleaved across sources so no single source dominates.
-              // Step 1: filter + sort within each source by finalPriorityScore
-              const validResults = [...scanResults].filter((r) => {
+              // ── Dedup by URL + normalized title across all results ──────────────────
+              const seenUrls   = new Set<string>();
+              const seenTitles = new Set<string>();
+              const dedupedResults = scanResults.filter((r) => {
+                if (r.status === 'error') return true;
+                const url = r.candidate.sourceUrl;
+                if (seenUrls.has(url)) return false;
+                seenUrls.add(url);
+                const norm = normalizeTitle(r.candidate.title);
+                if (seenTitles.has(norm)) return false;
+                seenTitles.add(norm);
+                return true;
+              });
+
+              // ── Strong candidates: filter + round-robin interleave ─────────────────
+              const validResults = [...dedupedResults].filter((r) => {
                 if (r.status === 'error') return false;
                 if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return false;
                 if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return false;
                 return true;
               });
 
-              // Group by sourceId, sorted by priority within each group
               const bySource = new Map<string, typeof validResults>();
               for (const r of validResults) {
                 if (!bySource.has(r.sourceId)) bySource.set(r.sourceId, []);
@@ -978,38 +1004,84 @@ export function ScannerConsoleClient({
                        - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
                 });
               }
-
-              // Step 2: round-robin interleave — pick highest-scoring remaining per source
               const buckets = [...bySource.values()];
               const goodResults: typeof validResults = [];
               let changed = true;
               while (changed) {
                 changed = false;
-                // Sort buckets by their current top candidate's score so best leads
                 buckets.sort((a, b) =>
                   ((b[0]?.status !== 'error' ? (b[0]?.candidate.finalPriorityScore ?? b[0]?.candidate.storyScore ?? 0) : 0))
                   - ((a[0]?.status !== 'error' ? (a[0]?.candidate.finalPriorityScore ?? a[0]?.candidate.storyScore ?? 0) : 0))
                 );
                 for (const bucket of buckets) {
-                  if (bucket.length > 0) {
-                    goodResults.push(bucket.shift()!);
-                    changed = true;
-                  }
+                  if (bucket.length > 0) { goodResults.push(bucket.shift()!); changed = true; }
                 }
               }
-              const lowQualResults = scanResults.filter((r) => {
-                if (r.status === 'error') return true;
-                if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return true;
-                if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return true;
-                return false;
-              });
-              const needsReview = lowQualResults.filter((r) => r.status !== 'error' && !r.candidate.isIndexPage && !r.candidate.badCandidateReason);
-              const queuedCnt   = [...candStates.values()].filter((s) => s.action === 'queued').length;
-              const skippedCnt  = [...candStates.values()].filter((s) => s.action === 'skipped').length;
-              const blockedCnt  = scanResults.filter((r) => r.status === 'error' && r.error.includes('blocked')).length;
-              const dupCnt      = scanResults.filter((r) => r.status === 'duplicate').length;
-              const sourcesScanned    = new Set(scanResults.map((r) => r.sourceId)).size;
-              const candidatesFetched = scanResults.filter((r) => r.status !== 'error').length;
+
+              // ── Other categories ──────────────────────────────────────────────────
+              const needsReview      = dedupedResults.filter((r) =>
+                r.status !== 'error' && !r.candidate.isIndexPage && !r.candidate.badCandidateReason &&
+                (r.candidate.storyScore == null || r.candidate.storyScore < 8)
+              );
+              const lowSignalResults = dedupedResults.filter((r) =>
+                r.status !== 'error' && (r.candidate.isIndexPage || !!r.candidate.badCandidateReason)
+              );
+              const errorResults     = dedupedResults.filter((r) => r.status === 'error');
+
+              // ── "Show seen" filter ────────────────────────────────────────────────
+              function filterSeen<T extends SessionSourceResult>(arr: T[]): T[] {
+                if (showSeen) return arr;
+                return arr.filter((r) => {
+                  if (r.status === 'error') return true;
+                  const st = candStates.get(r.candidate.sourceUrl);
+                  return !st || (st.action !== 'queued' && st.action !== 'skipped');
+                });
+              }
+              const visibleGood   = filterSeen(goodResults);
+              const visibleReview = filterSeen(needsReview);
+              const visibleLow    = filterSeen(lowSignalResults);
+              const visibleErrors = filterSeen(errorResults);
+
+              // ── Derived counts ────────────────────────────────────────────────────
+              const queuedCnt       = [...candStates.values()].filter((s) => s.action === 'queued').length;
+              const blockedCnt      = errorResults.filter((r) => r.status === 'error' && r.error.includes('blocked')).length;
+              const dupCnt          = scanResults.filter((r) => r.status === 'duplicate').length;
+              const sourcesScanned  = new Set(scanResults.map((r) => r.sourceId)).size;
+              const candidatesFetched = dedupedResults.filter((r) => r.status !== 'error').length;
+
+              // Aliases for backward compat with any remaining legacy references
+              const lowQualResults = [...lowSignalResults, ...errorResults, ...needsReview];
+              const skippedCnt     = [...candStates.values()].filter((s) => s.action === 'skipped').length;
+              void skippedCnt; // suppress unused warning
+
+              // ── Bulk queue (runs sequentially, one at a time) ─────────────────────
+              async function bulkQueue() {
+                const toQueue = goodResults.filter(
+                  (r) => r.status !== 'error' && selectedUrls.has(r.candidate.sourceUrl)
+                );
+                for (const result of toQueue) await handleQueueCandidate(result);
+                setSelectedUrls(new Set());
+              }
+
+              // Tab data
+              const TABS = [
+                { id: 'strong'        as const, label: 'Strong',    count: goodResults.length,      color: 'emerald' },
+                { id: 'needs-review'  as const, label: 'Needs Review', count: needsReview.length,   color: 'amber'   },
+                { id: 'low-signal'    as const, label: 'Low Signal',count: lowSignalResults.length, color: 'slate'   },
+                { id: 'blocked'       as const, label: 'Blocked',   count: errorResults.length,     color: 'red'     },
+              ] as const;
+              const TAB_COLOR_ACTIVE: Record<string, string> = {
+                emerald: 'bg-emerald-500/18 text-emerald-300 border-emerald-500/30',
+                amber:   'bg-amber-500/18   text-amber-300   border-amber-500/30',
+                slate:   'bg-slate-500/18   text-slate-300   border-slate-500/30',
+                red:     'bg-red-500/18     text-red-300     border-red-500/30',
+              };
+              const TAB_BADGE_ACTIVE: Record<string, string> = {
+                emerald: 'bg-emerald-500/25 text-emerald-300',
+                amber:   'bg-amber-500/25   text-amber-300',
+                slate:   'bg-slate-500/20   text-slate-400',
+                red:     'bg-red-500/25     text-red-300',
+              };
 
               return (
                 <div className="flex flex-col gap-4">
@@ -1022,8 +1094,8 @@ export function ScannerConsoleClient({
                       { label: 'Strong',     value: goodResults.length, color: goodResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
                       { label: 'Queued',     value: queuedCnt,          color: queuedCnt > 0 ? 'text-emerald-400' : 'text-slate-600' },
                       { label: 'Duplicates', value: dupCnt,             color: dupCnt > 0 ? 'text-amber-400' : 'text-slate-600' },
-                      { label: 'Low/Blocked', value: lowQualResults.length + skippedCnt,
-                                                                         color: lowQualResults.length + skippedCnt > 0 ? 'text-slate-500' : 'text-slate-600' },
+                      { label: 'Low/Err', value: lowSignalResults.length + errorResults.length,
+                                                                         color: (lowSignalResults.length + errorResults.length) > 0 ? 'text-slate-500' : 'text-slate-600' },
                     ].map(({ label, value, color }) => (
                       <div key={label} className="rounded-xl border border-white/8 bg-white/[0.02] px-2 py-2.5 text-center">
                         <div className={`font-mono text-[20px] font-bold tabular-nums ${color}`}>{value}</div>
@@ -1032,463 +1104,469 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
-                  {/* ── Needs Review — low score but valid story posts ── */}
-                  {(() => {
-                    if (!needsReview.length) return null;
-                    return (
-                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04]">
+                  {/* ── Tab strip ── */}
+                  <div className="flex gap-1 overflow-x-auto rounded-xl border border-white/8 bg-white/[0.02] p-1">
+                    {TABS.map(({ id, label, count, color }) => {
+                      const isActive = activeTab === id;
+                      return (
                         <button
-                          className="flex w-full items-center justify-between px-4 py-3 text-left"
-                          onClick={() => setLowQualityOpen((v) => !v)}
+                          key={id}
+                          onClick={() => setActiveTab(id)}
+                          className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-semibold whitespace-nowrap transition-all ${
+                            isActive ? TAB_COLOR_ACTIVE[color] : 'border-transparent text-slate-600 hover:text-slate-400'
+                          }`}
                         >
-                          <span className="text-[12px] font-semibold uppercase tracking-widest text-amber-500/70">
-                            Needs Review · {needsReview.length} low-signal
-                          </span>
-                          <span className="text-[11px] text-amber-500/50">{lowQualityOpen ? '▲' : '▼'} Low confidence — curator review required</span>
+                          {label}
+                          {count > 0 && (
+                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                              isActive ? TAB_BADGE_ACTIVE[color] : 'bg-white/5 text-slate-700'
+                            }`}>{count}</span>
+                          )}
                         </button>
-                        {lowQualityOpen && (
-                          <div className="flex flex-col gap-2 border-t border-amber-500/12 px-4 pb-4 pt-3">
-                            {needsReview.map((result) => {
+                      );
+                    })}
+                  </div>
+
+                  {/* ── Bulk action bar (strong tab only) ── */}
+                  {activeTab === 'strong' && goodResults.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+                      <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-500">
+                        <input
+                          type="checkbox"
+                          checked={selectedUrls.size > 0 && goodResults.filter((r) => r.status !== 'error').every((r) => selectedUrls.has(r.candidate.sourceUrl))}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedUrls(new Set(goodResults.filter((r) => r.status !== 'error').map((r) => r.candidate.sourceUrl)));
+                            } else {
+                              setSelectedUrls(new Set());
+                            }
+                          }}
+                          className="h-3.5 w-3.5 accent-emerald-400"
+                        />
+                        Select all
+                      </label>
+                      {selectedUrls.size > 0 && (
+                        <>
+                          <span className="text-[12px] text-slate-600">{selectedUrls.size} selected</span>
+                          <button
+                            onClick={bulkQueue}
+                            className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/18"
+                          >
+                            Queue selected
+                          </button>
+                          <button
+                            onClick={() => { for (const url of selectedUrls) handleSkip(url); setSelectedUrls(new Set()); }}
+                            className="rounded-lg border border-slate-500/25 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06]"
+                          >
+                            Skip selected
+                          </button>
+                        </>
+                      )}
+                      <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={showSeen}
+                          onChange={(e) => setShowSeen(e.target.checked)}
+                          className="h-3.5 w-3.5 accent-slate-400"
+                        />
+                        Show queued/skipped
+                      </label>
+                    </div>
+                  )}
+
+                  {/* ── STRONG TAB ── */}
+                  {activeTab === 'strong' && (() => {
+                    if (visibleGood.length === 0) {
+                      const promoted = visibleReview.slice(0, 5);
+                      if (promoted.length > 0) {
+                        return (
+                          <div className="flex flex-col gap-3">
+                            <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-2.5">
+                              <span className="text-[13px] font-semibold text-amber-400/80">Human Review Required</span>
+                              <span className="ml-auto text-[12px] text-amber-400/50">No strong candidates — promoting {promoted.length} low-signal results</span>
+                            </div>
+                            {promoted.map((result) => {
                               if (result.status === 'error') return null;
                               const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
                               return (
-                                <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
-                                  <div className="mb-1 flex items-start justify-between gap-2">
-                                    <p className="text-[15px] font-semibold leading-snug text-slate-300">{result.candidate.title}</p>
-                                    {result.candidate.storyScore != null && (
-                                      <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[12px] font-bold text-amber-400">{result.candidate.storyScore}pts</span>
-                                    )}
-                                  </div>
-                                  <p className="mb-2 text-[13px] text-slate-600">{result.sourceName} · {result.candidate.sourceType}</p>
-                                  <p className="mb-3 text-[14px] leading-relaxed text-slate-500 line-clamp-2">{result.candidate.summary}</p>
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      disabled={st.action === 'queueing' || st.action === 'queued'}
-                                      onClick={() => handleQueueCandidate(result)}
-                                      className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-400 disabled:opacity-40 hover:border-amber-500/50"
-                                    >
-                                      {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : '⚠ Queue (low confidence)'}
-                                    </button>
-                                    <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-600 hover:text-slate-400">
-                                      source ↗
+                                <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-amber-500/15 bg-white/[0.03]">
+                                  <div className="p-5">
+                                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                                      {result.candidate.sourceType && (
+                                        <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                          {result.candidate.sourceType.toUpperCase()}
+                                        </span>
+                                      )}
+                                      <span className="text-[13px] font-semibold text-slate-400">{result.sourceName}</span>
+                                      <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold text-amber-400">low-signal</span>
+                                      {result.candidate.storyScore != null && (
+                                        <span className="ml-auto rounded-full bg-white/[0.04] px-2 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">{result.candidate.storyScore}pts</span>
+                                      )}
+                                    </div>
+                                    <p className="mb-2 text-[20px] font-bold leading-snug text-white">{result.candidate.title}</p>
+                                    <div className="mb-3 rounded-xl border-l-2 border-amber-500/20 bg-white/[0.025] px-4 py-3">
+                                      <p className="text-[17px] leading-relaxed text-slate-300 line-clamp-4">{result.candidate.summary}</p>
+                                    </div>
+                                    <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                      className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:text-slate-300">
+                                      <span className="text-[10px] text-slate-600">SOURCE</span>
+                                      <span className="truncate">{result.candidate.sourceUrl}</span>
+                                      <span className="ml-auto shrink-0">↗</span>
                                     </a>
+                                    {st.action === 'idle' && (
+                                      <div className="flex gap-2">
+                                        <button onClick={() => handleQueueCandidate(result)}
+                                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/12 text-[17px] font-bold text-amber-300 transition-colors hover:bg-amber-500/22">
+                                          ⚠ Queue (low confidence)
+                                        </button>
+                                        <button onClick={() => handleSkip(result.candidate.sourceUrl)}
+                                          className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] text-slate-400 hover:bg-white/10">
+                                          Skip
+                                        </button>
+                                      </div>
+                                    )}
+                                    {st.action === 'queueing' && <div className="flex min-h-[52px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400"><Spinner /> Queueing…</div>}
+                                    {st.action === 'queued'   && <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4 text-[17px] font-bold text-emerald-300">✓ Queued for Review</p>}
+                                    {st.action === 'skipped'  && <p className="text-[14px] text-slate-700">Skipped</p>}
                                   </div>
                                 </div>
                               );
                             })}
                           </div>
-                        )}
+                        );
+                      }
+                      return (
+                        <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-8 text-center">
+                          <p className="text-[17px] font-semibold text-slate-500">No strong story candidates found</p>
+                          <p className="mt-1.5 text-[14px] leading-relaxed text-slate-600">
+                            {blockedCnt > 0
+                              ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked. Fix source types or use Discover Links.`
+                              : 'All results were weak or index pages. Try a different preset or add more sources.'}
+                          </p>
+                          <a href="/scanner/sources"
+                            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-4 py-2 text-[13px] font-semibold uppercase tracking-widest text-emerald-400 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/14">
+                            + Add more sources
+                          </a>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="flex flex-col gap-3">
+                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-500">
+                          Strong Candidates · {visibleGood.length}{visibleGood.length < goodResults.length ? ` of ${goodResults.length}` : ''}
+                        </p>
+                        {visibleGood.map((result) => {
+                          if (result.status === 'error') return null;
+                          const st        = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                          const analysis  = generateSignalAnalysis(result.candidate);
+                          const isSelected = selectedUrls.has(result.candidate.sourceUrl);
+                          const clusterLabel = clusterMap.get(result.candidate.sourceUrl);
+                          const relatedUrls  = clusterLabel
+                            ? (clusterList.find((c) => c.label === clusterLabel)?.candidateUrls ?? [])
+                                .filter((u) => u !== result.candidate.sourceUrl)
+                            : [];
+                          const relatedResults = relatedUrls
+                            .map((u) => candidatesByUrl.get(u))
+                            .filter((r): r is SessionSourceResult => !!r && r.status !== 'error')
+                            .slice(0, 3);
+                          return (
+                            <div key={result.candidate.sourceUrl} className={`overflow-hidden rounded-2xl border transition-all hover:border-white/20 hover:bg-white/[0.055] ${
+                              isSelected ? 'border-emerald-500/35 bg-emerald-500/[0.04]' : 'border-white/12 bg-white/[0.04]'
+                            }`}>
+                              {result.candidate.sourceImageUrl && (
+                                <div className="relative h-44 w-full overflow-hidden bg-slate-900/60">
+                                  <img src={result.candidate.sourceImageUrl} alt="" className="h-full w-full object-cover opacity-70" />
+                                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+                                  {result.candidate.sourceType && (
+                                    <div className="absolute bottom-2.5 left-3">
+                                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold backdrop-blur-sm ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                        {result.candidate.sourceType}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              <div className="p-5">
+                                {/* Source header + checkbox */}
+                                <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(e) => setSelectedUrls((prev) => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.add(result.candidate.sourceUrl);
+                                      else next.delete(result.candidate.sourceUrl);
+                                      return next;
+                                    })}
+                                    className="h-3.5 w-3.5 shrink-0 accent-emerald-400"
+                                  />
+                                  {result.candidate.sourceType && (
+                                    <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                      {result.candidate.sourceType.toUpperCase()}
+                                    </span>
+                                  )}
+                                  <span className="text-[15px] font-semibold text-slate-400">{result.sourceName}</span>
+                                  {(() => {
+                                    const h = healthMap.get(result.sourceId);
+                                    if (!h || h.status === 'unknown') return null;
+                                    return (
+                                      <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(h.status)}`}>
+                                        {HEALTH_LABELS[h.status]}
+                                      </span>
+                                    );
+                                  })()}
+                                  {result.candidate.passReason && (
+                                    <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-0.5 text-[11px] text-emerald-400/70">
+                                      ✓ {result.candidate.passReason}
+                                    </span>
+                                  )}
+                                  {result.status === 'duplicate' && (
+                                    <span className="rounded-full border border-amber-500/25 bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold text-amber-400">
+                                      ⚠ duplicate
+                                    </span>
+                                  )}
+                                  <div className="ml-auto flex items-center gap-1.5">
+                                    {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
+                                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score">
+                                        P{result.candidate.finalPriorityScore}
+                                      </span>
+                                    )}
+                                    {result.candidate.storyScore != null && (
+                                      <span className="rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
+                                        {result.candidate.storyScore}pts
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                {/* Title */}
+                                <p className="mb-1.5 text-[24px] font-bold leading-snug text-white">{result.candidate.title}</p>
+                                {/* Why surfaced — prominent */}
+                                {analysis.surfacedBecause && (
+                                  <p className="mb-2 text-[13px] leading-snug text-emerald-400/65">{analysis.surfacedBecause}</p>
+                                )}
+                                <StoryTimeline phase="recovered" />
+                                {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
+                                  clusterLabel || (result.candidate.corroborationScore ?? 0) > 0) && (
+                                  <div className="mb-3 flex flex-wrap gap-1">
+                                    {result.candidate.storySignals?.map((sig) => (
+                                      <span key={sig} className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65">{sig}</span>
+                                    ))}
+                                    {clusterLabel && (
+                                      <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">⬡ {clusterLabel}</span>
+                                    )}
+                                    {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
+                                      <span className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80" title={result.candidate.corroborationNotes?.join(', ')}>
+                                        ⟳ {result.candidate.corroborationScore} corroboration
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                <SignalAnalysisBlock analysis={analysis} />
+                                <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
+                                  <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-5">{result.candidate.summary}</p>
+                                </div>
+                                <EvidenceBlock candidate={result.candidate} />
+                                {relatedResults.length > 0 && (
+                                  <div className="mb-3">
+                                    <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Related recovered signals · cluster: {clusterLabel}</p>
+                                    <div className="flex flex-col gap-1.5">
+                                      {relatedResults.map((rel) => {
+                                        if (rel.status === 'error') return null;
+                                        return (
+                                          <div key={rel.candidate.sourceUrl} className="flex items-start gap-2 rounded-lg border border-violet-500/12 bg-violet-500/[0.03] px-3 py-2">
+                                            {rel.candidate.sourceType && (
+                                              <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${sourceTypeBadgeCls(rel.candidate.sourceType)}`}>
+                                                {rel.candidate.sourceType.slice(0, 3).toUpperCase()}
+                                              </span>
+                                            )}
+                                            <div className="min-w-0">
+                                              <p className="text-[13px] font-semibold leading-snug text-slate-400 line-clamp-1">{rel.candidate.title}</p>
+                                              <p className="text-[11px] text-slate-600">{rel.sourceName}</p>
+                                            </div>
+                                            {rel.candidate.storyScore != null && (
+                                              <span className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-700">{rel.candidate.storyScore}pts</span>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                                <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                  className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300">
+                                  <span className="text-[10px] text-slate-600">SOURCE</span>
+                                  <span className="truncate">{result.candidate.sourceUrl}</span>
+                                  <span className="ml-auto shrink-0 text-[14px]">↗</span>
+                                </a>
+                                {result.candidate.extractionConfidence !== 'high' && st.action === 'idle' && (
+                                  <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] ${
+                                    result.candidate.extractionConfidence === 'low' ? 'bg-red-500/8 text-red-400/65' : 'bg-amber-500/8 text-amber-400/65'
+                                  }`}>
+                                    {result.candidate.extractionConfidence} confidence{result.candidate.extractionConfidence === 'low' && ' — edit before queueing'}
+                                  </div>
+                                )}
+                                {st.action === 'idle' && (
+                                  <div className="flex flex-wrap gap-2">
+                                    <button onClick={() => handleQueueCandidate(result)}
+                                      className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400">
+                                      Queue This Story
+                                    </button>
+                                    <button onClick={() => handleSkip(result.candidate.sourceUrl)}
+                                      className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
+                                      Skip
+                                    </button>
+                                  </div>
+                                )}
+                                {st.action === 'queueing' && (
+                                  <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400">
+                                    <Spinner /> Queueing…
+                                  </div>
+                                )}
+                                {st.action === 'queued' && (
+                                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4">
+                                    <p className="mb-1 text-[18px] font-bold text-emerald-300">✓ Queued for Review</p>
+                                    <p className="mb-3 text-[14px] text-emerald-400/60">Review it in column 2 → approve to publish.</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      <a href="/scanner/queue" className="flex min-h-[46px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[14px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
+                                        Open Review Queue →
+                                      </a>
+                                      <button onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.candidate.sourceUrl); return next; })}
+                                        className="flex min-h-[46px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] text-slate-400 transition-colors hover:bg-white/[0.07]">
+                                        Continue Scanning
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                {st.action === 'skipped' && <p className="text-[14px] text-slate-700">Skipped — story hidden</p>}
+                                {st.action === 'error' && (
+                                  <div className="rounded-xl border border-red-500/35 bg-red-500/10 p-4">
+                                    <p className="mb-1 text-[16px] font-bold text-red-300">Queue Failed</p>
+                                    <p className="text-[15px] text-red-200">{st.error}</p>
+                                    {st.error?.includes('Missing Supabase column') && (
+                                      <p className="mt-2 text-[13px] text-red-400/55">Run the recovered_signals migration to add the missing column.</p>
+                                    )}
+                                    {st.error?.includes('index or navigation page') && (
+                                      <p className="mt-2 text-[13px] text-red-400/55">Use Discover Links to find specific story URLs.</p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
                   })()}
 
-                  {/* ── Good candidates — or promoted low-signal fallback (TASK 5) ── */}
-                  {goodResults.length === 0 ? (() => {
-                    const promoted = needsReview.slice(0, 5);
-                    if (promoted.length > 0) {
-                      return (
-                        <div className="flex flex-col gap-3">
-                          <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-2.5">
-                            <span className="text-[13px] font-semibold text-amber-400/80">Human Review Required</span>
-                            <span className="ml-auto text-[12px] text-amber-400/50">No strong candidates — promoting {promoted.length} low-signal results</span>
-                          </div>
-                          {promoted.map((result) => {
-                            if (result.status === 'error') return null;
-                            const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
-                            return (
-                              <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-amber-500/15 bg-white/[0.03]">
-                                <div className="p-5">
-                                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                                    {result.candidate.sourceType && (
-                                      <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
-                                        {result.candidate.sourceType.toUpperCase()}
-                                      </span>
-                                    )}
-                                    <span className="text-[13px] font-semibold text-slate-400">{result.sourceName}</span>
-                                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold text-amber-400">low-signal</span>
-                                    {result.candidate.storyScore != null && (
-                                      <span className="ml-auto rounded-full bg-white/[0.04] px-2 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">{result.candidate.storyScore}pts</span>
-                                    )}
-                                  </div>
-                                  <p className="mb-2 text-[20px] font-bold leading-snug text-white">{result.candidate.title}</p>
-                                  <div className="mb-3 rounded-xl border-l-2 border-amber-500/20 bg-white/[0.025] px-4 py-3">
-                                    <p className="text-[17px] leading-relaxed text-slate-300 line-clamp-4">{result.candidate.summary}</p>
-                                  </div>
-                                  <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
-                                    className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:text-slate-300">
-                                    <span className="text-[10px] text-slate-600">SOURCE</span>
-                                    <span className="truncate">{result.candidate.sourceUrl}</span>
-                                    <span className="ml-auto shrink-0">↗</span>
-                                  </a>
-                                  {st.action === 'idle' && (
-                                    <div className="flex gap-2">
-                                      <button onClick={() => handleQueueCandidate(result)}
-                                        className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/12 text-[17px] font-bold text-amber-300 transition-colors hover:bg-amber-500/22">
-                                        ⚠ Queue (low confidence)
-                                      </button>
-                                      <button onClick={() => handleSkip(result.candidate.sourceUrl)}
-                                        className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] text-slate-400 hover:bg-white/10">
-                                        Skip
-                                      </button>
-                                    </div>
-                                  )}
-                                  {st.action === 'queueing' && <div className="flex min-h-[52px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400"><Spinner /> Queueing…</div>}
-                                  {st.action === 'queued' && <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4 text-[17px] font-bold text-emerald-300">✓ Queued for Review</p>}
-                                  {st.action === 'skipped' && <p className="text-[14px] text-slate-700">Skipped</p>}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    }
-                    // Nothing at all to show
-                    return (
-                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-8 text-center">
-                        <p className="text-[17px] font-semibold text-slate-500">No story candidates found</p>
-                        <p className="mt-1.5 text-[14px] leading-relaxed text-slate-600">
-                          {blockedCnt > 0
-                            ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked. Fix source types or use Discover Links.`
-                            : 'All results were weak, index pages, or blocked. Try a different preset or add more sources.'}
-                        </p>
-                        <a href="/scanner/sources"
-                          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-4 py-2 text-[13px] font-semibold uppercase tracking-widest text-emerald-400 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/14">
-                          + Add more sources
-                        </a>
+                  {/* ── NEEDS REVIEW TAB ── */}
+                  {activeTab === 'needs-review' && (
+                    visibleReview.length === 0 ? (
+                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
+                        <p className="text-[15px] text-slate-500">No items needing review.</p>
                       </div>
-                    );
-                  })() : (
-                    <div className="flex flex-col gap-3">
-                      <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-500">
-                        Stories Found · {goodResults.length}
-                      </p>
-
-                      {goodResults.map((result) => {
-                        if (result.status === 'error') return null;
-                        const st       = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
-                        const analysis = generateSignalAnalysis(result.candidate);
-
-                        // Related cluster signals — other candidates sharing this cluster
-                        const clusterLabel = clusterMap.get(result.candidate.sourceUrl);
-                        const relatedUrls  = clusterLabel
-                          ? (clusterList.find((c) => c.label === clusterLabel)?.candidateUrls ?? [])
-                              .filter((u) => u !== result.candidate.sourceUrl)
-                          : [];
-                        const relatedResults = relatedUrls
-                          .map((u) => candidatesByUrl.get(u))
-                          .filter((r): r is SessionSourceResult => !!r && r.status !== 'error')
-                          .slice(0, 3);
-
-                        return (
-                          <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04] transition-all hover:border-white/20 hover:bg-white/[0.055]">
-
-                            {/* Evidence image — dominant visual, full bleed */}
-                            {result.candidate.sourceImageUrl && (
-                              <div className="relative h-44 w-full overflow-hidden bg-slate-900/60">
-                                <img
-                                  src={result.candidate.sourceImageUrl}
-                                  alt=""
-                                  className="h-full w-full object-cover opacity-70"
-                                />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-                                {result.candidate.sourceType && (
-                                  <div className="absolute bottom-2.5 left-3">
-                                    <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold backdrop-blur-sm ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
-                                      {result.candidate.sourceType}
-                                    </span>
-                                  </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Low score — valid posts · {visibleReview.length}</p>
+                        {visibleReview.map((result) => {
+                          if (result.status === 'error') return null;
+                          const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                          return (
+                            <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+                              <div className="mb-1 flex items-start justify-between gap-2">
+                                <p className="text-[15px] font-semibold leading-snug text-slate-300">{result.candidate.title}</p>
+                                {result.candidate.storyScore != null && (
+                                  <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[12px] font-bold text-amber-400">{result.candidate.storyScore}pts</span>
                                 )}
                               </div>
-                            )}
-
-                            <div className="p-5">
-
-                              {/* Source header */}
-                              <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
-                                {result.candidate.sourceType && (
-                                  <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
-                                    {result.candidate.sourceType.toUpperCase()}
-                                  </span>
-                                )}
-                                <span className="text-[15px] font-semibold text-slate-400">
-                                  {result.sourceName}
-                                </span>
-                                {(() => {
-                                  const h = healthMap.get(result.sourceId);
-                                  if (!h || h.status === 'unknown') return null;
-                                  return (
-                                    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(h.status)}`}>
-                                      {HEALTH_LABELS[h.status]}
-                                    </span>
-                                  );
-                                })()}
-                                {result.candidate.passReason && (
-                                  <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-0.5 text-[11px] text-emerald-400/70">
-                                    ✓ {result.candidate.passReason}
-                                  </span>
-                                )}
-                                {result.status === 'duplicate' && (
-                                  <span className="rounded-full border border-amber-500/25 bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold text-amber-400">
-                                    ⚠ duplicate
-                                  </span>
-                                )}
-                                <div className="ml-auto flex items-center gap-1.5">
-                                  {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
-                                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score">
-                                      P{result.candidate.finalPriorityScore}
-                                    </span>
-                                  )}
-                                  {result.candidate.storyScore != null && (
-                                    <span className="rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
-                                      {result.candidate.storyScore}pts
-                                    </span>
-                                  )}
-                                </div>
+                              <p className="mb-2 text-[13px] text-slate-600">{result.sourceName} · {result.candidate.sourceType}</p>
+                              <p className="mb-3 text-[14px] leading-relaxed text-slate-500 line-clamp-2">{result.candidate.summary}</p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  disabled={st.action === 'queueing' || st.action === 'queued'}
+                                  onClick={() => handleQueueCandidate(result)}
+                                  className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-400 disabled:opacity-40 hover:border-amber-500/50"
+                                >
+                                  {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : '⚠ Queue (low confidence)'}
+                                </button>
+                                <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-600 hover:text-slate-400">
+                                  source ↗
+                                </a>
                               </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
 
-                              {/* Title — large */}
-                              <p className="mb-2 text-[24px] font-bold leading-snug text-white">
-                                {result.candidate.title}
-                              </p>
-
-                              {/* Story timeline */}
-                              <StoryTimeline phase="recovered" />
-
-                              {/* Story signal badges + cluster + corroboration */}
-                              {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
-                                clusterLabel ||
-                                (result.candidate.corroborationScore ?? 0) > 0) && (
-                                <div className="mb-3 flex flex-wrap gap-1">
-                                  {result.candidate.storySignals?.map((sig) => (
-                                    <span
-                                      key={sig}
-                                      className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65"
-                                    >
-                                      {sig}
-                                    </span>
-                                  ))}
-                                  {clusterLabel && (
-                                    <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">
-                                      ⬡ {clusterLabel}
-                                    </span>
-                                  )}
-                                  {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
-                                    <span
-                                      className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80"
-                                      title={result.candidate.corroborationNotes?.join(', ')}
-                                    >
-                                      ⟳ {result.candidate.corroborationScore} corroboration
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Signal analysis block */}
-                              <SignalAnalysisBlock analysis={analysis} />
-
-                              {/* Quote-style excerpt panel */}
-                              <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
-                                <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-5">
-                                  {result.candidate.summary}
+                  {/* ── LOW SIGNAL TAB ── */}
+                  {activeTab === 'low-signal' && (
+                    visibleLow.length === 0 ? (
+                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
+                        <p className="text-[15px] text-slate-500">No low-signal results.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Low Signal · {visibleLow.length}</p>
+                        {visibleLow.map((result) => {
+                          if (result.status === 'error') return null;
+                          const debugReason = result.candidate.badCandidateReason
+                            ?? (result.candidate.isIndexPage ? 'Homepage or index page — no story links found' : 'Did not pass quality filter');
+                          return (
+                            <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
+                              <div className="mb-1 flex items-start justify-between gap-2">
+                                <p className="text-[13px] font-semibold leading-snug text-slate-500">
+                                  {result.candidate.title.slice(0, 70)}{result.candidate.title.length > 70 ? '…' : ''}
                                 </p>
+                                {result.candidate.isIndexPage && (
+                                  <span className="shrink-0 rounded-full border border-amber-500/18 bg-amber-500/7 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/60">index</span>
+                                )}
                               </div>
+                              <p className="text-[12px] text-amber-400/50">{debugReason}</p>
+                              <p className="mt-0.5 text-[11px] text-slate-700">
+                                {result.candidate.storyScore != null ? `score: ${result.candidate.storyScore}pts · ` : ''}{result.sourceName}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
 
-                              {/* Evidence block — source-type-specific metadata */}
-                              <EvidenceBlock candidate={result.candidate} />
-
-                              {/* Related signals in same cluster */}
-                              {relatedResults.length > 0 && (
-                                <div className="mb-3">
-                                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">
-                                    Related recovered signals · cluster: {clusterLabel}
-                                  </p>
-                                  <div className="flex flex-col gap-1.5">
-                                    {relatedResults.map((rel) => {
-                                      if (rel.status === 'error') return null;
-                                      return (
-                                        <div key={rel.candidate.sourceUrl} className="flex items-start gap-2 rounded-lg border border-violet-500/12 bg-violet-500/[0.03] px-3 py-2">
-                                          {rel.candidate.sourceType && (
-                                            <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${sourceTypeBadgeCls(rel.candidate.sourceType)}`}>
-                                              {rel.candidate.sourceType.slice(0, 3).toUpperCase()}
-                                            </span>
-                                          )}
-                                          <div className="min-w-0">
-                                            <p className="text-[13px] font-semibold leading-snug text-slate-400 line-clamp-1">
-                                              {rel.candidate.title}
-                                            </p>
-                                            <p className="text-[11px] text-slate-600">{rel.sourceName}</p>
-                                          </div>
-                                          {rel.candidate.storyScore != null && (
-                                            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-700">
-                                              {rel.candidate.storyScore}pts
-                                            </span>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
+                  {/* ── BLOCKED/FAILED TAB ── */}
+                  {activeTab === 'blocked' && (
+                    visibleErrors.length === 0 ? (
+                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
+                        <p className="text-[15px] text-slate-500">No blocked or failed sources.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Blocked / Failed · {visibleErrors.length}</p>
+                        {visibleErrors.map((result, idx) => {
+                          if (result.status !== 'error') return null;
+                          const isBlocked = result.error.includes('blocked direct fetch');
+                          return (
+                            <div key={`${result.sourceId}-err-${idx}`} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
+                              <p className="mb-0.5 text-[13px] font-semibold text-slate-500">{result.sourceName}</p>
+                              {isBlocked ? (
+                                <>
+                                  <p className="mb-2 text-[12px] text-amber-400/60">Blocked — use Discover Links or fix source type</p>
+                                  <div className="flex gap-3">
+                                    <a href="/scanner/sources" className="text-[12px] text-amber-400/60 underline-offset-2 hover:underline">Try Discovery</a>
+                                    <a href="/scanner/sources" className="text-[12px] text-slate-600 underline-offset-2 hover:underline">Edit Source</a>
                                   </div>
-                                </div>
-                              )}
-
-                              {/* Source URL button */}
-                              <a
-                                href={result.candidate.sourceUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300"
-                              >
-                                <span className="text-[10px] text-slate-600">SOURCE</span>
-                                <span className="truncate">{result.candidate.sourceUrl}</span>
-                                <span className="ml-auto shrink-0 text-[14px]">↗</span>
-                              </a>
-
-                              {/* Low/medium confidence notice */}
-                              {result.candidate.extractionConfidence !== 'high' && st.action === 'idle' && (
-                                <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] ${
-                                  result.candidate.extractionConfidence === 'low'
-                                    ? 'bg-red-500/8 text-red-400/65'
-                                    : 'bg-amber-500/8 text-amber-400/65'
-                                }`}>
-                                  {result.candidate.extractionConfidence} confidence
-                                  {result.candidate.extractionConfidence === 'low' && ' — edit before queueing'}
-                                </div>
-                              )}
-
-                              {/* Actions */}
-                              {st.action === 'idle' && (
-                                <div className="flex flex-wrap gap-2">
-                                  <button
-                                    onClick={() => handleQueueCandidate(result)}
-                                    className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400"
-                                  >
-                                    Queue This Story
-                                  </button>
-                                  <button
-                                    onClick={() => handleSkip(result.candidate.sourceUrl)}
-                                    className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
-                                  >
-                                    Skip
-                                  </button>
-                                </div>
-                              )}
-                              {st.action === 'queueing' && (
-                                <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400">
-                                  <Spinner /> Queueing…
-                                </div>
-                              )}
-                              {st.action === 'queued' && (
-                                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4">
-                                  <p className="mb-1 text-[18px] font-bold text-emerald-300">✓ Queued for Review</p>
-                                  <p className="mb-3 text-[14px] text-emerald-400/60">Review it in column 2 → approve to publish.</p>
-                                  <div className="flex flex-wrap gap-2">
-                                    <a
-                                      href="/scanner/queue"
-                                      className="flex min-h-[46px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 px-4 text-[14px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22"
-                                    >
-                                      Open Review Queue →
-                                    </a>
-                                    <button
-                                      onClick={() => setCandStates((prev) => { const next = new Map(prev); next.delete(result.candidate.sourceUrl); return next; })}
-                                      className="flex min-h-[46px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] text-slate-400 transition-colors hover:bg-white/[0.07]"
-                                    >
-                                      Continue Scanning
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                              {st.action === 'skipped' && (
-                                <p className="text-[14px] text-slate-700">Skipped — story hidden</p>
-                              )}
-                              {st.action === 'error' && (
-                                <div className="rounded-xl border border-red-500/35 bg-red-500/10 p-4">
-                                  <p className="mb-1 text-[16px] font-bold text-red-300">Queue Failed</p>
-                                  <p className="text-[15px] text-red-200">{st.error}</p>
-                                  {st.error?.includes('Missing Supabase column') && (
-                                    <p className="mt-2 text-[13px] text-red-400/55">Run the recovered_signals migration to add the missing column.</p>
-                                  )}
-                                  {st.error?.includes('index or navigation page') && (
-                                    <p className="mt-2 text-[13px] text-red-400/55">Use Discover Links to find specific story URLs.</p>
-                                  )}
-                                </div>
+                                </>
+                              ) : (
+                                <p className="text-[12px] text-red-400/55">{result.error}</p>
                               )}
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    )
                   )}
 
-                  {/* ── Skipped / Low Quality section ── */}
-                  {lowQualResults.length > 0 && (
-                    <div>
-                      <button
-                        onClick={() => setLowQualityOpen((prev) => !prev)}
-                        className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
-                      >
-                        <span className="text-[13px] font-semibold text-slate-600">
-                          Low Signal Results · {lowQualResults.length}
-                        </span>
-                        <span className="text-[11px] text-slate-700">{lowQualityOpen ? '▲' : '▼'}</span>
-                      </button>
 
-                      {lowQualityOpen && (
-                        <div className="mt-2 flex flex-col gap-2">
-                          {lowQualResults.map((result, idx) => {
-                            if (result.status === 'error') {
-                              const isBlocked = result.error.includes('blocked direct fetch');
-                              return (
-                                <div key={`${result.sourceId}-err-${idx}`} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
-                                  <p className="mb-0.5 text-[13px] font-semibold text-slate-500">{result.sourceName}</p>
-                                  {isBlocked ? (
-                                    <>
-                                      <p className="mb-2 text-[12px] text-amber-400/60">Blocked — use Discover Links or fix source type</p>
-                                      <div className="flex gap-3">
-                                        <a href="/scanner/sources" className="text-[12px] text-amber-400/60 underline-offset-2 hover:underline">Try Discovery</a>
-                                        <a href="/scanner/sources" className="text-[12px] text-slate-600 underline-offset-2 hover:underline">Edit Source</a>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <p className="text-[12px] text-red-400/55">{result.error}</p>
-                                  )}
-                                </div>
-                              );
-                            }
-
-                            {
-                              const debugReason = result.candidate.badCandidateReason
-                                ?? (result.candidate.isIndexPage
-                                  ? 'Homepage or index page — no story links found'
-                                  : result.candidate.storyScore != null && result.candidate.storyScore < 8
-                                    ? `Low story score (${result.candidate.storyScore}pts) — no narrative signals detected`
-                                    : 'Did not pass quality filter');
-                              const isIndex = result.candidate.isIndexPage;
-                              return (
-                                <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.015] px-4 py-3">
-                                  <div className="mb-1 flex items-start justify-between gap-2">
-                                    <p className="text-[13px] font-semibold leading-snug text-slate-500">
-                                      {result.candidate.title.slice(0, 70)}{result.candidate.title.length > 70 ? '…' : ''}
-                                    </p>
-                                    {isIndex && (
-                                      <span className="shrink-0 rounded-full border border-amber-500/18 bg-amber-500/7 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/60">
-                                        index
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-[12px] text-amber-400/50">{debugReason}</p>
-                                  {result.candidate.storyScore != null && (
-                                    <p className="mt-0.5 text-[11px] text-slate-700">score: {result.candidate.storyScore}pts · {result.sourceName}</p>
-                                  )}
-                                  {!result.candidate.storyScore && (
-                                    <p className="mt-0.5 text-[11px] text-slate-700">{result.sourceName}</p>
-                                  )}
-                                </div>
-                              );
-                            }
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
 
                   {/* ── Scan Diagnostics ── */}
                   {diagnostics.length > 0 && (
