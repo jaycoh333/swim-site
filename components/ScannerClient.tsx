@@ -396,7 +396,7 @@ function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string })
           className="mb-3 border-l-2 pl-3"
           style={{ borderColor: `${sig.categoryColor}30` }}
         >
-          <p className="text-[1.1rem] leading-[1.65] tracking-[0.02em] text-crt/62 md:text-[1.2rem]">
+          <p className="text-[18px] leading-[1.65] tracking-[0.02em] text-crt/62 md:text-[19px]">
             {sig.summary}
           </p>
         </div>
@@ -416,13 +416,38 @@ function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string })
           </div>
         )}
 
+        {/* Signal journey strip */}
+        <div className="mb-3 flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest">
+          {(['RECOVERED', 'REVIEWED', 'READY', 'REBORN'] as const).map((step, i) => {
+            const reachedIdx = sig.isReborn ? 3 : 2;
+            const isActive   = i === reachedIdx;
+            const isPast     = i < reachedIdx;
+            return (
+              <span key={step} className="flex items-center gap-1">
+                <span style={{
+                  color: isActive ? (sig.categoryColor ?? '#86d46e')
+                       : isPast   ? 'rgba(134,212,110,0.35)'
+                       : 'rgba(134,212,110,0.15)',
+                }}>
+                  {step}
+                </span>
+                {i < 3 && <span style={{ color: 'rgba(134,212,110,0.12)' }}>›</span>}
+              </span>
+            );
+          })}
+        </div>
+
         {/* Footer */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span
-            className="text-[12px] uppercase tracking-[0.18em]"
+            className="inline-flex items-center gap-1.5 text-[12px] uppercase tracking-[0.18em]"
             style={{ color: STATUS_COLORS[sig.status] ?? '#86d46e' }}
           >
-            ◈ {sig.status}
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{ background: STATUS_COLORS[sig.status] ?? '#86d46e', opacity: 0.8 }}
+            />
+            {sig.status}
           </span>
           <span className="text-crt/18">·</span>
           <span className="text-[11px] uppercase tracking-[0.14em] text-crt/28">

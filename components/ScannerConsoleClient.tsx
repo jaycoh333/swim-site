@@ -9,13 +9,14 @@ import {
   rebirthSignalAsThreadAction,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
-import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, type ScanPreset } from '@/lib/scan-presets';
+import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
 import { detectClusters, type ClusterResult } from '@/lib/cluster-detection';
 import type { DbScannerSource, DbRecoveredSignal } from '@/lib/supabase/types';
 import type { SessionSourceResult, FetchedCandidate, SourceDiagnostic } from '@/lib/scanner-fetch-types';
+import { generateSignalAnalysis, type SignalAnalysis } from '@/lib/story-intelligence';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,6 +135,89 @@ function sourceReliabilityLabel(sourceType: string): string {
   return map[sourceType] ?? 'External source';
 }
 
+// ---------------------------------------------------------------------------
+// StoryTimeline — compact 4-step progress strip
+// ---------------------------------------------------------------------------
+
+const TIMELINE_STEPS = ['RECOVERED', 'REVIEWED', 'READY', 'REBORN'] as const;
+type TimelinePhase = 'recovered' | 'reviewed' | 'ready' | 'reborn';
+
+function StoryTimeline({ phase }: { phase: TimelinePhase }) {
+  const phaseIdx = { recovered: 0, reviewed: 1, ready: 2, reborn: 3 }[phase];
+  return (
+    <div className="mb-3 flex items-center gap-0.5">
+      {TIMELINE_STEPS.map((step, i) => {
+        const isActive = i === phaseIdx;
+        const isPast   = i < phaseIdx;
+        return (
+          <div key={step} className="flex items-center gap-0.5">
+            <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold tracking-widest ${
+              isActive ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25'
+              : isPast ? 'text-slate-500'
+              : 'text-slate-700'
+            }`}>
+              {step}
+            </span>
+            {i < TIMELINE_STEPS.length - 1 && (
+              <span className={`text-[9px] ${isPast || isActive ? 'text-slate-600' : 'text-slate-800'}`}>›</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SignalAnalysisBlock — template-based analysis, no AI
+// ---------------------------------------------------------------------------
+
+const CORROBORATION_COLORS: Record<string, string> = {
+  none:     'text-slate-600',
+  weak:     'text-amber-400/60',
+  moderate: 'text-amber-400',
+  strong:   'text-emerald-400',
+};
+const RARITY_COLORS: Record<string, string> = {
+  common:      'text-slate-500',
+  notable:     'text-sky-400/70',
+  rare:        'text-violet-400',
+  exceptional: 'text-emerald-400',
+};
+
+function SignalAnalysisBlock({ analysis }: { analysis: SignalAnalysis }) {
+  return (
+    <div className="mb-3 rounded-xl border border-white/6 bg-white/[0.02] px-3 py-2.5">
+      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Signal Analysis</p>
+      <p className="mb-2 text-[12px] leading-snug text-slate-500">{analysis.surfacedBecause}</p>
+      {analysis.anomalyMarkers.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {analysis.anomalyMarkers.slice(0, 4).map((m) => (
+            <span key={m} className="rounded-full border border-emerald-500/12 bg-emerald-500/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400/50">
+              {m}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+        <span className={CORROBORATION_COLORS[analysis.corroborationLevel]}>
+          corroboration: <strong>{analysis.corroborationLevel}</strong>
+        </span>
+        <span className={RARITY_COLORS[analysis.rarityLevel]}>
+          rarity: <strong>{analysis.rarityLevel}</strong>
+        </span>
+        <span className="text-slate-600">
+          source: {analysis.sourceReliability}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EvidenceBlock — source-type-specific metadata
+// ---------------------------------------------------------------------------
+
 function EvidenceBlock({ candidate }: { candidate: FetchedCandidate }) {
   const { sourceType } = candidate;
 
@@ -234,6 +318,7 @@ export function ScannerConsoleClient({
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
+  const [showPresetTest,    setShowPresetTest]    = useState<boolean>(false);
 
   // Review state
   const [reviewSignals,  setReviewSignals]  = useState<DbRecoveredSignal[]>(initialReviewSignals);
@@ -291,15 +376,54 @@ export function ScannerConsoleClient({
       const preset = SCAN_PRESETS.find((p) => p.id === presetId);
       if (!preset) return enabledSources;
       return enabledSources.filter((s) => {
-        if (preset.sourceTypes.includes(s.source_type)) return true;
-        const lc = s.name.toLowerCase();
-        return preset.nameKeywords.some((kw) => lc.includes(kw));
+        if (preset.nameKeywords.length > 0) {
+          const lc = s.name.toLowerCase();
+          if (preset.nameKeywords.some((kw) => lc.includes(kw))) return true;
+        }
+        return preset.sourceTypes.includes(s.source_type);
       });
     })();
-    return pool.filter((s) => !isHomepageSource(s));
+    const nonHomepage = pool.filter((s) => !isHomepageSource(s));
+
+    // For preset runs (not All Sources), cap at MAX_PRESET_SOURCES.
+    // Prefer sources with recent successful health records over blocked/unknown ones.
+    if (presetId === PRESET_ALL) return nonHomepage;
+
+    const sorted = [...nonHomepage].sort((a, b) => {
+      const ha = healthMap.get(a.id);
+      const hb = healthMap.get(b.id);
+      const rank = (h: typeof ha) => {
+        if (!h || h.status === 'unknown') return 1;
+        if (h.status === 'high-yield')   return 4;
+        if (h.status === 'healthy')      return 3;
+        if (h.status === 'weak')         return 0;
+        if (h.status === 'blocked')      return -1;
+        return 1;
+      };
+      return rank(hb) - rank(ha);
+    });
+
+    return sorted.slice(0, MAX_PRESET_SOURCES);
   }
 
   const activeScanSources = sourcesForPreset(activePreset);
+
+  // Coverage: total sources in DB matching this preset (enabled + disabled), uncapped
+  function allSourcesMatchingPreset(presetId: string): typeof sources {
+    if (presetId === PRESET_ALL || presetId === PRESET_DEBUG) return [];
+    const preset = SCAN_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return [];
+    return sources.filter((s) => {
+      if (preset.nameKeywords.length > 0) {
+        const lc = s.name.toLowerCase();
+        if (preset.nameKeywords.some((kw) => lc.includes(kw))) return true;
+      }
+      return preset.sourceTypes.includes(s.source_type);
+    });
+  }
+
+  const presetAllMatched     = allSourcesMatchingPreset(activePreset);
+  const presetEnabledMatched = presetAllMatched.filter((s) => s.enabled);
 
   // ── Scan handlers ────────────────────────────────────────────────────────
 
@@ -471,6 +595,12 @@ export function ScannerConsoleClient({
     }
   }
 
+  // Quick lookup: sourceUrl → full SessionSourceResult (for related-signals mini-cards)
+  const candidatesByUrl = new Map<string, SessionSourceResult>();
+  for (const r of scanResults) {
+    if (r.status !== 'error') candidatesByUrl.set(r.candidate.sourceUrl, r);
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -621,9 +751,16 @@ export function ScannerConsoleClient({
             {/* ── Active sources for selected preset ── */}
             {activePreset !== PRESET_ALL && (
               <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                <p className="mb-2 text-[12px] font-semibold uppercase tracking-widest text-slate-600">
-                  Sources in this preset
-                </p>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">
+                    Sources in this preset
+                  </p>
+                  {activeScanSources.length > 0 && (
+                    <span className="text-[11px] text-slate-700">
+                      max {MAX_PRESET_SOURCES} · 5 per source
+                    </span>
+                  )}
+                </div>
                 {activeScanSources.length === 0 ? (
                   <div>
                     <p className="text-[13px] text-slate-500">No enabled sources match this preset.</p>
@@ -636,21 +773,29 @@ export function ScannerConsoleClient({
                     {activeScanSources.map((s) => {
                       const rec    = getSourceRecommendation(s);
                       const health = healthMap.get(s.id);
+                      const isWeak = health?.status === 'weak' || health?.status === 'blocked';
                       return (
                         <div key={s.id}>
                           <div className="flex items-center gap-2">
                             <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                               {s.source_type}
                             </span>
-                            <span className="text-[13px] text-slate-300">{s.name}</span>
+                            <span className={`text-[13px] ${isWeak ? 'text-slate-500' : 'text-slate-300'}`}>
+                              {s.name}
+                            </span>
                             {health && health.status !== 'unknown' && (
                               <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(health.status)}`}>
                                 {HEALTH_LABELS[health.status]}
                               </span>
                             )}
                           </div>
-                          {rec && (
-                            <p className="mt-1 text-[11px] leading-relaxed text-amber-400/55">{rec}</p>
+                          {isWeak && (
+                            <p className="mt-0.5 text-[11px] text-amber-500/45">
+                              low yield last session — deprioritised
+                            </p>
+                          )}
+                          {rec && !isWeak && (
+                            <p className="mt-0.5 text-[11px] leading-relaxed text-amber-400/55">{rec}</p>
                           )}
                         </div>
                       );
@@ -679,6 +824,84 @@ export function ScannerConsoleClient({
                     <span className="text-[12px] text-slate-600">+{enabledSources.length - 6} more</span>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* ── Source coverage panel (TASK 3) ── */}
+            {activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG && (
+              <div className={`rounded-xl border px-4 py-3 ${
+                presetEnabledMatched.length === 0
+                  ? 'border-red-500/25 bg-red-500/[0.04]'
+                  : 'border-white/8 bg-white/[0.02]'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-widest text-slate-600">
+                    Source coverage
+                  </span>
+                  <span className="ml-auto flex items-center gap-2 text-[12px]">
+                    <span className="text-slate-600">
+                      {presetAllMatched.length} matched
+                    </span>
+                    <span className={`font-bold ${presetEnabledMatched.length > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {presetEnabledMatched.length} enabled
+                    </span>
+                  </span>
+                </div>
+
+                {presetEnabledMatched.length === 0 && (
+                  <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                    <p className="text-[12px] font-semibold text-red-400">
+                      No enabled sources for this preset
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-red-400/60">
+                      Run <code className="font-mono">seed:scanner-sources:update</code> then enable sources at{' '}
+                      <a href="/scanner/sources" className="underline underline-offset-2 hover:text-red-300">
+                        /scanner/sources
+                      </a>
+                    </p>
+                  </div>
+                )}
+
+                {/* Test Preset Sources button (TASK 4) */}
+                {presetEnabledMatched.length > 0 && (
+                  <button
+                    onClick={() => setShowPresetTest((v) => !v)}
+                    className="mt-2 w-full rounded-lg border border-white/8 bg-white/[0.025] px-3 py-1.5 text-left text-[12px] text-slate-500 transition-colors hover:bg-white/[0.045] hover:text-slate-300"
+                  >
+                    {showPresetTest ? '▲ hide source list' : '▼ test preset sources'}
+                  </button>
+                )}
+
+                {showPresetTest && presetEnabledMatched.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-emerald-500/12 bg-emerald-500/[0.03] px-3 py-2.5">
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-emerald-400/50">
+                      Sources that will run · {Math.min(presetEnabledMatched.length, MAX_PRESET_SOURCES)} of {presetEnabledMatched.length} enabled
+                    </p>
+                    {presetEnabledMatched.slice(0, MAX_PRESET_SOURCES).map((s) => {
+                      const health = healthMap.get(s.id);
+                      return (
+                        <div key={s.id} className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-emerald-500/50" />
+                          <span className="text-[12px] text-slate-300">{s.name}</span>
+                          <span className="text-[10px] text-slate-600">{s.source_type}</span>
+                          {health && health.status !== 'unknown' && (
+                            <span className={`ml-auto rounded-full border px-1 py-0.5 text-[9px] font-bold ${healthBadgeCls(health.status)}`}>
+                              {HEALTH_LABELS[health.status]}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {presetEnabledMatched.length > MAX_PRESET_SOURCES && (
+                      <p className="text-[11px] text-slate-600">
+                        +{presetEnabledMatched.length - MAX_PRESET_SOURCES} more enabled but capped — rotate via health score
+                      </p>
+                    )}
+                    <p className="mt-1 text-[10px] text-slate-700">
+                      No pages fetched — click Run Scan to begin.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -733,18 +956,47 @@ export function ScannerConsoleClient({
 
             {/* Scan results — grouped by quality */}
             {scanPhase === 'done' && scanResults.length > 0 && (() => {
-              const goodResults = [...scanResults]
-                .filter((r) => {
-                  if (r.status === 'error') return false;
-                  if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return false;
-                  // Suppress candidates with very low story scores into the low-signal section
-                  if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return false;
-                  return true;
-                })
-                .sort((a, b) => {
+              // Build good results interleaved across sources so no single source dominates.
+              // Step 1: filter + sort within each source by finalPriorityScore
+              const validResults = [...scanResults].filter((r) => {
+                if (r.status === 'error') return false;
+                if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return false;
+                if (r.candidate.storyScore != null && r.candidate.storyScore < 8) return false;
+                return true;
+              });
+
+              // Group by sourceId, sorted by priority within each group
+              const bySource = new Map<string, typeof validResults>();
+              for (const r of validResults) {
+                if (!bySource.has(r.sourceId)) bySource.set(r.sourceId, []);
+                bySource.get(r.sourceId)!.push(r);
+              }
+              for (const bucket of bySource.values()) {
+                bucket.sort((a, b) => {
                   if (a.status === 'error' || b.status === 'error') return 0;
-                  return (b.candidate.storyScore ?? 0) - (a.candidate.storyScore ?? 0);
+                  return (b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0)
+                       - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
                 });
+              }
+
+              // Step 2: round-robin interleave — pick highest-scoring remaining per source
+              const buckets = [...bySource.values()];
+              const goodResults: typeof validResults = [];
+              let changed = true;
+              while (changed) {
+                changed = false;
+                // Sort buckets by their current top candidate's score so best leads
+                buckets.sort((a, b) =>
+                  ((b[0]?.status !== 'error' ? (b[0]?.candidate.finalPriorityScore ?? b[0]?.candidate.storyScore ?? 0) : 0))
+                  - ((a[0]?.status !== 'error' ? (a[0]?.candidate.finalPriorityScore ?? a[0]?.candidate.storyScore ?? 0) : 0))
+                );
+                for (const bucket of buckets) {
+                  if (bucket.length > 0) {
+                    goodResults.push(bucket.shift()!);
+                    changed = true;
+                  }
+                }
+              }
               const lowQualResults = scanResults.filter((r) => {
                 if (r.status === 'error') return true;
                 if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return true;
@@ -913,10 +1165,22 @@ export function ScannerConsoleClient({
 
                       {goodResults.map((result) => {
                         if (result.status === 'error') return null;
-                        const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                        const st       = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                        const analysis = generateSignalAnalysis(result.candidate);
+
+                        // Related cluster signals — other candidates sharing this cluster
+                        const clusterLabel = clusterMap.get(result.candidate.sourceUrl);
+                        const relatedUrls  = clusterLabel
+                          ? (clusterList.find((c) => c.label === clusterLabel)?.candidateUrls ?? [])
+                              .filter((u) => u !== result.candidate.sourceUrl)
+                          : [];
+                        const relatedResults = relatedUrls
+                          .map((u) => candidatesByUrl.get(u))
+                          .filter((r): r is SessionSourceResult => !!r && r.status !== 'error')
+                          .slice(0, 3);
 
                         return (
-                          <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04]">
+                          <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.04] transition-all hover:border-white/20 hover:bg-white/[0.055]">
 
                             {/* Evidence image — dominant visual, full bleed */}
                             {result.candidate.sourceImageUrl && (
@@ -946,10 +1210,9 @@ export function ScannerConsoleClient({
                                     {result.candidate.sourceType.toUpperCase()}
                                   </span>
                                 )}
-                                <span className="text-[13px] font-semibold text-slate-400">
+                                <span className="text-[15px] font-semibold text-slate-400">
                                   {result.sourceName}
                                 </span>
-                                {/* Source health badge */}
                                 {(() => {
                                   const h = healthMap.get(result.sourceId);
                                   if (!h || h.status === 'unknown') return null;
@@ -969,10 +1232,9 @@ export function ScannerConsoleClient({
                                     ⚠ duplicate
                                   </span>
                                 )}
-                                {/* Priority + story score */}
                                 <div className="ml-auto flex items-center gap-1.5">
                                   {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
-                                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score (story + corroboration + source bonus)">
+                                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score">
                                       P{result.candidate.finalPriorityScore}
                                     </span>
                                   )}
@@ -989,9 +1251,12 @@ export function ScannerConsoleClient({
                                 {result.candidate.title}
                               </p>
 
+                              {/* Story timeline */}
+                              <StoryTimeline phase="recovered" />
+
                               {/* Story signal badges + cluster + corroboration */}
                               {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
-                                clusterMap.has(result.candidate.sourceUrl) ||
+                                clusterLabel ||
                                 (result.candidate.corroborationScore ?? 0) > 0) && (
                                 <div className="mb-3 flex flex-wrap gap-1">
                                   {result.candidate.storySignals?.map((sig) => (
@@ -1002,13 +1267,11 @@ export function ScannerConsoleClient({
                                       {sig}
                                     </span>
                                   ))}
-                                  {/* Cluster badge */}
-                                  {clusterMap.get(result.candidate.sourceUrl) && (
+                                  {clusterLabel && (
                                     <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">
-                                      ⬡ {clusterMap.get(result.candidate.sourceUrl)}
+                                      ⬡ {clusterLabel}
                                     </span>
                                   )}
-                                  {/* Corroboration indicator */}
                                   {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
                                     <span
                                       className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80"
@@ -1020,15 +1283,52 @@ export function ScannerConsoleClient({
                                 </div>
                               )}
 
+                              {/* Signal analysis block */}
+                              <SignalAnalysisBlock analysis={analysis} />
+
                               {/* Quote-style excerpt panel */}
                               <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
-                                <p className="text-[17px] leading-relaxed text-slate-300 line-clamp-5">
+                                <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-5">
                                   {result.candidate.summary}
                                 </p>
                               </div>
 
                               {/* Evidence block — source-type-specific metadata */}
                               <EvidenceBlock candidate={result.candidate} />
+
+                              {/* Related signals in same cluster */}
+                              {relatedResults.length > 0 && (
+                                <div className="mb-3">
+                                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">
+                                    Related recovered signals · cluster: {clusterLabel}
+                                  </p>
+                                  <div className="flex flex-col gap-1.5">
+                                    {relatedResults.map((rel) => {
+                                      if (rel.status === 'error') return null;
+                                      return (
+                                        <div key={rel.candidate.sourceUrl} className="flex items-start gap-2 rounded-lg border border-violet-500/12 bg-violet-500/[0.03] px-3 py-2">
+                                          {rel.candidate.sourceType && (
+                                            <span className={`mt-0.5 shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${sourceTypeBadgeCls(rel.candidate.sourceType)}`}>
+                                              {rel.candidate.sourceType.slice(0, 3).toUpperCase()}
+                                            </span>
+                                          )}
+                                          <div className="min-w-0">
+                                            <p className="text-[13px] font-semibold leading-snug text-slate-400 line-clamp-1">
+                                              {rel.candidate.title}
+                                            </p>
+                                            <p className="text-[11px] text-slate-600">{rel.sourceName}</p>
+                                          </div>
+                                          {rel.candidate.storyScore != null && (
+                                            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-700">
+                                              {rel.candidate.storyScore}pts
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Source URL button */}
                               <a

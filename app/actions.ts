@@ -1288,6 +1288,9 @@ export async function queueFetchedCandidateAction(input: {
 //   - Per-source timeout: 10 seconds
 // ---------------------------------------------------------------------------
 
+const PER_SOURCE_CANDIDATE_CAP = 5;   // max candidates returned per source
+const SESSION_TOTAL_CANDIDATE_CAP = 30; // max total candidates per run
+
 export async function runFetchSessionAction(
   sourceIds: string[],
   options?: { includeRejected?: boolean },
@@ -1323,7 +1326,7 @@ export async function runFetchSessionAction(
   // Session-level dedup: URLs pushed in this run (catches cross-source dupes).
   const seenThisSession = new Set<string>();
 
-  // Diversity cap: max 3 results per source (excludes errors).
+  // Diversity cap: max PER_SOURCE_CANDIDATE_CAP results per source (excludes errors).
   const perSourceCount = new Map<string, number>();
 
   const results: SessionSourceResult[] = [];
@@ -1342,7 +1345,14 @@ export async function runFetchSessionAction(
     results.push(r);
   }
 
+  function totalCandidates(): number {
+    return results.filter((r) => r.status !== 'error').length;
+  }
+
   for (const sourceId of sourceIds) {
+    // Stop fetching if we have hit the session total candidate cap.
+    if (totalCandidates() >= SESSION_TOTAL_CANDIDATE_CAP) break;
+
     const source = sourceMap.get(sourceId);
 
     if (!source) {
@@ -1374,7 +1384,7 @@ export async function runFetchSessionAction(
       let erowidRejected = 0;
       const erowidRejectReasons: string[] = [];
       for (const link of erowidDisc.links.slice(0, 20)) {
-        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
         if ('error' in fr) { erowidRejected++; erowidRejectReasons.push(fr.error.slice(0, 80)); continue; }
         erowidFetched++;
@@ -1418,7 +1428,7 @@ export async function runFetchSessionAction(
       let waybackRejected = 0;
       const waybackRejectReasons: string[] = [];
       for (const link of waybackDisc.links.slice(0, 25)) {
-        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
         const fr = await fetchWaybackPagePreview(source, link.url);
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
         waybackFetched++;
@@ -1456,7 +1466,7 @@ export async function runFetchSessionAction(
         let redditRejected = 0;
         const redditRejectReasons: string[] = [];
         for (const candidate of multiResult.candidates) {
-          if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -1487,7 +1497,7 @@ export async function runFetchSessionAction(
       } else {
         let wikiPassed = 0;
         for (const candidate of multiResult.candidates) {
-          if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -1653,7 +1663,7 @@ export async function runFetchSessionAction(
           finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad }),
         };
 
-        if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
         const linkUrl2 = linkCand.sourceUrl;
         if (isAlreadyArchived(linkUrl2)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...linkCand, badCandidateReason: 'Already in archive — already queued or published' } });

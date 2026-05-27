@@ -8,6 +8,10 @@
  * IMPORTANT: Presets do not auto-publish, crawl broadly, or bypass
  * curator review. They only choose which enabled sources to include
  * when the curator clicks RUN SCAN.
+ *
+ * Each preset run is capped at MAX_PRESET_SOURCES sources and
+ * PRESET_MAX_TOTAL_CANDIDATES total results (enforced in runFetchSessionAction
+ * and ScannerConsoleClient).
  */
 
 export type ScanPresetRisk = 'low' | 'medium';
@@ -24,6 +28,9 @@ export interface ScanPreset {
   color:        string;         // Tailwind color token (emerald / sky / amber / violet)
 }
 
+/** Max sources to include in a single preset scan run. */
+export const MAX_PRESET_SOURCES = 8;
+
 /** "All enabled sources" pseudo-preset — the default behaviour. */
 export const PRESET_ALL = 'all';
 
@@ -34,10 +41,10 @@ export const SCAN_PRESETS: ScanPreset[] = [
   {
     id:           'weird-reddit',
     name:         'Weird Reddit',
-    tagline:      'Subreddits for strange experiences & anomalous reports',
-    description:  'Fetches recent posts from Reddit sources — paranormal, glitch-in-the-matrix, lost media, and similar subs. Uses structured JSON API; no HTML scraping.',
+    tagline:      'Glitch, paranormal & timeline anomaly subs',
+    description:  'Fetches recent posts from the core anomaly subs: Glitch_in_the_Matrix, HighStrangeness, Paranormal, Thetruthishere, and Retconned. Uses Reddit JSON API; no HTML scraping.',
     sourceTypes:  ['reddit'],
-    nameKeywords: ['reddit', 'subreddit'],
+    nameKeywords: ['glitch', 'highstrangeness', 'paranormal', 'thetruthishere', 'retconned'],
     risk:         'low',
     riskNote:     'Low risk — Reddit JSON API only. Results are real posts from real accounts.',
     color:        'emerald',
@@ -45,35 +52,35 @@ export const SCAN_PRESETS: ScanPreset[] = [
   {
     id:           'lost-media',
     name:         'Lost Media',
-    tagline:      'MediaWiki archives for unrecovered content',
-    description:  'Searches MediaWiki-based sites (Lost Media Wiki and similar) using their search API for articles about missing, lost, or recovered media.',
-    sourceTypes:  ['mediawiki'],
-    nameKeywords: ['media', 'wiki', 'lost'],
+    tagline:      'Lost media wiki, r/LostMedia & internet mysteries',
+    description:  'Searches Lost Media Wiki articles (MediaWiki API) and fetches from r/LostMedia and r/InternetMysteries for posts about missing, lost, or recovered media and digital artifacts.',
+    sourceTypes:  ['mediawiki', 'reddit'],
+    nameKeywords: ['lost media', 'lostmedia', 'internet mysteries', 'internetmysteries'],
     risk:         'low',
-    riskNote:     'Low risk — plain-text article extracts only via MediaWiki API.',
+    riskNote:     'Low risk — MediaWiki API and Reddit JSON only.',
     color:        'sky',
+  },
+  {
+    id:           'mystery-investigation',
+    name:         'Mystery Investigation',
+    tagline:      'r/RBI, UnresolvedMysteries & internet cases',
+    description:  'Community-driven mystery solving: r/RBI (Reddit Bureau of Investigation), r/UnresolvedMysteries, and r/InternetMysteries. Strong signal for conspiracy, hidden history, and unresolved case categories.',
+    sourceTypes:  ['reddit'],
+    nameKeywords: ['rbi', 'unresolved', 'unresolvedmysteries', 'internetmysteries', 'internet mysteries'],
+    risk:         'low',
+    riskNote:     'Low risk — Reddit JSON API only.',
+    color:        'violet',
   },
   {
     id:           'dead-web',
     name:         'Dead Web',
-    tagline:      'Wayback Machine & archive sources for deleted pages',
-    description:  'Queries Wayback CDX API for archived snapshots of sites that may no longer be live. Best used with Discover Links on a specific domain — not the Wayback homepage.',
-    sourceTypes:  ['wayback', 'archive'],
-    nameKeywords: ['wayback', 'archive', 'archived', 'dead', 'deleted'],
+    tagline:      'Wayback, Erowid, Textfiles & BBS archives',
+    description:  'Queries archived and dead-web sources: Wayback Machine snapshots, Erowid experience reports, Textfiles.com BBS archives. Best for signals that no longer exist at original URLs.',
+    sourceTypes:  ['wayback', 'archive', 'bbs'],
+    nameKeywords: ['wayback', 'erowid', 'textfiles', 'bbs', 'archive', 'deleted'],
     risk:         'medium',
-    riskNote:     'Medium — archived pages often return index/nav results. Use Discover Links and check candidates carefully.',
+    riskNote:     'Medium — archived pages often return index/nav results. Check candidates carefully.',
     color:        'amber',
-  },
-  {
-    id:           'paranormal-forums',
-    name:         'Paranormal Forums',
-    tagline:      'Forum & BBS sources for eyewitness threads',
-    description:  'Scans forum, BBS, and imageboard sources for paranormal threads, eyewitness reports, and recovered discussions. Candidate quality varies — review carefully.',
-    sourceTypes:  ['forum', 'bbs', 'imageboard', 'archive_forum'],
-    nameKeywords: ['forum', 'paranormal', 'bbs', 'board', 'chan'],
-    risk:         'medium',
-    riskNote:     'Medium — forum index pages are common. Check each candidate before queueing.',
-    color:        'violet',
   },
   {
     id:           PRESET_DEBUG,

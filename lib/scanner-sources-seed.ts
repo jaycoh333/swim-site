@@ -188,6 +188,86 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     created_at: '2024-01-01T00:00:00Z',
   },
   {
+    id: 'src-013',
+    name: 'r/LetsNotMeet',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/LetsNotMeet/',
+    description:
+      'True stories of terrifying real-world encounters with strangers, stalkers, and predators. First-person eyewitness accounts with high emotional intensity — strong narrative and unresolved-mystery signals.',
+    category_focus: ['Paranormal', 'Weird Encounters', 'Hidden History'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/LetsNotMeet with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-014',
+    name: 'r/RBI',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/RBI/',
+    description:
+      'Reddit Bureau of Investigation — community-driven mystery solving. Real unsolved cases, missing persons, strange discoveries, and internet mysteries submitted for collective investigation.',
+    category_focus: ['Conspiracy Theory', 'Hidden History', 'Internet Mysteries', 'Paranormal'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/RBI with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-015',
+    name: 'r/Retconned',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/Retconned/',
+    description:
+      'Mandela Effect and timeline anomalies — collective memories that differ from documented history. Personal accounts of reality inconsistencies, alternate timelines, and mass false memory events.',
+    category_focus: ['Simulation Theory', 'Paranormal', 'Weird Encounters'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/Retconned with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-016',
+    name: 'r/Thetruthishere',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/Thetruthishere/',
+    description:
+      'Personal paranormal experiences, encounters with the unexplained, and anomalous events that resist rational explanation. Eyewitness-focused with strong unresolved-mystery framing.',
+    category_focus: ['Paranormal', 'Weird Encounters', 'UFOs'],
+    risk_level: 'low',
+    refresh_cadence: 'daily',
+    attribution_rules:
+      'Credit u/[handle] on r/Thetruthishere with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-017',
+    name: 'r/InternetMysteries',
+    source_type: 'reddit',
+    base_url: 'https://www.reddit.com/r/InternetMysteries/',
+    description:
+      'Unsolved internet mysteries, strange websites, cryptic ARGs, lost or unidentified online content, and digital anomalies. Strong signal source for internet lore and lost media categories.',
+    category_focus: ['Internet Mysteries', 'Lost Media', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'weekly',
+    attribution_rules:
+      'Credit u/[handle] on r/InternetMysteries with post date. Summarize — do not reproduce full post.',
+    enabled: true,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
     id: 'src-008',
     name: 'GodLike Productions',
     source_type: 'forum',
