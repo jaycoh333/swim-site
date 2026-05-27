@@ -7,6 +7,9 @@ import {
   queueFetchedCandidateAction,
   updateSignalStatusAction,
   rebirthSignalAsThreadAction,
+  getScanMemoryStatsAction,
+  clearScanMemoryAction,
+  type ScanMode,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
 import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
@@ -853,11 +856,15 @@ export function ScannerConsoleClient({
   const [newPostedSlug,          setNewPostedSlug]          = useState<string | null>(null);
   const activeScanSourcesRef = useRef<typeof enabledSources>([]);
 
-  // Phase S: chaos mode toggle
-  const [chaosMode, setChaosMode] = useState(false);
+  // Phase AA: scan mode selector (replaces chaosMode + originBias toggles)
+  const [scanMode, setScanMode] = useState<ScanMode>('fresh');
 
-  // Phase U: origin bias — boosts old-web/BBS/Wayback, penalizes recent Reddit
-  const [originBias, setOriginBias] = useState(false);
+  // Phase AA: session tracking + source fairness + memory debug
+  const [scanId,         setScanId]         = useState(0);
+  const [lastScanSrcIds, setLastScanSrcIds] = useState<Set<string>>(new Set());
+  const [memDebugOpen,   setMemDebugOpen]   = useState(false);
+  const [memStats,       setMemStats]       = useState<{ totalUrls: number; byType: { seen: number; skipped: number; posted: number }; oldestMs: number | null; newestMs: number | null } | null>(null);
+  const [memLoading,     setMemLoading]     = useState(false);
 
   // Phase T: feed sort + filter + quick review
   const [feedSort,    setFeedSort]    = useState<'best' | 'newest' | 'oldest' | 'weirdest' | 'unseen'>(
@@ -1053,9 +1060,14 @@ export function ScannerConsoleClient({
       return rank(hb) - rank(ha);
     });
 
-    const sliced = sorted.slice(0, MAX_PRESET_SOURCES);
-    // Origin bias: cap Reddit to 2 sources so old-web sources dominate
-    if (originBias) {
+    // Source fairness: prefer sources not used in the last scan (push recently-used to end)
+    const fairSorted = [
+      ...sorted.filter((s) => !lastScanSrcIds.has(s.id)),
+      ...sorted.filter((s) =>  lastScanSrcIds.has(s.id)),
+    ];
+    const sliced = fairSorted.slice(0, MAX_PRESET_SOURCES);
+    // Deep Archive mode: cap Reddit to 2 sources so old-web sources dominate
+    if (scanMode === 'deep-archive') {
       let redditCount = 0;
       return sliced.filter((s) => {
         if (s.source_type === 'reddit') { if (redditCount >= 2) return false; redditCount++; }
@@ -1115,8 +1127,7 @@ export function ScannerConsoleClient({
     const res = await runFetchSessionAction(sourceIdsToRun, {
       includeRejected: showRejected,
       excludeUrls:     [...seenUrlsThisSession],
-      chaosMode,
-      originBias,
+      scanMode,
     });
     if ('error' in res) {
       setScanError(res.error);
@@ -1124,6 +1135,8 @@ export function ScannerConsoleClient({
       return;
     }
     setScanResults(res.results);
+    setScanId((n) => n + 1);
+    setLastScanSrcIds(new Set(sourceIdsToRun));
     const diags = res.diagnostics ?? [];
     setDiagnostics(diags);
     setScanPhase('done');
@@ -1709,41 +1722,35 @@ export function ScannerConsoleClient({
               </div>
             )}
 
-            {/* Chaos mode + Origin Bias toggles */}
-            {(enabledSources.length > 0 || activeScanSources.length > 0) && (
-              <div className="flex flex-col gap-1.5">
-                <button
-                  onClick={() => setChaosMode((v) => !v)}
-                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
-                    chaosMode
-                      ? 'border-amber-500/30 bg-amber-500/[0.06] text-amber-400'
-                      : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
-                  }`}
-                >
-                  <span className="font-bold uppercase tracking-[0.14em]">
-                    {chaosMode ? '↯ CHAOS MODE ON' : '↯ chaos mode'}
-                  </span>
-                  <span className="text-[10px] opacity-60">
-                    {chaosMode ? 'relaxed thresholds · wider pool · ±20 jitter' : 'off'}
-                  </span>
-                </button>
-                <button
-                  onClick={() => setOriginBias((v) => !v)}
-                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
-                    originBias
-                      ? 'border-violet-500/35 bg-violet-500/[0.07] text-violet-300'
-                      : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
-                  }`}
-                >
-                  <span className="font-bold uppercase tracking-[0.14em]">
-                    {originBias ? '◈ ORIGIN BIAS ON' : '◈ origin bias'}
-                  </span>
-                  <span className="text-[10px] opacity-60">
-                    {originBias ? 'old-web boost · recent Reddit penalized' : 'off'}
-                  </span>
-                </button>
-              </div>
-            )}
+            {/* Scan mode selector (Phase AA) */}
+            {(enabledSources.length > 0 || activeScanSources.length > 0) && (() => {
+              const MODES: { id: ScanMode; label: string; icon: string; desc: string; activeCls: string }[] = [
+                { id: 'fresh',        label: 'Fresh Scan',   icon: '◌', desc: 'Default balanced scan',           activeCls: 'border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-300' },
+                { id: 'deep-archive', label: 'Deep Archive', icon: '◈', desc: 'Old-web priority, less Reddit',   activeCls: 'border-violet-500/40  bg-violet-500/[0.07]  text-violet-300'  },
+                { id: 'chaos',        label: 'Chaos Dig',    icon: '↯', desc: 'Wider pool, relaxed thresholds',  activeCls: 'border-amber-500/40   bg-amber-500/[0.07]   text-amber-300'   },
+                { id: 'unseen-only',  label: 'Unseen Only',  icon: '⊛', desc: 'Skips known URLs, digs deeper',   activeCls: 'border-sky-500/40     bg-sky-500/[0.07]     text-sky-300'     },
+              ];
+              return (
+                <div className="flex flex-col gap-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-600">Scan mode</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {MODES.map((m) => {
+                      const active = scanMode === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => setScanMode(m.id)}
+                          className={`flex flex-col rounded-xl border px-2.5 py-2 text-left text-[11px] transition-colors ${active ? m.activeCls : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400 hover:border-white/15'}`}
+                        >
+                          <span className="font-bold uppercase tracking-[0.12em]">{m.icon} {m.label}</span>
+                          <span className="mt-0.5 text-[10px] opacity-55">{m.desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Run scan button */}
             {(enabledSources.length > 0 || activeScanSources.length > 0 || activePreset === PRESET_DEBUG) && (
@@ -1788,6 +1795,60 @@ export function ScannerConsoleClient({
             <a href="/scanner/sources" className={BTN_GHOST}>
               Manage Sources
             </a>
+
+            {/* Memory debug panel (Phase AA) */}
+            <div className="rounded-xl border border-white/6 bg-white/[0.015]">
+              <button
+                onClick={async () => {
+                  const opening = !memDebugOpen;
+                  setMemDebugOpen(opening);
+                  if (opening && !memStats) {
+                    setMemLoading(true);
+                    const r = await getScanMemoryStatsAction();
+                    setMemStats(r.stats);
+                    setMemLoading(false);
+                  }
+                }}
+                className="flex w-full items-center justify-between px-3 py-2.5 text-left"
+              >
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-600">Scan Memory</span>
+                <span className="text-[11px] text-slate-700">{memDebugOpen ? '▲' : '▼'}</span>
+              </button>
+              {memDebugOpen && (
+                <div className="border-t border-white/6 px-3 pb-3 pt-2">
+                  {memLoading && <p className="text-[12px] text-slate-600">Loading…</p>}
+                  {memStats && !memLoading && (
+                    <div className="flex flex-col gap-2">
+                      <div className="grid grid-cols-3 gap-1">
+                        {[
+                          { label: 'Total',   value: memStats.totalUrls },
+                          { label: 'Seen',    value: memStats.byType.seen },
+                          { label: 'Skipped', value: memStats.byType.skipped },
+                          { label: 'Posted',  value: memStats.byType.posted },
+                          { label: 'Oldest',  value: memStats.oldestMs ? `${Math.floor((Date.now() - memStats.oldestMs) / 86_400_000)}d` : '—' },
+                          { label: 'Newest',  value: memStats.newestMs ? `${Math.floor((Date.now() - memStats.newestMs) / 86_400_000)}d` : '—' },
+                        ].map(({ label, value }) => (
+                          <div key={label} className="rounded-lg border border-white/6 bg-white/[0.02] px-2 py-1.5 text-center">
+                            <div className="font-mono text-[15px] font-bold text-slate-300">{value}</div>
+                            <div className="text-[9px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          await clearScanMemoryAction();
+                          const r = await getScanMemoryStatsAction();
+                          setMemStats(r.stats);
+                        }}
+                        className="w-full rounded-lg border border-red-500/25 bg-red-500/[0.04] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-red-400/70 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                      >
+                        Clear Scan Memory
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Scan error */}
             {scanError && (
@@ -1842,9 +1903,11 @@ export function ScannerConsoleClient({
 
             {/* Scan results — tabbed */}
             {scanPhase === 'done' && scanResults.length > 0 && (() => {
-              // ── Dedup by URL + normalized title across all results ──────────────────
+              // ── Dedup by URL + normalized title + Jaccard similarity (TASK 6) ────
               const seenUrls   = new Set<string>();
               const seenTitles = new Set<string>();
+              const acceptedTokenSets: Set<string>[] = [];
+              let simHiddenCount = 0;
               const dedupedResults = scanResults.filter((r) => {
                 if (r.status === 'error') return true;
                 const url = r.candidate.sourceUrl;
@@ -1853,6 +1916,16 @@ export function ScannerConsoleClient({
                 const norm = normalizeTitle(r.candidate.title);
                 if (seenTitles.has(norm)) return false;
                 seenTitles.add(norm);
+                // Jaccard similarity — hide candidates with >70% title token overlap
+                const words = new Set(norm.split(' ').filter((w) => w.length > 3));
+                if (words.size >= 3) {
+                  for (const acc of acceptedTokenSets) {
+                    const intersect = [...words].filter((w) => acc.has(w)).length;
+                    const unionSize = new Set([...words, ...acc]).size;
+                    if (unionSize > 0 && intersect / unionSize > 0.7) { simHiddenCount++; return false; }
+                  }
+                  acceptedTokenSets.push(words);
+                }
                 return true;
               });
 
@@ -1981,7 +2054,9 @@ export function ScannerConsoleClient({
 
                   {/* ── Scan results header ── */}
                   <div className="rounded-2xl border border-white/14 bg-white/[0.05] px-5 py-5">
-                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600/70">Scan Complete</p>
+                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600/70">
+                      Scan #{scanId} · {candidatesFetched} found{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
+                    </p>
                     <h2 className="mb-3 text-[28px] font-bold tracking-tight text-white">
                       {goodResults.length > 0
                         ? `${goodResults.length} strong signal${goodResults.length !== 1 ? 's' : ''} recovered`
@@ -2153,7 +2228,7 @@ export function ScannerConsoleClient({
                           </p>
                           <div className="mt-5 flex flex-wrap justify-center gap-2">
                             <button
-                              onClick={() => { setChaosMode(true); handleRunScan(); }}
+                              onClick={() => { setScanMode('chaos'); handleRunScan(); }}
                               className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-5 py-2.5 text-[14px] font-bold text-amber-300 transition-colors hover:bg-amber-500/18"
                             >
                               ↯ Run Chaos Scan

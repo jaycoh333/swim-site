@@ -53,7 +53,8 @@ import {
 import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 import { recordSourceResult } from '@/lib/source-health';
-import { loadSeenUrls, recordSeenUrls } from '@/lib/scan-memory';
+import { loadSeenUrls, recordSeenUrls, getScanMemoryStats, clearScanMemory } from '@/lib/scan-memory';
+import type { ScanMemoryStats } from '@/lib/scan-memory';
 import { pickRandomTopicGroup } from '@/lib/origin-topic-seeds';
 import { generateSignalFingerprint, detectLineageRelationships, recordCandidateLineage } from '@/lib/signal-lineage';
 
@@ -692,6 +693,7 @@ async function fetchRedditMultipleCandidates(
 
   const seen    = new Set<string>();
   const allPosts: RPost[] = [];
+  let newAfterToken = '';
 
   for (const endpoint of endpoints) {
     if (allPosts.length >= 120) break; // TASK 3: cap raw collection at 120
@@ -725,11 +727,15 @@ async function fetchRedditMultipleCandidates(
       if (!res.ok) { epResult.error = `HTTP ${res.status}`; endpointResults.push(epResult); continue; }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const posts: RPost[] = ((await res.json()) as any)?.data?.children ?? [];
+      const json = (await res.json()) as any;
+      const posts: RPost[] = json?.data?.children ?? [];
       epResult.childCount = posts.length;
       epResult.ok         = true;
       epResult.timing     = Date.now() - t0;
       endpointResults.push(epResult);
+      if (chaosMode && endpoint.includes('/new.json') && json?.data?.after) {
+        newAfterToken = json.data.after as string;
+      }
 
       for (const post of posts) {
         if (!seen.has(post.data.permalink)) {
@@ -742,6 +748,29 @@ async function fetchRedditMultipleCandidates(
       endpointResults.push(epResult);
       continue;
     }
+  }
+
+  // TASK 4: Chaos mode — fetch page 2 of /new.json for deeper discovery
+  if (chaosMode && newAfterToken && allPosts.length < 180) {
+    const page2Url = `https://www.reddit.com/r/${subreddit}/new.json?limit=100&after=${encodeURIComponent(newAfterToken)}`;
+    try {
+      const p2Res = await fetch(page2Url, {
+        cache:   'no-store',
+        headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)', 'Accept': 'application/json' },
+        signal:  AbortSignal.timeout(12_000),
+      });
+      if (p2Res.ok) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const p2Posts: RPost[] = ((await p2Res.json()) as any)?.data?.children ?? [];
+        for (const post of p2Posts) {
+          if (!seen.has(post.data.permalink)) {
+            seen.add(post.data.permalink);
+            allPosts.push(post);
+          }
+        }
+        endpointResults.push({ endpoint: '/new.json?after=…', status: p2Res.status, childCount: p2Posts.length, ok: true });
+      }
+    } catch { /* page 2 failure is non-blocking */ }
   }
 
   // RSS fallback — titles only, last resort if all JSON endpoints failed
@@ -1360,6 +1389,19 @@ export async function queueFetchedCandidateAction(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Phase AA: Scan memory server actions
+// ---------------------------------------------------------------------------
+
+export async function getScanMemoryStatsAction(): Promise<{ stats: ScanMemoryStats }> {
+  return { stats: getScanMemoryStats() };
+}
+
+export async function clearScanMemoryAction(): Promise<{ ok: boolean }> {
+  clearScanMemory();
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Fetch session — iterates enabled sources, fetches one page each.
 //
 // SAFETY:
@@ -1374,6 +1416,8 @@ export async function queueFetchedCandidateAction(input: {
 const PER_SOURCE_CANDIDATE_CAP = 5;   // max candidates returned per source
 const SESSION_TOTAL_CANDIDATE_CAP = 30; // max total candidates per run
 
+export type ScanMode = 'fresh' | 'deep-archive' | 'chaos' | 'unseen-only';
+
 export async function runFetchSessionAction(
   sourceIds: string[],
   options?: {
@@ -1384,6 +1428,8 @@ export async function runFetchSessionAction(
     chaosMode?: boolean;
     /** Origin bias — boost old-web/BBS/Wayback, penalize recent Reddit */
     originBias?: boolean;
+    /** Phase AA: unified scan mode — overrides chaosMode/originBias when set */
+    scanMode?: ScanMode;
   },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
@@ -1406,6 +1452,13 @@ export async function runFetchSessionAction(
     return { results, diagnostics: [diag] };
   }
 
+  // Phase AA: derive chaosMode / originBias from scanMode when provided.
+  const mode = options?.scanMode;
+  const effectiveChaosMode  = mode === 'chaos'        || options?.chaosMode  === true;
+  const effectiveOriginBias = mode === 'deep-archive' || options?.originBias === true;
+  // Unseen-only: relax per-source caps so we dig deeper looking for fresh content
+  const unseenOnlyMode = mode === 'unseen-only';
+
   // One DB query to load all sources; avoids N round trips inside the loop.
   const allSources = await getScannerSources();
   const sourceMap  = new Map(allSources.map((s) => [s.id, s]));
@@ -1426,6 +1479,8 @@ export async function runFetchSessionAction(
   const seenThisSession = new Set<string>();
 
   // Diversity cap: max PER_SOURCE_CANDIDATE_CAP results per source (excludes errors).
+  // Unseen-only mode raises the cap so we dig deeper through each source.
+  const effectivePerSourceCap = unseenOnlyMode ? PER_SOURCE_CANDIDATE_CAP + 3 : PER_SOURCE_CANDIDATE_CAP;
   const perSourceCount = new Map<string, number>();
 
   const results: SessionSourceResult[] = [];
@@ -1489,7 +1544,7 @@ export async function runFetchSessionAction(
       let erowidRejected = 0;
       const erowidRejectReasons: string[] = [];
       for (const link of erowidDisc.links.slice(0, 20)) {
-        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
         if ('error' in fr) { erowidRejected++; erowidRejectReasons.push(fr.error.slice(0, 80)); continue; }
         erowidFetched++;
@@ -1533,7 +1588,7 @@ export async function runFetchSessionAction(
       let waybackRejected = 0;
       const waybackRejectReasons: string[] = [];
       for (const link of waybackDisc.links.slice(0, 25)) {
-        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
         const fr = await fetchWaybackPagePreview(source, link.url, link.topicGroup, link.topicGroupName);
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
         waybackFetched++;
@@ -1561,7 +1616,7 @@ export async function runFetchSessionAction(
 
     // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
-      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected, options?.chaosMode, options?.originBias);
+      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected, effectiveChaosMode, effectiveOriginBias);
       const di = multiResult.debugInfo;
       if ('error' in multiResult) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, endpointResults: di.endpointResults, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
@@ -1571,7 +1626,7 @@ export async function runFetchSessionAction(
         let redditRejected = 0;
         const redditRejectReasons: string[] = [];
         for (const candidate of multiResult.candidates) {
-          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+          if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -1602,7 +1657,7 @@ export async function runFetchSessionAction(
       } else {
         let wikiPassed = 0;
         for (const candidate of multiResult.candidates) {
-          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+          if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -1631,7 +1686,7 @@ export async function runFetchSessionAction(
       } else {
         let bbsPassed = 0;
         for (const candidate of bbsResult.candidates) {
-          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+          if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive' } });
@@ -1797,7 +1852,7 @@ export async function runFetchSessionAction(
           finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad }),
         };
 
-        if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+        if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
         const linkUrl2 = linkCand.sourceUrl;
         if (isAlreadyArchived(linkUrl2)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...linkCand, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -2260,8 +2315,9 @@ async function discoverWaybackLinks(
     }
   }
 
-  // Phase W: fetch 100 snapshots for deeper coverage
-  const result = await searchWaybackSnapshots(source.base_url!, 100, fromYear, toYear);
+  // Phase W: fetch 100 snapshots; TASK 5: randomise CDX offset to surface different captures each run
+  const cdxOffset = Math.floor(Math.random() * 40);
+  const result = await searchWaybackSnapshots(source.base_url!, 100, fromYear, toYear, cdxOffset > 0 ? cdxOffset : undefined);
   if ('error' in result) return result;
 
   // Sort oldest-first so we surface the earliest viable pages for this domain.

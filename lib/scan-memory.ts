@@ -14,6 +14,14 @@ import path from 'path';
 
 export type SeenType = 'seen' | 'skipped' | 'posted';
 
+export interface ScanMemoryStats {
+  totalUrls:    number;
+  byType:       Record<SeenType, number>;
+  oldestMs:     number | null;  // Unix ms of oldest live entry
+  newestMs:     number | null;  // Unix ms of newest live entry
+  sizeBytesApprox: number;      // rough estimate for display
+}
+
 interface UrlRecord {
   seenAt: number;
   type:   SeenType;
@@ -64,6 +72,46 @@ function persist(mem: ScanMemory): void {
     fs.writeFileSync(MEMORY_PATH, JSON.stringify(mem, null, 2), 'utf-8');
   } catch {
     // Read-only FS (Vercel production) — cache lives in-process only
+  }
+}
+
+/**
+ * Return stats about the current scan memory state.
+ */
+export function getScanMemoryStats(): ScanMemoryStats {
+  const mem = load();
+  const now = Date.now();
+  const byType: Record<SeenType, number> = { seen: 0, skipped: 0, posted: 0 };
+  let oldest: number | null = null;
+  let newest: number | null = null;
+
+  for (const [, rec] of Object.entries(mem.urls)) {
+    if (now - rec.seenAt >= DECAY_MS[rec.type]) continue; // expired
+    byType[rec.type]++;
+    if (oldest == null || rec.seenAt < oldest) oldest = rec.seenAt;
+    if (newest == null || rec.seenAt > newest) newest = rec.seenAt;
+  }
+
+  return {
+    totalUrls:       byType.seen + byType.skipped + byType.posted,
+    byType,
+    oldestMs:        oldest,
+    newestMs:        newest,
+    sizeBytesApprox: JSON.stringify(mem).length,
+  };
+}
+
+/**
+ * Erase all scan memory from both the in-process cache and disk file.
+ * Does NOT touch the Supabase database.
+ */
+export function clearScanMemory(): void {
+  _cache = { urls: {}, savedAt: Date.now() };
+  try {
+    fs.mkdirSync(path.dirname(MEMORY_PATH), { recursive: true });
+    fs.writeFileSync(MEMORY_PATH, JSON.stringify(_cache, null, 2), 'utf-8');
+  } catch {
+    // Read-only FS (Vercel) — cache reset in-process only
   }
 }
 

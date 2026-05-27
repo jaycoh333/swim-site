@@ -42,6 +42,7 @@ export async function searchWaybackSnapshots(
   limit = 20,
   fromYear?: number,
   toYear?: number,
+  offset?: number,
 ): Promise<{ snapshots: WaybackSnapshot[] } | { error: string }> {
   const cap = Math.min(limit, 100);
 
@@ -67,6 +68,7 @@ export async function searchWaybackSnapshots(
   cdxUrl.searchParams.set('fastLatest','true');          // one snapshot per URL
   if (fromYear) cdxUrl.searchParams.set('from', `${fromYear}0101000000`);
   if (toYear)   cdxUrl.searchParams.set('to',   `${toYear}1231235959`);
+  if (offset && offset > 0) cdxUrl.searchParams.set('offset', String(offset));
 
   let raw: unknown;
   try {
