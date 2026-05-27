@@ -369,10 +369,22 @@ export function ScannerConsoleClient({
 
   useEffect(() => {
     if (scanPhase === 'done') {
-      setActiveTab('strong');
       setSelectedUrls(new Set());
+      // TASK 4: smart default — Strong → Needs Review → Low Signal
+      const good = scanResults.filter((r) => {
+        if (r.status === 'error') return false;
+        if (r.candidate.badCandidateReason || r.candidate.isIndexPage) return false;
+        return r.candidate.storyScore == null || r.candidate.storyScore >= 8;
+      });
+      const review = scanResults.filter((r) =>
+        r.status !== 'error' && !r.candidate.isIndexPage && !r.candidate.badCandidateReason &&
+        (r.candidate.storyScore == null || r.candidate.storyScore < 8)
+      );
+      if (good.length > 0) setActiveTab('strong');
+      else if (review.length > 0) setActiveTab('needs-review');
+      else setActiveTab('low-signal');
     }
-  }, [scanPhase]);
+  }, [scanPhase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Preset helpers ───────────────────────────────────────────────────────
 
@@ -1063,28 +1075,71 @@ export function ScannerConsoleClient({
                 setSelectedUrls(new Set());
               }
 
-              // Tab data
+              // Tab data — TASK 2
               const TABS = [
-                { id: 'strong'        as const, label: 'Strong',    count: goodResults.length,      color: 'emerald' },
-                { id: 'needs-review'  as const, label: 'Needs Review', count: needsReview.length,   color: 'amber'   },
-                { id: 'low-signal'    as const, label: 'Low Signal',count: lowSignalResults.length, color: 'slate'   },
-                { id: 'blocked'       as const, label: 'Blocked',   count: errorResults.length,     color: 'red'     },
+                { id: 'strong'       as const, label: 'Strong Candidates', count: goodResults.length,      color: 'emerald' },
+                { id: 'needs-review' as const, label: 'Needs Review',      count: needsReview.length,      color: 'amber'   },
+                { id: 'low-signal'   as const, label: 'Low Signal',        count: lowSignalResults.length, color: 'slate'   },
+                { id: 'blocked'      as const, label: 'Blocked / Failed',  count: errorResults.length,     color: 'red'     },
               ] as const;
-              const TAB_COLOR_ACTIVE: Record<string, string> = {
-                emerald: 'bg-emerald-500/18 text-emerald-300 border-emerald-500/30',
-                amber:   'bg-amber-500/18   text-amber-300   border-amber-500/30',
-                slate:   'bg-slate-500/18   text-slate-300   border-slate-500/30',
-                red:     'bg-red-500/18     text-red-300     border-red-500/30',
+              const TAB_ACTIVE_CLS: Record<string, string> = {
+                emerald: 'border-emerald-400/70 bg-emerald-500/18 text-emerald-300',
+                amber:   'border-amber-400/70   bg-amber-500/18   text-amber-300',
+                slate:   'border-slate-400/50   bg-slate-500/16   text-slate-200',
+                red:     'border-red-400/70     bg-red-500/18     text-red-300',
               };
-              const TAB_BADGE_ACTIVE: Record<string, string> = {
-                emerald: 'bg-emerald-500/25 text-emerald-300',
-                amber:   'bg-amber-500/25   text-amber-300',
-                slate:   'bg-slate-500/20   text-slate-400',
-                red:     'bg-red-500/25     text-red-300',
+              const TAB_IDLE_CLS: Record<string, string> = {
+                emerald: 'border-white/8 bg-white/[0.02] text-slate-500 hover:border-emerald-500/30 hover:text-emerald-400/60',
+                amber:   'border-white/8 bg-white/[0.02] text-slate-500 hover:border-amber-500/30   hover:text-amber-400/60',
+                slate:   'border-white/8 bg-white/[0.02] text-slate-500 hover:border-slate-400/25   hover:text-slate-300',
+                red:     'border-white/8 bg-white/[0.02] text-slate-500 hover:border-red-500/30     hover:text-red-400/60',
+              };
+              const TAB_BADGE_CLS: Record<string, string> = {
+                emerald: 'bg-emerald-500/28 text-emerald-200',
+                amber:   'bg-amber-500/28   text-amber-200',
+                slate:   'bg-slate-500/25   text-slate-300',
+                red:     'bg-red-500/28     text-red-200',
+              };
+              const TAB_DESC: Record<string, string> = {
+                'strong':       'Best scanner finds. Queue these first.',
+                'needs-review': 'Possible stories. Human check recommended.',
+                'low-signal':   'Weak or generic results. Usually skip.',
+                'blocked':      'Sources that failed, timed out, or were blocked.',
+              };
+              const TAB_DESC_CLS: Record<string, string> = {
+                'strong':       'text-emerald-400/65',
+                'needs-review': 'text-amber-400/65',
+                'low-signal':   'text-slate-500',
+                'blocked':      'text-red-400/55',
               };
 
               return (
                 <div className="flex flex-col gap-4">
+
+                  {/* ── TASK 1: Big scan results header ── */}
+                  <div className="rounded-2xl border border-white/14 bg-white/[0.05] px-5 py-5">
+                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-slate-600">Scan Complete</p>
+                    <h2 className="mb-3 text-[30px] font-bold tracking-tight text-white">SCAN RESULTS</h2>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[14px] font-bold tabular-nums text-sky-300">
+                        {candidatesFetched} fetched
+                      </span>
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${goodResults.length > 0 ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
+                        {goodResults.length} strong
+                      </span>
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${needsReview.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
+                        {needsReview.length} needs review
+                      </span>
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${lowSignalResults.length > 0 ? 'border-slate-500/25 bg-slate-500/8 text-slate-400' : 'border-white/8 bg-white/[0.015] text-slate-700'}`}>
+                        {lowSignalResults.length} low signal
+                      </span>
+                      {errorResults.length > 0 && (
+                        <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-[14px] font-bold tabular-nums text-red-300">
+                          {errorResults.length} blocked
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
                   {/* ── Summary counts ── */}
                   <div className="grid grid-cols-3 gap-1.5">
@@ -1104,72 +1159,86 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
-                  {/* ── Tab strip ── */}
-                  <div className="flex gap-1 overflow-x-auto rounded-xl border border-white/8 bg-white/[0.02] p-1">
+                  {/* ── TASK 2: Huge tab buttons ── */}
+                  <div className="grid grid-cols-2 gap-2">
                     {TABS.map(({ id, label, count, color }) => {
                       const isActive = activeTab === id;
                       return (
                         <button
                           key={id}
                           onClick={() => setActiveTab(id)}
-                          className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-semibold whitespace-nowrap transition-all ${
-                            isActive ? TAB_COLOR_ACTIVE[color] : 'border-transparent text-slate-600 hover:text-slate-400'
+                          className={`flex min-h-[60px] flex-col items-center justify-center gap-1 rounded-2xl border px-3 py-3.5 text-center transition-all ${
+                            isActive ? TAB_ACTIVE_CLS[color] : TAB_IDLE_CLS[color]
                           }`}
                         >
-                          {label}
-                          {count > 0 && (
-                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
-                              isActive ? TAB_BADGE_ACTIVE[color] : 'bg-white/5 text-slate-700'
+                          <span className={`text-[16px] font-bold leading-tight ${isActive ? '' : 'text-slate-500'}`}>{label}</span>
+                          {count > 0 ? (
+                            <span className={`rounded-full px-2.5 py-0.5 text-[13px] font-bold tabular-nums ${
+                              isActive ? TAB_BADGE_CLS[color] : 'bg-white/5 text-slate-600'
                             }`}>{count}</span>
+                          ) : (
+                            <span className="text-[12px] text-slate-700">none</span>
                           )}
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* ── Bulk action bar (strong tab only) ── */}
-                  {activeTab === 'strong' && goodResults.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
-                      <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-500">
-                        <input
-                          type="checkbox"
-                          checked={selectedUrls.size > 0 && goodResults.filter((r) => r.status !== 'error').every((r) => selectedUrls.has(r.candidate.sourceUrl))}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedUrls(new Set(goodResults.filter((r) => r.status !== 'error').map((r) => r.candidate.sourceUrl)));
-                            } else {
-                              setSelectedUrls(new Set());
+                  {/* ── TASK 3: Tab description ── */}
+                  <p className={`text-[14px] leading-snug ${TAB_DESC_CLS[activeTab]}`}>
+                    {TAB_DESC[activeTab]}
+                  </p>
+
+                  {/* ── TASK 7: Bulk action bar — large fixed panel ── */}
+                  {(activeTab === 'strong' || activeTab === 'needs-review') &&
+                   (activeTab === 'strong' ? goodResults : needsReview).length > 0 && (
+                    <div className="rounded-2xl border border-white/14 bg-white/[0.05] p-4">
+                      <div className="mb-3 flex items-center gap-3">
+                        <label className="flex cursor-pointer items-center gap-2 text-[15px] font-semibold text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={
+                              selectedUrls.size > 0 &&
+                              (activeTab === 'strong' ? goodResults : needsReview)
+                                .filter((r) => r.status !== 'error')
+                                .every((r) => selectedUrls.has(r.candidate.sourceUrl))
                             }
-                          }}
-                          className="h-3.5 w-3.5 accent-emerald-400"
-                        />
-                        Select all
-                      </label>
+                            onChange={(e) => {
+                              const pool = (activeTab === 'strong' ? goodResults : needsReview).filter((r) => r.status !== 'error');
+                              setSelectedUrls(e.target.checked ? new Set(pool.map((r) => r.candidate.sourceUrl)) : new Set());
+                            }}
+                            className="h-4 w-4 accent-emerald-400"
+                          />
+                          Select All Visible
+                        </label>
+                        {selectedUrls.size > 0 && (
+                          <span className="ml-auto text-[14px] font-bold text-slate-400">{selectedUrls.size} selected</span>
+                        )}
+                      </div>
                       {selectedUrls.size > 0 && (
-                        <>
-                          <span className="text-[12px] text-slate-600">{selectedUrls.size} selected</span>
+                        <div className="mb-3 flex gap-2">
                           <button
                             onClick={bulkQueue}
-                            className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/18"
+                            className="flex flex-1 min-h-[56px] items-center justify-center rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400"
                           >
-                            Queue selected
+                            Queue Selected
                           </button>
                           <button
                             onClick={() => { for (const url of selectedUrls) handleSkip(url); setSelectedUrls(new Set()); }}
-                            className="rounded-lg border border-slate-500/25 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06]"
+                            className="flex min-h-[56px] items-center justify-center rounded-2xl border border-white/15 bg-white/[0.04] px-6 text-[16px] font-semibold text-slate-300 transition-colors hover:bg-white/[0.09]"
                           >
-                            Skip selected
+                            Skip Selected
                           </button>
-                        </>
+                        </div>
                       )}
-                      <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-600">
+                      <label className="flex cursor-pointer items-center gap-2 text-[12px] text-slate-600">
                         <input
                           type="checkbox"
                           checked={showSeen}
                           onChange={(e) => setShowSeen(e.target.checked)}
                           className="h-3.5 w-3.5 accent-slate-400"
                         />
-                        Show queued/skipped
+                        Show already queued / skipped
                       </label>
                     </div>
                   )}
@@ -1236,25 +1305,32 @@ export function ScannerConsoleClient({
                         );
                       }
                       return (
-                        <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-8 text-center">
-                          <p className="text-[17px] font-semibold text-slate-500">No strong story candidates found</p>
-                          <p className="mt-1.5 text-[14px] leading-relaxed text-slate-600">
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
+                          <p className="text-[36px] font-bold text-slate-700">—</p>
+                          <p className="mt-2 text-[22px] font-bold text-slate-400">No strong candidates this scan</p>
+                          <p className="mt-2 text-[15px] leading-relaxed text-slate-600">
                             {blockedCnt > 0
-                              ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked. Fix source types or use Discover Links.`
-                              : 'All results were weak or index pages. Try a different preset or add more sources.'}
+                              ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked — fix source types or use Discover Links.`
+                              : 'Try the Encounters or UFO/Entities preset, or check the Needs Review tab.'}
                           </p>
                           <a href="/scanner/sources"
-                            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-4 py-2 text-[13px] font-semibold uppercase tracking-widest text-emerald-400 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/14">
-                            + Add more sources
+                            className="mt-5 inline-flex items-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-5 py-2.5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200">
+                            + Manage Sources
                           </a>
                         </div>
                       );
                     }
                     return (
                       <div className="flex flex-col gap-3">
-                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-500">
-                          Strong Candidates · {visibleGood.length}{visibleGood.length < goodResults.length ? ` of ${goodResults.length}` : ''}
-                        </p>
+                        <div className="rounded-xl border border-emerald-500/18 bg-emerald-500/[0.05] px-4 py-3">
+                          <p className="text-[17px] font-bold text-emerald-300">
+                            Strong Candidates
+                            {visibleGood.length < goodResults.length && (
+                              <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">· showing {visibleGood.length} of {goodResults.length}</span>
+                            )}
+                          </p>
+                          <p className="mt-0.5 text-[13px] text-emerald-400/55">Queue the best stories for review.</p>
+                        </div>
                         {visibleGood.map((result) => {
                           if (result.status === 'error') return null;
                           const st        = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
@@ -1461,12 +1537,17 @@ export function ScannerConsoleClient({
                   {/* ── NEEDS REVIEW TAB ── */}
                   {activeTab === 'needs-review' && (
                     visibleReview.length === 0 ? (
-                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
-                        <p className="text-[15px] text-slate-500">No items needing review.</p>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
+                        <p className="text-[32px] font-bold text-slate-700">—</p>
+                        <p className="mt-2 text-[20px] font-bold text-slate-400">Nothing needs manual review</p>
+                        <p className="mt-2 text-[14px] text-slate-600">All scored results are either strong or low signal.</p>
                       </div>
                     ) : (
                       <div className="flex flex-col gap-2">
-                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Low score — valid posts · {visibleReview.length}</p>
+                        <div className="rounded-xl border border-amber-500/18 bg-amber-500/[0.05] px-4 py-3">
+                          <p className="text-[17px] font-bold text-amber-300">Needs Review</p>
+                          <p className="mt-0.5 text-[13px] text-amber-400/55">Check these manually — may be worth queueing.</p>
+                        </div>
                         {visibleReview.map((result) => {
                           if (result.status === 'error') return null;
                           const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
@@ -1502,12 +1583,17 @@ export function ScannerConsoleClient({
                   {/* ── LOW SIGNAL TAB ── */}
                   {activeTab === 'low-signal' && (
                     visibleLow.length === 0 ? (
-                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
-                        <p className="text-[15px] text-slate-500">No low-signal results.</p>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
+                        <p className="text-[32px] font-bold text-slate-700">—</p>
+                        <p className="mt-2 text-[20px] font-bold text-slate-400">No low-signal results</p>
+                        <p className="mt-2 text-[14px] text-slate-600">All fetched results passed quality filters.</p>
                       </div>
                     ) : (
                       <div className="flex flex-col gap-2">
-                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Low Signal · {visibleLow.length}</p>
+                        <div className="rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3">
+                          <p className="text-[17px] font-bold text-slate-400">Low Signal</p>
+                          <p className="mt-0.5 text-[13px] text-slate-600">Weak or index results. Usually safe to skip.</p>
+                        </div>
                         {visibleLow.map((result) => {
                           if (result.status === 'error') return null;
                           const debugReason = result.candidate.badCandidateReason
@@ -1536,12 +1622,17 @@ export function ScannerConsoleClient({
                   {/* ── BLOCKED/FAILED TAB ── */}
                   {activeTab === 'blocked' && (
                     visibleErrors.length === 0 ? (
-                      <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-6 text-center">
-                        <p className="text-[15px] text-slate-500">No blocked or failed sources.</p>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
+                        <p className="text-[32px] font-bold text-emerald-700">✓</p>
+                        <p className="mt-2 text-[20px] font-bold text-emerald-400/70">No blocked sources</p>
+                        <p className="mt-2 text-[14px] text-slate-600">All sources fetched successfully this scan.</p>
                       </div>
                     ) : (
                       <div className="flex flex-col gap-2">
-                        <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Blocked / Failed · {visibleErrors.length}</p>
+                        <div className="rounded-xl border border-red-500/15 bg-red-500/[0.04] px-4 py-3">
+                          <p className="text-[17px] font-bold text-red-300">Blocked / Failed</p>
+                          <p className="mt-0.5 text-[13px] text-red-400/55">Fix source types or use Discover Links for these.</p>
+                        </div>
                         {visibleErrors.map((result, idx) => {
                           if (result.status !== 'error') return null;
                           const isBlocked = result.error.includes('blocked direct fetch');
