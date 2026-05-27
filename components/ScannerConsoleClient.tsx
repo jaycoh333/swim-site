@@ -863,6 +863,12 @@ export function ScannerConsoleClient({
   // Phase AA: scan mode selector (replaces chaosMode + originBias toggles)
   const [scanMode, setScanMode] = useState<ScanMode>('fresh');
 
+  // Phase AI: batch scan progress
+  const [batchProgress, setBatchProgress] = useState<{
+    current: number; total: number; sourcesScanned: number; candidatesFound: number; errors: number;
+  } | null>(null);
+  const [showAllResults, setShowAllResults] = useState(false);
+
   // Phase AA: session tracking + source fairness + memory debug
   const [scanId,         setScanId]         = useState(0);
   const [lastScanSrcIds, setLastScanSrcIds] = useState<Set<string>>(new Set());
@@ -1138,31 +1144,79 @@ export function ScannerConsoleClient({
     setCandStates(new Map());
     setLowQualityOpen(false);
     setShowDiagnostics(false);
+    setShowAllResults(false);
+
     const sourceIdsToRun = isDebugRun
       ? ['__debug_test__']
       : activeScanSources.map((s) => s.id);
-    const res = await runFetchSessionAction(sourceIdsToRun, {
-      includeRejected: showRejected,
-      excludeUrls:     [...seenUrlsThisSession],
-      scanMode,
-      isOriginScan:    activePreset === 'origin-scan',
-      isDeepTruth:     activePreset === PRESET_DEEP_TRUTH,
-    });
-    if ('error' in res) {
-      setScanError(res.error);
-      setScanPhase('idle');
-      return;
+
+    // Phase AI: batch into groups of 10, scan sequentially
+    const BATCH_SIZE = 10;
+    const batches: string[][] = [];
+    for (let i = 0; i < sourceIdsToRun.length; i += BATCH_SIZE) {
+      batches.push(sourceIdsToRun.slice(i, i + BATCH_SIZE));
     }
-    setScanResults(res.results);
+
+    const allResults: SessionSourceResult[]   = [];
+    const allDiagnostics: SourceDiagnostic[]  = [];
+    const excludeUrls = [...seenUrlsThisSession];
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      setBatchProgress({
+        current:        bi + 1,
+        total:          batches.length,
+        sourcesScanned: bi * BATCH_SIZE,
+        candidatesFound: allResults.filter((r) => r.status !== 'error').length,
+        errors:          allResults.filter((r) => r.status === 'error').length,
+      });
+
+      const res = await runFetchSessionAction(batch, {
+        includeRejected: showRejected,
+        excludeUrls,
+        scanMode,
+        isOriginScan: activePreset === 'origin-scan',
+        isDeepTruth:  activePreset === PRESET_DEEP_TRUTH,
+      });
+
+      if ('error' in res) {
+        // Batch-level error (e.g. server error) — record errors for each source and continue
+        for (const id of batch) {
+          allResults.push({ sourceId: id, sourceName: id, status: 'error', error: res.error });
+        }
+        continue;
+      }
+
+      allResults.push(...res.results);
+      allDiagnostics.push(...(res.diagnostics ?? []));
+    }
+
+    setBatchProgress(null);
+
+    // Sort merged results by combined score so highest-value items are first
+    const sortedResults = [...allResults].sort((a, b) => {
+      if (a.status === 'error') return 1;
+      if (b.status === 'error') return -1;
+      const scoreA = (a.candidate.archiveSignalScore  ?? 0) * 1.5
+                   + (a.candidate.originPriorityScore ?? 0) * 1.2
+                   + (a.candidate.finalPriorityScore  ?? 0)
+                   + (a.candidate.storyScore          ?? 0) * 0.5;
+      const scoreB = (b.candidate.archiveSignalScore  ?? 0) * 1.5
+                   + (b.candidate.originPriorityScore ?? 0) * 1.2
+                   + (b.candidate.finalPriorityScore  ?? 0)
+                   + (b.candidate.storyScore          ?? 0) * 0.5;
+      return scoreB - scoreA;
+    });
+
+    setScanResults(sortedResults);
     setScanId((n) => n + 1);
     setLastScanSrcIds(new Set(sourceIdsToRun));
-    const diags = res.diagnostics ?? [];
-    setDiagnostics(diags);
+    setDiagnostics(allDiagnostics);
     setScanPhase('done');
-    const totalFetched = diags.reduce((sum, d) => sum + d.pagesFetched, 0);
+    const totalFetched = allDiagnostics.reduce((sum, d) => sum + d.pagesFetched, 0);
     if (totalFetched === 0) setShowDiagnostics(true);
-    setHealthMap(computeSourceHealthMap(res.results));
-    const allCandidates = res.results
+    setHealthMap(computeSourceHealthMap(sortedResults));
+    const allCandidates = sortedResults
       .filter((r) => r.status !== 'error')
       .map((r) => r.candidate);
     setClusterList(detectClusters(allCandidates));
@@ -1808,32 +1862,64 @@ export function ScannerConsoleClient({
                   disabled={scanPhase === 'scanning' || (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG)}
                   className={`${BTN_PRIMARY} ${scanPhase === 'scanning' ? 'ring-2 ring-emerald-500/40 ring-offset-2 ring-offset-black' : ''}`}
                 >
-                  {scanPhase === 'scanning'
-                    ? <><Spinner /> Scanning…</>
-                    : scanPhase === 'done'
-                      ? `↺ Rescan${activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG ? ` · ${activeScanSources.length} source${activeScanSources.length !== 1 ? 's' : ''}` : ''}`
-                      : (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG)
-                        ? 'No sources for this preset'
-                        : `Scan${activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG ? ` · ${activeScanSources.length} source${activeScanSources.length !== 1 ? 's' : ''}` : ''}`
-                  }
+                  {(() => {
+                    if (scanPhase === 'scanning') return <><Spinner /> {batchProgress && batchProgress.total > 1 ? `Batch ${batchProgress.current}/${batchProgress.total}…` : 'Scanning…'}</>;
+                    const count = activeScanSources.length;
+                    const batchCount = count > 0 ? Math.ceil(count / 10) : 0;
+                    const countLabel = activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG
+                      ? ` · ${count} source${count !== 1 ? 's' : ''}${batchCount > 1 ? ` · ${batchCount} batches` : ''}`
+                      : '';
+                    if (scanPhase === 'done') return `↺ Rescan${countLabel}`;
+                    if (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG) return 'No sources for this preset';
+                    return `Scan${countLabel}`;
+                  })()}
                 </button>
                 {scanPhase === 'scanning' && (
-                  <div className="flex flex-col items-center gap-1">
-                    <div className="flex items-center gap-2">
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="font-mono text-[13px] tabular-nums text-emerald-400/70">
-                        {liveCount} fragments scanned
-                      </span>
-                    </div>
-                    {liveScanningSource && (
-                      <p className="font-mono text-[11px] text-slate-600 tracking-wide">
-                        ↯ {liveScanningSource}
-                      </p>
-                    )}
-                    {scanStatus && (
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-400/45 animate-pulse">
-                        {scanStatus}
-                      </p>
+                  <div className="flex flex-col gap-1.5">
+                    {batchProgress && batchProgress.total > 1 ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="font-mono text-[13px] font-bold tabular-nums text-emerald-400/80">
+                              Batch {batchProgress.current}/{batchProgress.total}
+                            </span>
+                          </div>
+                          <span className="font-mono text-[12px] tabular-nums text-slate-500">
+                            {batchProgress.candidatesFound} found
+                            {batchProgress.errors > 0 && ` · ${batchProgress.errors} err`}
+                          </span>
+                        </div>
+                        {/* Progress bar */}
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-white/8">
+                          <div
+                            className="h-full bg-emerald-400/60 transition-all duration-300"
+                            style={{ width: `${Math.round((batchProgress.current / batchProgress.total) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="font-mono text-[11px] text-slate-600">
+                          {batchProgress.sourcesScanned} of {activeScanSources.length} sources scanned
+                        </p>
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
+                          <span className="font-mono text-[13px] tabular-nums text-emerald-400/70">
+                            {liveCount} fragments scanned
+                          </span>
+                        </div>
+                        {liveScanningSource && (
+                          <p className="font-mono text-[11px] text-slate-600 tracking-wide">
+                            ↯ {liveScanningSource}
+                          </p>
+                        )}
+                        {scanStatus && (
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-400/45 animate-pulse">
+                            {scanStatus}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -2514,7 +2600,9 @@ export function ScannerConsoleClient({
                           <p className="text-[17px] font-bold text-emerald-300">
                             {isDeepTruthScan ? 'Recovered Artifacts' : 'Strong Candidates'}
                             {visibleGood.length < filteredGoodResults.length && (
-                              <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">· showing {visibleGood.length} of {filteredGoodResults.length}</span>
+                              <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">
+                                · showing {Math.min(visibleGood.length, 50)} of {filteredGoodResults.length}
+                              </span>
                             )}
                           </p>
                           <p className="mt-0.5 text-[13px] text-emerald-400/55">{isDeepTruthScan ? 'Archived claims — not verified. Internet artifacts only.' : 'Queue the best stories for review.'}</p>
@@ -2603,7 +2691,12 @@ export function ScannerConsoleClient({
                           };
                           const filteredGood = sortedGood.filter(filterFn);
 
-                          return filteredGood.map((result, idx) => {
+                          // Phase AI: top-50 visible by default; rest under "Show more"
+                          const TOP_RESULTS_LIMIT    = 50;
+                          const filteredGoodDisplay  = showAllResults ? filteredGood : filteredGood.slice(0, TOP_RESULTS_LIMIT);
+                          const hiddenResultsCount   = Math.max(0, filteredGood.length - TOP_RESULTS_LIMIT);
+
+                          const resultCards = filteredGoodDisplay.map((result, idx) => {
                           if (result.status === 'error') return null;
                           const st        = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
                           const analysis  = generateSignalAnalysis(result.candidate);
@@ -2622,7 +2715,7 @@ export function ScannerConsoleClient({
                           const era     = result.candidate.sourceEra ?? 'modern source';
                           const prevEra = (() => {
                             for (let i = idx - 1; i >= 0; i--) {
-                              const r = filteredGood[i];
+                              const r = filteredGoodDisplay[i];
                               if (r.status !== 'error') return r.candidate.sourceEra ?? 'modern source';
                             }
                             return null;
@@ -3074,6 +3167,21 @@ export function ScannerConsoleClient({
                             </React.Fragment>
                           );
                         });
+                          return (
+                            <>
+                              {resultCards}
+                              {hiddenResultsCount > 0 && (
+                                <button
+                                  onClick={() => setShowAllResults((v) => !v)}
+                                  className="w-full rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3 text-[13px] font-bold uppercase tracking-wider text-emerald-400/70 transition-colors hover:bg-emerald-500/08 hover:text-emerald-300"
+                                >
+                                  {showAllResults
+                                    ? `Show fewer results`
+                                    : `Show ${hiddenResultsCount} more result${hiddenResultsCount !== 1 ? 's' : ''}`}
+                                </button>
+                              )}
+                            </>
+                          );
                         })()}
                       </div>
                     );

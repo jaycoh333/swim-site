@@ -1839,12 +1839,12 @@ export async function disableHighRiskSourcesAction(): Promise<{ disabled: string
 //   - Fetches are sequential — no parallel crawl
 //   - Raw HTML discarded after extraction
 //   - No DB writes here; curator queues each candidate individually
-//   - Max 20 sources per session
+//   - Phase AI: no hard source-count cap — client batches in groups of 10
 //   - Per-source timeout: 10 seconds
 // ---------------------------------------------------------------------------
 
-const PER_SOURCE_CANDIDATE_CAP = 5;   // max candidates returned per source
-const SESSION_TOTAL_CANDIDATE_CAP = 30; // max total candidates per run
+const PER_SOURCE_CANDIDATE_CAP    = 5;  // max candidates returned per source
+const SESSION_TOTAL_CANDIDATE_CAP = 50; // max total per action call (10 sources × 5 each)
 
 export type ScanMode = 'fresh' | 'deep-archive' | 'chaos' | 'unseen-only';
 
@@ -1866,8 +1866,8 @@ export async function runFetchSessionAction(
     isDeepTruth?: boolean;
   },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
-  if (!sourceIds.length)    return { error: 'no source IDs provided' };
-  if (sourceIds.length > 20) return { error: 'max 20 sources per session' };
+  if (!sourceIds.length) return { error: 'no source IDs provided' };
+  if (sourceIds.length > 50) return { error: 'max 50 sources per batch call — client should batch in groups of 10' };
 
   // Debug test preset — returns static mock candidates without hitting live sources.
   if (sourceIds.length === 1 && sourceIds[0] === '__debug_test__') {
