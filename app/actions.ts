@@ -798,13 +798,14 @@ async function fetchRedditMultipleCandidates(
   // Cap collection at 120 raw posts; origin bias pre-filters recent posts
   let postsToScore = allPosts.slice(0, 120);
   if (originBias) {
-    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - SIX_MONTHS_MS;
-    // Keep posts older than 6 months, or high-score posts regardless of age
+    // Phase W: hard cutoff at 1 year (was 6 months); exception threshold raised to 1000
+    const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - ONE_YEAR_MS;
+    // Keep posts older than 1 year, or exceptionally high-engagement posts
     postsToScore = postsToScore.filter((post) => {
       const ts = (post.data.created_utc ?? 0) * 1000;
-      if (ts < cutoff) return true;          // old enough — keep
-      if (post.data.score >= 500) return true; // very high score — exception
+      if (ts < cutoff) return true;           // old enough — keep
+      if (post.data.score >= 1000) return true; // Phase W: raised exception threshold to 1000
       return false;
     });
   }
@@ -876,11 +877,11 @@ async function fetchRedditMultipleCandidates(
     let agePenalty = 0;
     let recentPenaltyNote: string | undefined;
     if (originBias && p.created_utc) {
-      const postAgeMs = Date.now() - p.created_utc * 1000;
+      // Phase W: harder age penalties — Reddit is heavily penalized in origin mode
+      const postAgeMs   = Date.now() - p.created_utc * 1000;
       const postAgeDays = postAgeMs / 86_400_000;
-      if (postAgeDays < 30)       { agePenalty = 25; recentPenaltyNote = 'recent source (-25 origin bias)'; }
-      else if (postAgeDays < 90)  { agePenalty = 15; recentPenaltyNote = 'recent source (-15 origin bias)'; }
-      else if (postAgeDays < 180) { agePenalty =  5; recentPenaltyNote = 'recent source (-5 origin bias)'; }
+      if (postAgeDays < 365)        { agePenalty = 40; recentPenaltyNote = 'recent Reddit (-40 origin bias — <1yr)'; }
+      else if (postAgeDays < 1095)  { agePenalty = 25; recentPenaltyNote = 'recent Reddit (-25 origin bias — <3yr)'; }
     }
 
     return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus + jitter - agePenalty, recentPenaltyNote };
@@ -2106,11 +2107,14 @@ function computeOriginPriorityScore(
     sourceType?: string;
     originalDomain?: string;
     sourceUrl?: string;
+    isArchivedWayback?: boolean; // true when this is a confirmed Wayback snapshot
+    isArchivedForum?: boolean;   // true for forum/thread pages recovered from archive
+    isNotArchived?: boolean;     // true for live pages with no archive provenance
   },
 ): { score: number; era: string; archiveYear: number | undefined } {
   let bonus = 0;
   let era   = 'modern source';
-  const { archiveTimestamp, sourceType, originalDomain, sourceUrl } = opts;
+  const { archiveTimestamp, sourceType, originalDomain, sourceUrl, isArchivedWayback, isArchivedForum, isNotArchived } = opts;
 
   // Derive year from Wayback timestamp
   let archiveYear: number | undefined;
@@ -2118,18 +2122,28 @@ function computeOriginPriorityScore(
     archiveYear = parseInt(archiveTimestamp.slice(0, 4), 10) || undefined;
   }
 
-  // Era bonus from capture year
+  // Phase W: increased era bonuses — origin archaeology mode
+  // 1996–1999 strongest, modern = heavy penalty
   if (archiveYear) {
-    if      (archiveYear <= 1999) { bonus += 30; era = '1990s web'; }
-    else if (archiveYear <= 2004) { bonus += 22; era = 'early 2000s'; }
-    else if (archiveYear <= 2009) { bonus += 14; era = 'early 2000s'; }
-    else if (archiveYear <= 2012) { bonus +=  7; era = 'pre-social archive'; }
+    if      (archiveYear <= 1999) { bonus += 60; era = '1990s web'; }
+    else if (archiveYear <= 2004) { bonus += 45; era = 'early 2000s'; }
+    else if (archiveYear <= 2009) { bonus += 30; era = 'early 2000s'; }
+    else if (archiveYear <= 2014) { bonus += 15; era = 'pre-social archive'; }
+    // 2015+ archived page gets no era bonus — only domain bonus applies
   }
 
-  // BBS source type
+  // BBS source type — raw pre-internet text gets a strong boost
   if (sourceType === 'bbs') { bonus += 25; era = 'bbs archive'; }
 
-  // Old-web domain markers (supersede generic year era if stronger)
+  // Phase W: Wayback snapshot and archived forum bonuses
+  if (isArchivedWayback) bonus += 20;
+  if (isArchivedForum)   bonus += 15;
+
+  // Phase W: penalise live pages with no archive provenance (not BBS, not Wayback)
+  // This pushes unarchived modern sources to the bottom of origin scan results.
+  if (isNotArchived && sourceType !== 'bbs' && !isArchivedWayback) bonus -= 20;
+
+  // Old-web domain markers
   const domStr = `${originalDomain ?? ''} ${sourceUrl ?? ''}`.toLowerCase();
   if (OLD_WEB_DOMAINS.some((d) => domStr.includes(d))) {
     bonus += 8;
@@ -2137,10 +2151,10 @@ function computeOriginPriorityScore(
   }
   if (domStr.includes('geocities') || domStr.includes('angelfire') || domStr.includes('tripod') || domStr.includes('fortunecity')) {
     bonus += 10;
-    if (era !== 'bbs archive') era = era === '1990s web' ? '1990s web' : '1990s web';
+    if (era !== 'bbs archive') era = '1990s web';
   }
 
-  return { score: Math.min(baseScore + bonus, 100), era, archiveYear };
+  return { score: Math.min(Math.max(baseScore + bonus, 0), 100), era, archiveYear };
 }
 
 // ---------------------------------------------------------------------------
@@ -2178,44 +2192,74 @@ async function discoverWaybackLinks(
     }
   }
 
-  const result = await searchWaybackSnapshots(source.base_url!, 50, fromYear, toYear);
+  // Phase W: fetch 100 snapshots for deeper coverage
+  const result = await searchWaybackSnapshots(source.base_url!, 100, fromYear, toYear);
   if ('error' in result) return result;
 
   // Sort oldest-first so we surface the earliest viable pages for this domain.
-  // Older pages carry more origin weight in the priority score.
   const snaps = [...result.snapshots].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  // Topic path-hint filtering — keep snapshots whose URL contains at least one
-  // topic path hint.  If the filter is too aggressive (< 3 results), fall back
-  // to accepting all non-homepage URLs.
+  // Phase W: deep path clusters — URLs containing these segments are prioritised.
+  // They indicate actual content pages (threads, reports, files) over index pages.
+  const DEEP_PATH_CLUSTERS = [
+    '/forum/', '/forums/', '/thread/', '/threads/', '/post/', '/posts/',
+    '/bbs/', '/board/', '/boards/', '/topic/', '/topics/',
+    '/ufo/', '/paranormal/', '/conspiracy/', '/occult/', '/alien/',
+    '/files/', '/file/', '/reports/', '/report/', '/archives/', '/archive/',
+    '/text/', '/texts/', '/story/', '/stories/', '/article/', '/articles/',
+    '/message/', '/messages/', '/doc/', '/docs/', '/research/',
+  ];
+  // Junk paths to skip — logins, registrations, search, tag pages
+  const JUNK_PATH_PATTERNS = [
+    '/login', '/logout', '/register', '/signup', '/sign-up',
+    '/search', '/tag/', '/tags/', '/category/', '/categories/',
+    '/page/1', '/index.htm', '/index.html', '/index.php',
+    '/cgi-bin/', '/admin/', '/wp-admin/', '/captcha',
+  ];
+
+  const isJunkPath = (url: string) => {
+    const lc = url.toLowerCase();
+    return JUNK_PATH_PATTERNS.some((p) => lc.includes(p));
+  };
+  const isDeepPath = (url: string) => {
+    const lc = url.toLowerCase();
+    return DEEP_PATH_CLUSTERS.some((p) => lc.includes(p));
+  };
+  const isHomePath = (url: string) => {
+    try {
+      const u = new URL(url);
+      const pn = u.pathname;
+      return pn === '/' || pn === '' || pn === '/index.htm' || pn === '/index.html';
+    } catch { return false; }
+  };
+
+  // Topic path-hint filtering — prefer topic-relevant URLs; fall back to all valid.
   const pathHints  = topic.pathHints;
-  const urlLower   = (url: string) => url.toLowerCase();
-  const topicMatch = (url: string) => pathHints.some((h) => urlLower(url).includes(h));
+  const urlLower   = (u: string) => u.toLowerCase();
+  const topicMatch = (u: string) => pathHints.some((h) => urlLower(u).includes(h));
 
-  const topicFiltered = snaps.filter((s) => {
-    try {
-      const u = new URL(s.url);
-      if (u.pathname === '/' || u.pathname === '') return false;
-    } catch { /* keep */ }
-    return topicMatch(s.url);
-  });
+  const validSnaps = snaps.filter((s) => !isHomePath(s.url) && !isJunkPath(s.url));
 
-  const candidateSnaps = topicFiltered.length >= 3 ? topicFiltered : snaps.filter((s) => {
-    try {
-      const u = new URL(s.url);
-      if (u.pathname === '/' || u.pathname === '') return false;
-    } catch { /* keep */ }
-    return true;
-  });
+  const topicFiltered = validSnaps.filter((s) => topicMatch(s.url));
+  const deepFiltered  = validSnaps.filter((s) => isDeepPath(s.url));
 
-  // Per-domain diversity cap of 2.
+  // Priority order: topic+deep > topic-only > deep-only > all valid
+  let candidateSnaps: typeof snaps;
+  const topicDeep = topicFiltered.filter((s) => isDeepPath(s.url));
+  if (topicDeep.length >= 3)     candidateSnaps = topicDeep;
+  else if (topicFiltered.length >= 3) candidateSnaps = topicFiltered;
+  else if (deepFiltered.length >= 3)  candidateSnaps = deepFiltered;
+  else                               candidateSnaps = validSnaps;
+
+  // Per-domain diversity cap — deep paths get cap of 3, others cap of 2.
   const domainCount = new Map<string, number>();
   const links: DiscoveredLink[] = [];
 
   for (const snap of candidateSnaps) {
+    const cap = isDeepPath(snap.url) ? 3 : 2;
     let domain = '';
     try { domain = new URL(snap.url).hostname; } catch { domain = snap.url; }
-    if ((domainCount.get(domain) ?? 0) >= 2) continue;
+    if ((domainCount.get(domain) ?? 0) >= cap) continue;
     domainCount.set(domain, (domainCount.get(domain) ?? 0) + 1);
 
     links.push({
@@ -2226,7 +2270,7 @@ async function discoverWaybackLinks(
       topicGroupName: topic.name,
     });
 
-    if (links.length >= 25) break;
+    if (links.length >= 30) break;
   }
 
   return { links, topicGroup: topic.id, topicGroupName: topic.name };
@@ -2313,11 +2357,12 @@ async function fetchWaybackPagePreview(
   const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
   const waybackScore = Math.min(heuristics.storyScore + 5, 100); // archived = bonus
 
-  // Origin priority scoring
+  // Origin priority scoring — Wayback snapshots get the isArchivedWayback bonus
   const originResult = computeOriginPriorityScore(waybackScore, {
-    archiveTimestamp: timestamp,
+    archiveTimestamp:  timestamp,
     originalDomain,
-    sourceUrl: url,
+    sourceUrl:         url,
+    isArchivedWayback: true,
   });
 
   const firstSeenYear = originResult.archiveYear;

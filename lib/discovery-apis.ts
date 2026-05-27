@@ -43,7 +43,7 @@ export async function searchWaybackSnapshots(
   fromYear?: number,
   toYear?: number,
 ): Promise<{ snapshots: WaybackSnapshot[] } | { error: string }> {
-  const cap = Math.min(limit, 50);
+  const cap = Math.min(limit, 100);
 
   // Decide whether to use wildcard (bare domain) or exact URL
   let target: string;

@@ -130,6 +130,18 @@ const ERA_BADGE_MAP: Record<string, { label: string; cls: string }> = {
   'bbs archive':        { label: 'BBS ARCHIVE',   cls: 'border-violet-500/45 bg-violet-500/12 text-violet-300' },
 };
 const ERA_GROUP_ORDER = ['1990s web', 'bbs archive', 'early 2000s', 'pre-social archive', 'modern source'];
+
+// Phase W: archive-first source type priority for origin scan results.
+// Lower number = surfaces earlier. BBS/Wayback dominate; Reddit appears last.
+const ORIGIN_SOURCE_TYPE_RANK: Record<string, number> = {
+  'bbs':        0,
+  'wayback':    1,
+  'archive':    2,
+  'mediawiki':  3,
+  'forum':      4,
+  'imageboard': 5,
+  'reddit':     99,
+};
 const ERA_GROUP_DISPLAY: Record<string, { label: string; cls: string }> = {
   '1990s web':          { label: '1990s Web',           cls: 'border-amber-500/25 bg-amber-500/[0.06] text-amber-300' },
   'bbs archive':        { label: 'BBS / Text Archives', cls: 'border-violet-500/25 bg-violet-500/[0.06] text-violet-300' },
@@ -433,28 +445,40 @@ function SourcePreviewCard({
             </span>
           )}
         </div>
-        <div className="px-4 pt-3">
-          {candidate.originalDomain && (
-            <p className="mb-1.5 text-[13px] text-slate-500">
-              Original: <span className="text-slate-300">{candidate.originalDomain}</span>
-            </p>
-          )}
-          {/* Phase V: first-seen year + topic group badges */}
-          <div className="mb-2 flex flex-wrap items-center gap-2">
+        {/* Phase W: dominant archaeology data block */}
+        <div className="border-b border-violet-500/14 bg-violet-500/[0.06] px-4 py-3">
+          <div className="flex flex-wrap items-start gap-x-5 gap-y-2">
             {candidate.firstSeenYear && (
-              <span className="rounded-sm bg-violet-900/40 px-2 py-0.5 text-[11px] font-bold tracking-widest text-violet-300/70 uppercase">
-                FIRST SEEN {candidate.firstSeenYear}
-              </span>
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-500/60 mb-0.5">First Seen</p>
+                <p className="text-[22px] font-black leading-none text-violet-300">{candidate.firstSeenYear}</p>
+              </div>
             )}
+            {candidate.sourceEra && candidate.sourceEra !== 'modern source' && (
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-500/60 mb-0.5">Archive Era</p>
+                <p className="text-[14px] font-bold leading-tight text-violet-200/80 uppercase">{candidate.sourceEra}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-500/60 mb-0.5">Recovered From</p>
+              <p className="text-[13px] font-semibold leading-tight text-violet-300/70 uppercase">
+                {candidate.originalDomain ?? 'Wayback Snapshot'}
+              </p>
+            </div>
             {candidate.topicGroupName && (
-              <span className="rounded-sm bg-violet-900/30 px-2 py-0.5 text-[11px] font-semibold text-violet-400/60 uppercase tracking-wide">
-                {candidate.topicGroupName}
-              </span>
+              <div className="ml-auto self-end">
+                <span className="rounded-sm bg-violet-900/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-400/60">
+                  {candidate.topicGroupName}
+                </span>
+              </div>
             )}
           </div>
+        </div>
+        <div className="px-4 pt-3">
           <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
           {excerpt && (
-            <p className="mb-3 text-[17px] leading-relaxed text-slate-300">{excerpt}</p>
+            <p className="mb-3 text-[16px] leading-relaxed text-slate-300">{excerpt}</p>
           )}
         </div>
         <div className="flex items-center border-t border-violet-500/12 px-4 py-2.5">
@@ -916,9 +940,14 @@ export function ScannerConsoleClient({
       if (presetId === PRESET_ALL) return enabledSources;
       const preset = SCAN_PRESETS.find((p) => p.id === presetId);
       if (!preset) return enabledSources;
+      // Phase W: origin scan is locked to archive-only types.
+      // Reddit, imageboard, and live forum sources are completely excluded.
+      const ORIGIN_ALLOWED_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki']);
       return enabledSources.filter((s) => {
-        // Origin scan must never include Reddit — it's a pure early-web preset
-        if (isOriginPreset && s.source_type === 'reddit') return false;
+        if (isOriginPreset) {
+          // Hard lock — only archival source types, no exceptions
+          return ORIGIN_ALLOWED_TYPES.has(s.source_type);
+        }
         if (preset.nameKeywords.length > 0) {
           const lc = s.name.toLowerCase();
           if (preset.nameKeywords.some((kw) => lc.includes(kw))) return true;
@@ -2178,6 +2207,12 @@ export function ScannerConsoleClient({
                                 return (b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0) - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
                               }
                               case 'oldest': {
+                                // Phase W: for origin scan, archive-first by source type before year
+                                if (isOriginScan) {
+                                  const ta = ORIGIN_SOURCE_TYPE_RANK[a.candidate.sourceType ?? ''] ?? 10;
+                                  const tb = ORIGIN_SOURCE_TYPE_RANK[b.candidate.sourceType ?? ''] ?? 10;
+                                  if (ta !== tb) return ta - tb;
+                                }
                                 const ya = a.candidate.archiveYear;
                                 const yb = b.candidate.archiveYear;
                                 if (ya != null && yb != null) {
@@ -2201,6 +2236,10 @@ export function ScannerConsoleClient({
                               }
                               default: { // 'best'
                                 if (isOriginScan) {
+                                  // Phase W: archive-first → era → origin score
+                                  const ta = ORIGIN_SOURCE_TYPE_RANK[a.candidate.sourceType ?? ''] ?? 10;
+                                  const tb = ORIGIN_SOURCE_TYPE_RANK[b.candidate.sourceType ?? ''] ?? 10;
+                                  if (ta !== tb) return ta - tb;
                                   const oa = ERA_GROUP_ORDER.indexOf(a.candidate.sourceEra ?? 'modern source');
                                   const ob = ERA_GROUP_ORDER.indexOf(b.candidate.sourceEra ?? 'modern source');
                                   if (oa !== ob) return (oa === -1 ? 99 : oa) - (ob === -1 ? 99 : ob);

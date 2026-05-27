@@ -60,6 +60,53 @@ const INTENSITY = [
 ];
 
 // ---------------------------------------------------------------------------
+// Phase W: Origin quality signals — old vocabulary, archive patterns, meme penalties
+// ---------------------------------------------------------------------------
+
+// BBS-era and old-web vocabulary — signals that this is genuine pre-social content
+const ORIGIN_ERA_VOCABULARY: string[] = [
+  'sysop', 'fidonet', 'bbs', 'bulletin board', 'usenet', 'newsgroup', 'modem',
+  'dialup', 'dial-up', 'gopher', 'telnet', 'geocities', 'angelfire', 'tripod',
+  'floppy', 'diskette', '2400 baud', '14400', '28800', 'compuserve', 'prodigy',
+  'aol keyword', 'the well', 'fido', 'netscape', 'ie4', 'ie5', 'mosaic',
+  'netcom', 'deja news', 'altavista', 'lycos', 'excite', 'webring',
+  'guestbook', 'hit counter', 'midi background', 'under construction',
+  'email me at', 'you are visitor', 'free homepage', 'homestead', 'xoom',
+  'last updated', 'best viewed in', 'requires javascript', 'frames',
+  'mailing list', 'listserv', 'subscribe to', 'back issues',
+];
+
+// Multi-user discussion patterns — suggests archived forum or board content
+const OLD_DISCUSSION_PATTERNS: string[] = [
+  'posted by', 'reply from', 'subject:', 'from:', 'date:', 'newsgroup:',
+  'message-id:', 'references:', 'in article', 'in message', 'wrote:',
+  'previous message', 'original post', 'thread started', 'joined:',
+  'member since', 'post count', 'registered user', 'senior member',
+  'moderator', 'veteran member', 're: ', '> >', '>> ',
+  'page 1 of', 'page 2 of', 'next page', 'prev page', 'jump to',
+];
+
+// Longform writing signals — substantially more text than typical social posts
+// Handled in score function as text.length > N thresholds.
+
+// Meme and reaction post signals — penalise shallow modern content
+const MEME_REACTION_SIGNALS: string[] = [
+  'lmao', 'lmfao', 'lol 😂', '💀', 'ngl', 'lowkey', 'idk lol',
+  'this is the way', 'based', 'cringe', 'big yikes', 'caught in 4k',
+  'no cap', 'slay', 'hits different', 'vibe check', 'rent free',
+  'we don\'t talk about', 'ok boomer', 'main character', 'touch grass',
+  'ratio', 'stay mad', 'skill issue', 'it\'s giving', 'understood the assignment',
+  'npc', 'based and', 'gigachad', 'cope', 'seethe',
+];
+
+// Modern slang that strongly signals post-2015 content
+const MODERN_SLANG_SIGNALS: string[] = [
+  'tiktok', 'twitter thread', 'tweet', 'instagram post', 'facebook post',
+  'repost', 'crosspost', 'subreddit', '/r/', 'upvote', 'downvote',
+  'karma', 'mod post', 'ama', 'iama', 'eli5',
+];
+
+// ---------------------------------------------------------------------------
 // Reddit quality gate
 // ---------------------------------------------------------------------------
 
@@ -312,11 +359,36 @@ export function scoreStoryHeuristics(text: string): StoryHeuristicsResult {
   }
   if (INTERNET_MYSTERY.some((s) => lc.includes(s))) { score += 6; signals.push('internet mystery'); }
 
+  // Phase W: origin quality signals
+  // Old-web / BBS-era vocabulary — genuine pre-social content
+  if (ORIGIN_ERA_VOCABULARY.some((s) => lc.includes(s))) {
+    score += 12;
+    signals.push('origin era');
+  }
+  // Multi-user archived discussion (forum, newsgroup, mailing list patterns)
+  if (OLD_DISCUSSION_PATTERNS.some((s) => lc.includes(s))) {
+    score += 8;
+    signals.push('archived discussion');
+  }
+
+  // Longform writing bonus — more text = more likely genuine account
   if (text.length > 300)  score += 5;
   if (text.length > 700)  score += 5;
   if (text.length > 1200) score += 5;
+  if (text.length > 2000) score += 3; // extra bonus for very longform
 
-  return { storyScore: Math.min(score, 100), storySignals: signals };
+  // Phase W: meme/reaction/modern-slang penalty
+  // These strongly signal shallow, non-origin content
+  const memeHits    = MEME_REACTION_SIGNALS.filter((s) => lc.includes(s)).length;
+  const modernHits  = MODERN_SLANG_SIGNALS.filter((s) => lc.includes(s)).length;
+  if (memeHits > 0)   score -= memeHits * 4;   // -4 per meme signal
+  if (modernHits > 0) score -= modernHits * 3;  // -3 per modern slang hit
+
+  // Short-post penalty — reaction posts, one-liners
+  if (text.length < 80)  score -= 8;
+  if (text.length < 40)  score -= 5; // cumulative
+
+  return { storyScore: Math.min(Math.max(score, 0), 100), storySignals: signals };
 }
 
 // ---------------------------------------------------------------------------
