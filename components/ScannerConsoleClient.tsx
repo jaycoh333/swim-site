@@ -292,6 +292,186 @@ function EvidenceBlock({ candidate }: { candidate: FetchedCandidate }) {
 }
 
 // ---------------------------------------------------------------------------
+// SourcePreviewCard — source-native preview layout (Phase L, TASK 1)
+//
+// Reconstructs the look of the original source from available metadata.
+// No screenshots or remote fetches are performed here.
+//
+// TODO (future): integrate a screenshot service, browser render capture,
+// and social card generation to show real page thumbnails.
+// ---------------------------------------------------------------------------
+
+function SourcePreviewCard({
+  candidate,
+  sourceName,
+}: {
+  candidate: FetchedCandidate;
+  sourceName: string;
+}) {
+  const { sourceType, title, summary, sourceUrl } = candidate;
+  const excerpt = summary ? summary.slice(0, 320) : '';
+
+  // ── Reddit ─────────────────────────────────────────────────────────────────
+  if (sourceType === 'reddit') {
+    return (
+      <div className="overflow-hidden rounded-xl border border-orange-500/22 bg-orange-500/[0.05]">
+        {/* Reddit chrome */}
+        <div className="flex items-center gap-2 border-b border-orange-500/14 bg-orange-500/[0.07] px-4 py-2.5">
+          <span className="text-[13px] font-bold text-orange-500/70">● reddit</span>
+          {candidate.redditSubreddit && (
+            <span className="text-[15px] font-bold text-orange-300">r/{candidate.redditSubreddit}</span>
+          )}
+          <span className="ml-auto text-[12px] text-slate-600">{sourceName}</span>
+        </div>
+        <div className="px-4 pt-3">
+          {/* Vote/meta row */}
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            {candidate.redditScore != null && (
+              <span className="text-[15px] font-bold text-orange-400/80">▲ {candidate.redditScore.toLocaleString()}</span>
+            )}
+            {candidate.redditComments != null && (
+              <span className="text-[14px] text-slate-500">💬 {candidate.redditComments.toLocaleString()} comments</span>
+            )}
+            {candidate.redditAuthor && (
+              <span className="text-[14px] text-slate-600">u/{candidate.redditAuthor}</span>
+            )}
+            {candidate.redditPostedAt && (
+              <span className="text-[13px] text-slate-700">{relativeAge(candidate.redditPostedAt)}</span>
+            )}
+          </div>
+          {/* Post title */}
+          <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+          {/* Excerpt */}
+          {excerpt && (
+            <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-3 border-t border-orange-500/12 px-4 py-2.5">
+          <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+            className="text-[14px] font-semibold text-orange-400/70 transition-colors hover:text-orange-400">
+            Open Original Post ↗
+          </a>
+          <span className="ml-auto max-w-[50%] truncate text-[11px] text-slate-700">{sourceUrl}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ── MediaWiki ──────────────────────────────────────────────────────────────
+  if (sourceType === 'mediawiki') {
+    let domain = '';
+    try { domain = new URL(sourceUrl).hostname; } catch { /* ignore */ }
+    return (
+      <div className="overflow-hidden rounded-xl border border-sky-500/22 bg-sky-500/[0.05]">
+        <div className="flex items-center gap-2 border-b border-sky-500/14 bg-sky-500/[0.07] px-4 py-2.5">
+          <span className="text-[13px] font-bold text-sky-400/70">⚬ wiki</span>
+          {domain && <span className="text-[14px] text-sky-300/70">{domain}</span>}
+          <span className="ml-auto text-[12px] text-slate-600">{sourceName}</span>
+        </div>
+        <div className="flex gap-3 px-4 pt-3">
+          {candidate.sourceImageUrl && (
+            <img src={candidate.sourceImageUrl} alt=""
+              className="h-24 w-24 shrink-0 rounded-lg object-cover opacity-75" />
+          )}
+          <div className="min-w-0">
+            <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+            {excerpt && (
+              <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-4">{excerpt}</p>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-3 border-t border-sky-500/12 px-4 py-2.5">
+          <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+            className="text-[14px] font-semibold text-sky-400/70 transition-colors hover:text-sky-400">
+            Open Article ↗
+          </a>
+          <span className="ml-auto text-[11px] text-slate-700">MediaWiki · plain-text extract</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Wayback / archived ─────────────────────────────────────────────────────
+  if (sourceType === 'wayback' || candidate.isArchived) {
+    return (
+      <div className="overflow-hidden rounded-xl border border-violet-500/22 bg-violet-500/[0.05]">
+        <div className="flex items-center gap-2 border-b border-violet-500/14 bg-violet-500/[0.08] px-4 py-2.5">
+          <span className="text-[13px] font-bold text-violet-400/70">📦 Wayback Machine</span>
+          {candidate.archivedAt && (
+            <span className="text-[13px] text-violet-300/60">archived {candidate.archivedAt.slice(0, 10)}</span>
+          )}
+        </div>
+        <div className="px-4 pt-3">
+          {candidate.originalDomain && (
+            <p className="mb-2 text-[14px] text-slate-500">
+              Original domain: <span className="text-slate-300">{candidate.originalDomain}</span>
+            </p>
+          )}
+          <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+          {excerpt && (
+            <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+          )}
+        </div>
+        <div className="flex items-center border-t border-violet-500/12 px-4 py-2.5">
+          <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+            className="text-[14px] font-semibold text-violet-400/70 transition-colors hover:text-violet-400">
+            Open Snapshot ↗
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Erowid experience report ───────────────────────────────────────────────
+  if (sourceUrl.includes('erowid.org')) {
+    return (
+      <div className="overflow-hidden rounded-xl border border-amber-500/22 bg-amber-500/[0.05]">
+        <div className="flex items-center gap-2 border-b border-amber-500/14 bg-amber-500/[0.07] px-4 py-2.5">
+          <span className="text-[13px] font-bold text-amber-400/70">⬡ Erowid</span>
+          <span className="text-[13px] text-amber-300/60">experience report</span>
+        </div>
+        <div className="px-4 pt-3">
+          <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+          {excerpt && (
+            <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+          )}
+        </div>
+        <div className="flex items-center border-t border-amber-500/12 px-4 py-2.5">
+          <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+            className="text-[14px] font-semibold text-amber-400/70 transition-colors hover:text-amber-400">
+            Open Erowid Report ↗
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Generic forum / other ──────────────────────────────────────────────────
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-500/20 bg-slate-500/[0.04]">
+      <div className="flex items-center gap-2 border-b border-white/8 bg-white/[0.03] px-4 py-2.5">
+        <span className="text-[13px] font-bold text-slate-500">
+          {sourceType === 'forum' ? '⬡ forum' : sourceType === 'bbs' ? '⬡ BBS' : '⬡ source'}
+        </span>
+        <span className="text-[14px] text-slate-400">{sourceName}</span>
+      </div>
+      <div className="px-4 pt-3">
+        <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+        {excerpt && (
+          <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+        )}
+      </div>
+      <div className="flex items-center border-t border-white/8 px-4 py-2.5">
+        <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+          className="text-[14px] font-semibold text-slate-400/70 transition-colors hover:text-slate-300">
+          Open Source ↗
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -1441,10 +1621,17 @@ export function ScannerConsoleClient({
                                 <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
                                   <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-5">{result.candidate.summary}</p>
                                 </div>
-                                <EvidenceBlock candidate={result.candidate} />
+                                {/* ── Original Source Preview (Phase L, TASK 2) ── */}
+                                <div className="mb-3">
+                                  <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">
+                                    Original Source Preview
+                                  </p>
+                                  <SourcePreviewCard candidate={result.candidate} sourceName={result.sourceName} />
+                                </div>
+
                                 {relatedResults.length > 0 && (
                                   <div className="mb-3">
-                                    <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Related recovered signals · cluster: {clusterLabel}</p>
+                                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">Related signals · cluster: {clusterLabel}</p>
                                     <div className="flex flex-col gap-1.5">
                                       {relatedResults.map((rel) => {
                                         if (rel.status === 'error') return null;
@@ -1456,11 +1643,11 @@ export function ScannerConsoleClient({
                                               </span>
                                             )}
                                             <div className="min-w-0">
-                                              <p className="text-[13px] font-semibold leading-snug text-slate-400 line-clamp-1">{rel.candidate.title}</p>
-                                              <p className="text-[11px] text-slate-600">{rel.sourceName}</p>
+                                              <p className="text-[14px] font-semibold leading-snug text-slate-400 line-clamp-1">{rel.candidate.title}</p>
+                                              <p className="text-[12px] text-slate-600">{rel.sourceName}</p>
                                             </div>
                                             {rel.candidate.storyScore != null && (
-                                              <span className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-700">{rel.candidate.storyScore}pts</span>
+                                              <span className="ml-auto shrink-0 text-[12px] tabular-nums text-slate-700">{rel.candidate.storyScore}pts</span>
                                             )}
                                           </div>
                                         );
@@ -1468,29 +1655,35 @@ export function ScannerConsoleClient({
                                     </div>
                                   </div>
                                 )}
-                                <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
-                                  className="mb-3 flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[13px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300">
-                                  <span className="text-[10px] text-slate-600">SOURCE</span>
-                                  <span className="truncate">{result.candidate.sourceUrl}</span>
-                                  <span className="ml-auto shrink-0 text-[14px]">↗</span>
-                                </a>
+
                                 {result.candidate.extractionConfidence !== 'high' && st.action === 'idle' && (
-                                  <div className={`mb-3 rounded-lg px-3 py-2 text-[13px] ${
+                                  <div className={`mb-3 rounded-lg px-3 py-2 text-[14px] ${
                                     result.candidate.extractionConfidence === 'low' ? 'bg-red-500/8 text-red-400/65' : 'bg-amber-500/8 text-amber-400/65'
                                   }`}>
-                                    {result.candidate.extractionConfidence} confidence{result.candidate.extractionConfidence === 'low' && ' — edit before queueing'}
+                                    {result.candidate.extractionConfidence} extraction confidence{result.candidate.extractionConfidence === 'low' && ' — edit before queueing'}
                                   </div>
                                 )}
+
+                                {/* ── TASK 3: Clear queue decision ── */}
                                 {st.action === 'idle' && (
-                                  <div className="flex flex-wrap gap-2">
-                                    <button onClick={() => handleQueueCandidate(result)}
-                                      className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400">
-                                      Queue This Story
-                                    </button>
-                                    <button onClick={() => handleSkip(result.candidate.sourceUrl)}
-                                      className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
-                                      Skip
-                                    </button>
+                                  <div className="mt-2">
+                                    <p className="mb-2.5 text-[14px] leading-snug text-slate-500">
+                                      Queue this if the source preview looks like a real story worth reviewing.
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                      <button onClick={() => handleQueueCandidate(result)}
+                                        className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400">
+                                        Queue Story
+                                      </button>
+                                      <button onClick={() => handleSkip(result.candidate.sourceUrl)}
+                                        className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
+                                        Skip
+                                      </button>
+                                      <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                        className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[15px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
+                                        Open Source ↗
+                                      </a>
+                                    </div>
                                   </div>
                                 )}
                                 {st.action === 'queueing' && (
@@ -1552,26 +1745,41 @@ export function ScannerConsoleClient({
                           if (result.status === 'error') return null;
                           const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
                           return (
-                            <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
-                              <div className="mb-1 flex items-start justify-between gap-2">
-                                <p className="text-[15px] font-semibold leading-snug text-slate-300">{result.candidate.title}</p>
+                            <div key={result.candidate.sourceUrl} className="overflow-hidden rounded-xl border border-amber-500/14 bg-white/[0.025]">
+                              {/* Header */}
+                              <div className="flex items-center justify-between gap-2 border-b border-white/8 px-4 py-3">
+                                {result.candidate.sourceType && (
+                                  <span className={`rounded-full border px-2.5 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(result.candidate.sourceType)}`}>
+                                    {result.candidate.sourceType.toUpperCase()}
+                                  </span>
+                                )}
+                                <span className="text-[14px] text-slate-500">{result.sourceName}</span>
                                 {result.candidate.storyScore != null && (
-                                  <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[12px] font-bold text-amber-400">{result.candidate.storyScore}pts</span>
+                                  <span className="ml-auto shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[13px] font-bold text-amber-400">{result.candidate.storyScore}pts</span>
                                 )}
                               </div>
-                              <p className="mb-2 text-[13px] text-slate-600">{result.sourceName} · {result.candidate.sourceType}</p>
-                              <p className="mb-3 text-[14px] leading-relaxed text-slate-500 line-clamp-2">{result.candidate.summary}</p>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  disabled={st.action === 'queueing' || st.action === 'queued'}
-                                  onClick={() => handleQueueCandidate(result)}
-                                  className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-400 disabled:opacity-40 hover:border-amber-500/50"
-                                >
-                                  {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : '⚠ Queue (low confidence)'}
-                                </button>
-                                <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-600 hover:text-slate-400">
-                                  source ↗
-                                </a>
+                              {/* Source preview */}
+                              <div className="p-4">
+                                <SourcePreviewCard candidate={result.candidate} sourceName={result.sourceName} />
+                              </div>
+                              {/* Queue decision */}
+                              <div className="border-t border-white/8 px-4 py-3">
+                                <p className="mb-2.5 text-[14px] leading-snug text-slate-600">
+                                  Queue this if the source preview looks like a real story worth reviewing.
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    disabled={st.action === 'queueing' || st.action === 'queued'}
+                                    onClick={() => handleQueueCandidate(result)}
+                                    className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl border border-amber-500/35 bg-amber-500/10 text-[16px] font-bold text-amber-300 transition-colors disabled:opacity-40 hover:bg-amber-500/18"
+                                  >
+                                    {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : 'Queue Story'}
+                                  </button>
+                                  <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                    className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[15px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
+                                    Open Source ↗
+                                  </a>
+                                </div>
                               </div>
                             </div>
                           );
