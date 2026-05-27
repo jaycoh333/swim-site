@@ -12,6 +12,7 @@ interface ThreadPostProps {
   post: Post;
   postNumber: number;
   isOP?: boolean;
+  hideExcerpt?: boolean;
 }
 
 const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: string; desc: string }> = [
@@ -22,8 +23,28 @@ const REACTION_DEFS: Array<{ key: keyof ReactionSet; glyph: string; label: strin
   { key: 'dive',    glyph: '↯',  label: 'GLITCH',    desc: 'something is off'         },
 ];
 
-function renderBody(body: string) {
-  return body.split('\n').map((line, i) => {
+const SECTION_HDR_RE = /^>\s+([A-Z][A-Z0-9 /]+)$/;
+const DIVIDER_RE = /^[─\-]{4,}$/;
+
+function renderBody(body: string, hideExcerpt = false) {
+  let lines = body.split('\n');
+
+  if (hideExcerpt) {
+    const divIdx = lines.findIndex(l => DIVIDER_RE.test(l.trim()));
+    if (divIdx >= 0) lines = lines.slice(divIdx + 1);
+  }
+
+  return lines.map((line, i) => {
+    // Divider (4+ dashes or em-dashes)
+    if (/^[─\-]{4,}$/.test(line.trim())) {
+      return <div key={i} className="post-divider" />;
+    }
+    // Section header: "> ALL CAPS LABEL"
+    const hdr = SECTION_HDR_RE.exec(line);
+    if (hdr) {
+      return <div key={i} className="post-section-hdr">{hdr[1]}</div>;
+    }
+    // Greentext
     if (line.startsWith('> ') || line === '>') {
       return (
         <div key={i} className="greentext-line">
@@ -31,7 +52,7 @@ function renderBody(body: string) {
         </div>
       );
     }
-    if (line === '') return <div key={i} className="h-3" />;
+    if (line === '') return <div key={i} className="h-4" />;
     return (
       <div key={i} className="post-body-line">
         {line}
@@ -62,7 +83,7 @@ function resolveTargetId(post: Post, isOP: boolean): string {
   return post.id;
 }
 
-export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) {
+export function ThreadPost({ post, postNumber, isOP = false, hideExcerpt = false }: ThreadPostProps) {
   const [reacted, setReacted] = useState<Record<string, boolean>>({});
   const [counts, setCounts] = useState<ReactionSet>({ ...post.reactions });
   const [reactionError, setReactionError] = useState<string | null>(null);
@@ -128,7 +149,7 @@ export function ThreadPost({ post, postNumber, isOP = false }: ThreadPostProps) 
 
       {/* Post body */}
       <div className="post-body">
-        {renderBody(post.body)}
+        {renderBody(post.body, hideExcerpt)}
       </div>
 
       {/* Tags (OP only) */}

@@ -223,6 +223,29 @@ export async function getPinnedThreads(): Promise<ThreadContent[]> {
   return (data ?? []).map(dbThreadToContent);
 }
 
+export async function getRelatedThreads(
+  category: string,
+  excludeId: string,
+  limit = 5,
+): Promise<ThreadContent[]> {
+  if (!hasSupabase) return mockDb.getRelatedThreads(category, excludeId, limit);
+
+  const db = getDb()!;
+  const { data, error } = await db
+    .from('threads')
+    .select('*')
+    .eq('category', category)
+    .neq('slug', excludeId)
+    .order('last_activity_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[repository] getRelatedThreads:', error.message);
+    return mockDb.getRelatedThreads(category, excludeId, limit);
+  }
+  return (data ?? []).map(dbThreadToContent);
+}
+
 export async function getHotThreads(): Promise<ThreadContent[]> {
   if (!hasSupabase) return mockDb.getHotThreads();
 
@@ -535,47 +558,53 @@ export interface CreateRecoveredSignalInput {
 // ---------------------------------------------------------------------------
 
 function formatSignalBody(sig: DbRecoveredSignal): string {
-  const lines: string[] = [
-    `> RECOVERED SIGNAL // ${sig.category.toUpperCase()}`,
-    `> source: ${sig.source_name} · ${sig.source_type}`,
-    `> anomaly score: ${sig.anomaly_score}/10`,
-    `> discovered: ${sig.discovered_at.slice(0, 10)}`,
-    '',
-    sig.summary,
-  ];
+  const lines: string[] = [];
 
-  // Source attribution
+  // Recovered excerpt
+  lines.push(sig.summary);
+  lines.push('');
+  lines.push('────────────────────────');
+  lines.push('');
+
+  // Scanner analysis block
+  lines.push('> SCANNER ANALYSIS');
+  lines.push(`> Category: ${sig.category}`);
+  lines.push(`> Anomaly score: ${sig.anomaly_score}/10`);
+  lines.push(`> Discovered: ${sig.discovered_at.slice(0, 10)}`);
+  lines.push(`> Source type: ${sig.source_type}`);
+  lines.push('');
+
+  // Source attribution block
+  lines.push('> SOURCE ATTRIBUTION');
+  lines.push(`> Source: ${sig.source_name}`);
   if (sig.attribution_text) {
-    lines.push('', `Attribution: ${sig.attribution_text}`);
+    lines.push(`> ${sig.attribution_text}`);
   }
   if (sig.source_url) {
-    lines.push(`Source: ${sig.source_url}`);
+    lines.push(`> URL: ${sig.source_url}`);
   }
 
-  // Evidence links
-  const hasEvidence = sig.source_image_url || sig.media_url;
-  if (hasEvidence) {
-    lines.push('', '> Evidence:');
-    if (sig.source_image_url) {
-      lines.push(`> Source image: ${sig.source_image_url}`);
-    }
-    if (sig.media_url && sig.media_url !== sig.source_image_url) {
-      lines.push(`> Media (${sig.media_type ?? 'file'}): ${sig.media_url}`);
-    }
+  // Evidence
+  if (sig.source_image_url) {
+    lines.push(`> Image: ${sig.source_image_url}`);
   }
 
-  // Capture notes
-  if (sig.source_capture_notes) {
-    lines.push('', `> Capture notes: ${sig.source_capture_notes}`);
+  // Capture notes (brief only)
+  if (sig.source_capture_notes && sig.source_capture_notes.length < 180) {
+    lines.push('');
+    lines.push('> CAPTURE NOTES');
+    lines.push(`> ${sig.source_capture_notes}`);
   }
 
-  if (sig.tags && sig.tags.length > 0) {
-    lines.push('', `tags: ${sig.tags.join(' · ')}`);
+  const publicTags = (sig.tags ?? []).filter((t) => t !== 'recovered-signal');
+  if (publicTags.length > 0) {
+    lines.push('');
+    lines.push(`tags: ${publicTags.join(' · ')}`);
   }
 
   lines.push(
     '',
-    '[ curator note: add context about how this signal was found and why it matters — remove this line before the thread goes live ]',
+    '[ curator note: add context about how this signal was found and why it matters — remove this line before going live ]',
   );
 
   return lines.join('\n');

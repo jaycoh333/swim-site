@@ -34,10 +34,14 @@ export interface WaybackSnapshot {
  *                     Passing a bare domain adds a wildcard prefix so all
  *                     subpages are included.
  * @param limit        Max snapshots to return (default 20, max 50).
+ * @param fromYear     Optional: only return captures from this year onwards (e.g. 1997).
+ * @param toYear       Optional: only return captures up to and including this year (e.g. 2012).
  */
 export async function searchWaybackSnapshots(
   domainOrUrl: string,
   limit = 20,
+  fromYear?: number,
+  toYear?: number,
 ): Promise<{ snapshots: WaybackSnapshot[] } | { error: string }> {
   const cap = Math.min(limit, 50);
 
@@ -59,8 +63,10 @@ export async function searchWaybackSnapshots(
   cdxUrl.searchParams.set('fl',        'original,timestamp,mimetype,statuscode,digest');
   cdxUrl.searchParams.set('filter',    'mimetype:text/html');
   cdxUrl.searchParams.set('filter',    'statuscode:200');
-  cdxUrl.searchParams.set('collapse',  'urlkey');   // deduplicate by URL
-  cdxUrl.searchParams.set('fastLatest','true');      // one snapshot per URL
+  cdxUrl.searchParams.set('collapse',  'urlkey');       // deduplicate by URL
+  cdxUrl.searchParams.set('fastLatest','true');          // one snapshot per URL
+  if (fromYear) cdxUrl.searchParams.set('from', `${fromYear}0101000000`);
+  if (toYear)   cdxUrl.searchParams.set('to',   `${toYear}1231235959`);
 
   let raw: unknown;
   try {

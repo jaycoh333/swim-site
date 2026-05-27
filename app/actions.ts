@@ -625,11 +625,22 @@ async function fetchRedditMultipleCandidates(
   }
   const subreddit = urlMatch[1];
 
-  const endpoints = [
+  // Sort-endpoint pool — shuffle each run so different sort windows get sampled.
+  // This prevents every scan from always pulling the same /new posts.
+  const sortPool = [
     `https://www.reddit.com/r/${subreddit}/new.json?limit=100`,
     `https://www.reddit.com/r/${subreddit}/hot.json?limit=100`,
     `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=100`,
-    `https://old.reddit.com/r/${subreddit}/new.json?limit=100`,
+    `https://www.reddit.com/r/${subreddit}/top.json?t=month&limit=100`,
+  ];
+  // Fisher-Yates shuffle
+  for (let i = sortPool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [sortPool[i], sortPool[j]] = [sortPool[j], sortPool[i]];
+  }
+  const endpoints = [
+    ...sortPool,
+    `https://old.reddit.com/r/${subreddit}/new.json?limit=100`, // fallback
   ];
 
   const debugEndpoints: string[] = [];
@@ -741,6 +752,13 @@ async function fetchRedditMultipleCandidates(
       rejected: [],
       debugInfo: { subreddit, endpointsAttempted: debugEndpoints, endpointResults, postsFound: 0, postsPassedQuality: 0, rejectReasons: ['fetch failed'] },
     };
+  }
+
+  // Shuffle collected posts before slicing — prevents sort-order bias so each
+  // run can surface different stories even from the same subreddit.
+  for (let i = allPosts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allPosts[i], allPosts[j]] = [allPosts[j], allPosts[i]];
   }
 
   // Cap collection at 120 raw posts
@@ -1517,6 +1535,35 @@ export async function runFetchSessionAction(
       continue;
     }
 
+    // BBS / Textfiles.com connector — Phase O origin scan
+    if (isTextfilesSource(source)) {
+      const bbsResult = await fetchTextfilesMultipleCandidates(source);
+      if (bbsResult.error && bbsResult.candidates.length === 0) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'bbs-textfiles', linksDiscovered: 0, pagesFetched: bbsResult.debugInfo.filesFetched, candidatesPassed: 0, candidatesRejected: bbsResult.debugInfo.filesFetched, rejectReasons: [bbsResult.error.slice(0, 100)], errorMessage: bbsResult.error });
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: bbsResult.error });
+      } else {
+        let bbsPassed = 0;
+        for (const candidate of bbsResult.candidates) {
+          if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
+          const url = candidate.sourceUrl;
+          if (isAlreadyArchived(url)) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive' } });
+          } else {
+            const dupes = await checkSignalDuplicates(url, candidate.title);
+            if (dupes.length > 0) {
+              trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            } else {
+              trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
+            }
+            bbsPassed++;
+          }
+        }
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'bbs-textfiles', linksDiscovered: bbsResult.debugInfo.categoriesTried, pagesFetched: bbsResult.debugInfo.filesFetched, candidatesPassed: bbsPassed, candidatesRejected: bbsResult.debugInfo.filesFetched - bbsPassed, rejectReasons: [] });
+        if (bbsPassed === 0) results.push({ sourceId, sourceName: source.name, status: 'error', error: 'No BBS candidates passed quality filters.' });
+      }
+      continue;
+    }
+
     // Generic HTML sources — discovery-first: extract story links from index, fetch each
     let baseHostname: string;
     try { baseHostname = new URL(source.base_url).hostname; }
@@ -1720,6 +1767,10 @@ const DISCOVERY_KEYWORDS = [
   'dream', 'glitch', 'lost', 'encounter', 'witness', 'strange', 'anomaly',
   'paranormal', 'ufo', 'case', 'incident', 'found', 'missing', 'secret',
   'hidden', 'recovered',
+  // Phase O origin keywords — old-web / deep archive signal
+  'alien', 'conspiracy', 'occult', 'haunted', 'signal', 'mind control',
+  'black project', 'time travel', 'mandela', 'underground', 'ritual',
+  'prophecy', 'forbidden', 'classified', 'suppressed', 'coverup',
 ];
 
 function extractAnchors(html: string, baseUrl: string): Array<{ href: string; text: string }> {
@@ -1923,13 +1974,82 @@ function candidatePassesQuality(url: string, title: string, summary: string): { 
 }
 
 // ---------------------------------------------------------------------------
+// Origin priority scoring — Phase O Deep Archive scoring
+//
+// Adds era bonus on top of story heuristics for pre-2010 / old-web / BBS
+// content. No AI, no network calls — pure metadata heuristics.
+// ---------------------------------------------------------------------------
+
+const OLD_WEB_DOMAINS = [
+  'geocities.com', 'geocities.yahoo.com',
+  'angelfire.com',
+  'tripod.com', 'tripod.lycos.com',
+  'fortunecity.com',
+  'abovetopsecret.com',
+  'rense.com',
+  'bibliotecapleyades.net',
+  'paranormal.about.com',
+  'unexplained-mysteries.com',
+  'textfiles.com',
+];
+
+function computeOriginPriorityScore(
+  baseScore: number,
+  opts: {
+    archiveTimestamp?: string;  // 14-char YYYYMMDDHHmmss from CDX
+    sourceType?: string;
+    originalDomain?: string;
+    sourceUrl?: string;
+  },
+): { score: number; era: string; archiveYear: number | undefined } {
+  let bonus = 0;
+  let era   = 'modern source';
+  const { archiveTimestamp, sourceType, originalDomain, sourceUrl } = opts;
+
+  // Derive year from Wayback timestamp
+  let archiveYear: number | undefined;
+  if (archiveTimestamp && archiveTimestamp.length >= 4) {
+    archiveYear = parseInt(archiveTimestamp.slice(0, 4), 10) || undefined;
+  }
+
+  // Era bonus from capture year
+  if (archiveYear) {
+    if      (archiveYear <= 1999) { bonus += 30; era = '1990s web'; }
+    else if (archiveYear <= 2004) { bonus += 22; era = 'early 2000s'; }
+    else if (archiveYear <= 2009) { bonus += 14; era = 'early 2000s'; }
+    else if (archiveYear <= 2012) { bonus +=  7; era = 'pre-social archive'; }
+  }
+
+  // BBS source type
+  if (sourceType === 'bbs') { bonus += 25; era = 'bbs archive'; }
+
+  // Old-web domain markers (supersede generic year era if stronger)
+  const domStr = `${originalDomain ?? ''} ${sourceUrl ?? ''}`.toLowerCase();
+  if (OLD_WEB_DOMAINS.some((d) => domStr.includes(d))) {
+    bonus += 8;
+    if (era === 'modern source') era = 'early 2000s';
+  }
+  if (domStr.includes('geocities') || domStr.includes('angelfire') || domStr.includes('tripod') || domStr.includes('fortunecity')) {
+    bonus += 10;
+    if (era !== 'bbs archive') era = era === '1990s web' ? '1990s web' : '1990s web';
+  }
+
+  return { score: Math.min(baseScore + bonus, 100), era, archiveYear };
+}
+
+// ---------------------------------------------------------------------------
 // Wayback CDX connector — discover snapshots of a domain registered as a source
 // ---------------------------------------------------------------------------
 
 async function discoverWaybackLinks(
   source: DbScannerSource,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
-  const result = await searchWaybackSnapshots(source.base_url!, 25);
+  // For old-web domains, filter to 1997–2012 captures to prefer early-web content
+  const baseHostLower = (source.base_url ?? '').toLowerCase();
+  const isOldWebSource = OLD_WEB_DOMAINS.some((d) => baseHostLower.includes(d));
+  const fromYear = isOldWebSource ? 1997 : undefined;
+  const toYear   = isOldWebSource ? 2012 : undefined;
+  const result = await searchWaybackSnapshots(source.base_url!, 25, fromYear, toYear);
   if ('error' in result) return result;
 
   const links: DiscoveredLink[] = result.snapshots.map((snap) => ({
@@ -1992,6 +2112,13 @@ async function fetchWaybackPagePreview(
   const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
   const waybackScore = Math.min(heuristics.storyScore + 5, 100); // archived = bonus
 
+  // Origin priority scoring — Phase O
+  const originResult = computeOriginPriorityScore(waybackScore, {
+    archiveTimestamp: timestamp,
+    originalDomain,
+    sourceUrl: url,
+  });
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
@@ -2015,6 +2142,9 @@ async function fetchWaybackPagePreview(
     storyScore:           waybackScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
     finalPriorityScore:   computeFinalPriorityScore(waybackScore, { isArchived: true, isBadCandidate: badCheck.bad }),
+    originPriorityScore:  originResult.score,
+    sourceEra:            originResult.era,
+    archiveYear:          originResult.archiveYear,
   };
 
   return { candidate };
@@ -2091,6 +2221,155 @@ async function fetchMediaWikiPagePreview(
   };
 
   return { candidate };
+}
+
+// ---------------------------------------------------------------------------
+// Textfiles.com BBS connector — Phase O
+//
+// Jason Scott's textfiles.com preserves 1980s–1990s BBS text files across
+// categories: ufo, conspiracy, paranormal, occult, hauntings, stories, aliens.
+//
+// SAFETY:
+//   - Fetches category directory listings to discover .txt file paths.
+//   - Fetches individual .txt files; stores only first 600 chars.
+//   - No full-text storage of copyrighted material.
+//   - Content is classified as "internet artifact" — curator review required.
+//   - No auto-publish, no mass crawl. Max 2 files per category, 5 total.
+// ---------------------------------------------------------------------------
+
+const TEXTFILES_CATEGORIES = ['ufo', 'conspiracy', 'paranormal', 'occult', 'hauntings', 'stories', 'aliens'];
+
+function isTextfilesSource(source: DbScannerSource): boolean {
+  return source.source_type === 'bbs' || (source.base_url ?? '').toLowerCase().includes('textfiles.com');
+}
+
+async function fetchTextfilesMultipleCandidates(
+  source: DbScannerSource,
+): Promise<{
+  candidates: FetchedCandidate[];
+  error?: string;
+  debugInfo: { categoriesTried: number; filesFetched: number };
+}> {
+  const candidates: FetchedCandidate[] = [];
+  let categoriesTried = 0;
+  let filesFetched    = 0;
+
+  const UA_HDR = {
+    'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+    'Accept':     'text/plain, text/html;q=0.9',
+  };
+
+  for (const category of TEXTFILES_CATEGORIES) {
+    if (candidates.length >= 5) break;
+
+    const dirUrl = `https://www.textfiles.com/${category}/`;
+    categoriesTried++;
+
+    // Fetch directory listing
+    let dirHtml: string;
+    try {
+      const res = await fetch(dirUrl, {
+        cache:   'no-store',
+        headers: { ...UA_HDR, Accept: 'text/html,application/xhtml+xml;q=0.9' },
+        signal:  AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) continue;
+      dirHtml = await res.text();
+    } catch { continue; }
+
+    // Extract .txt file links from directory listing
+    const txtLinks: string[] = [];
+    const re = /href=["']([^"'?#]{1,100}\.txt)["']/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(dirHtml)) !== null) {
+      try {
+        const resolved = new URL(m[1], dirUrl).href;
+        if (resolved.startsWith('https://www.textfiles.com/') && !txtLinks.includes(resolved)) {
+          txtLinks.push(resolved);
+        }
+      } catch { /* skip */ }
+    }
+
+    if (txtLinks.length === 0) continue;
+
+    // Fisher-Yates shuffle to sample randomly
+    for (let i = txtLinks.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [txtLinks[i], txtLinks[j]] = [txtLinks[j], txtLinks[i]];
+    }
+
+    for (const txtUrl of txtLinks.slice(0, 2)) {
+      if (candidates.length >= 5) break;
+
+      let rawText: string;
+      try {
+        const res = await fetch(txtUrl, {
+          cache:   'no-store',
+          headers: UA_HDR,
+          signal:  AbortSignal.timeout(12_000),
+        });
+        if (!res.ok) continue;
+        rawText = await res.text();
+      } catch { continue; }
+
+      filesFetched++;
+
+      // Strip ANSI codes and control characters, normalise line endings
+      const cleaned = rawText
+        .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')  // ANSI escape sequences
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+        .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+        .trim();
+
+      if (cleaned.length < 60) continue;
+
+      // First 600 chars only — do NOT store full BBS text
+      const excerpt = cleaned.slice(0, 600).trim();
+
+      // Derive title from filename
+      const filename  = txtUrl.split('/').pop() ?? 'unknown.txt';
+      const rawTitle  = filename
+        .replace(/\.txt$/i, '')
+        .replace(/[-_\.]/g, ' ')
+        .replace(/\b([a-z])/g, (c) => c.toUpperCase());
+      const title = (rawTitle.slice(0, 80) || `BBS Archive · ${category}`).trim();
+
+      const heuristics = scoreStoryHeuristics(`${title} ${excerpt}`);
+      const originResult = computeOriginPriorityScore(heuristics.storyScore, { sourceType: 'bbs' });
+      const conf  = scoreExtractionConfidence(title, excerpt);
+
+      const candidate: FetchedCandidate = {
+        title,
+        summary:              `[BBS text archive — ${category}] ${excerpt.slice(0, 480)}`,
+        sourceUrl:            txtUrl,
+        category:             source.category_focus[0] ?? 'Internet Lore',
+        tags:                 ['scanner-source', 'bbs', 'textfiles', 'archive', category, 'internet-artifact'],
+        anomalyScore:         5,
+        categoryNote:         `BBS archive · textfiles.com/${category} · ${filename}`,
+        extractionConfidence: conf.confidence,
+        extractionWarning:    conf.warning ?? 'BBS-era text — classify as internet artifact; curator review required',
+        sourceType:           'bbs',
+        isArchived:           true,
+        passReason:           'BBS text archive — origin scan',
+        attributionText:      `Textfiles.com BBS Archive · ${category} · ${filename}`,
+        captureNotes:         `BBS/pre-internet text file from textfiles.com/${category}/. First 600 chars only — full text not stored. Authors are anonymous by BBS convention. Treat as internet artifact.`,
+        storyScore:           heuristics.storyScore,
+        storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
+        originPriorityScore:  originResult.score,
+        sourceEra:            originResult.era,
+        archiveYear:          undefined,  // BBS era — no single archive year
+        finalPriorityScore:   originResult.score,
+      };
+
+      candidates.push(candidate);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { candidates, error: 'No BBS text files fetched — textfiles.com may be unreachable or categories returned no .txt links.', debugInfo: { categoriesTried, filesFetched } };
+  }
+
+  return { candidates, debugInfo: { categoriesTried, filesFetched } };
 }
 
 // ---------------------------------------------------------------------------

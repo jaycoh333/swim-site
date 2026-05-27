@@ -10,6 +10,7 @@ import type { Reply, ThreadContent } from '@/lib/forum-types';
 import { useIdentity } from '@/lib/identity';
 import { createReplyAction } from '@/app/actions';
 import { ShareBar } from '@/components/ShareBar';
+import { parseThreadMeta, getEraClass } from '@/lib/thread-meta';
 
 const SITE_BASE = 'https://www.sw1m.me';
 
@@ -19,16 +20,156 @@ function buildThreadShareText(thread: ThreadContent): string {
   return `RECOVERED SIGNAL // ${thread.category.toUpperCase()}\n"${title}"\n\nswim archive: ${url}`;
 }
 
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function RecoveredExcerptBlock({ excerpt, eraClass }: { excerpt: string; eraClass: string }) {
+  if (!excerpt) return null;
+  return (
+    <div className="recovered-excerpt-wrap">
+      <blockquote className={`recovered-excerpt-quote ${eraClass}`}>
+        {excerpt}
+      </blockquote>
+      <p className="recovered-excerpt-caption">
+        ↯ Recovered from archived internet source.
+      </p>
+    </div>
+  );
+}
+
+function ScannerAnalysisPanel({ lines }: { lines: string[] }) {
+  if (!lines.length) return null;
+  return (
+    <div className="scanner-panel">
+      <div className="scanner-panel-label">SWIM SCANNER ANALYSIS</div>
+      <div className="scanner-panel-lines">
+        {lines.map((line, i) => (
+          <div key={i} className="scanner-panel-line">
+            <span className="scanner-panel-bullet">›</span>
+            <span>{line}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SourceEvidencePanel({
+  sourceUrl, sourceImageUrl, sourceName, captureLines,
+}: {
+  sourceUrl: string | null;
+  sourceImageUrl: string | null;
+  sourceName: string | null;
+  captureLines: string[];
+}) {
+  const hasContent = sourceUrl || sourceImageUrl || captureLines.length > 0;
+  if (!hasContent) return null;
+  return (
+    <details className="source-evidence-panel">
+      <summary className="source-evidence-summary">[ original source evidence ]</summary>
+      <div className="source-evidence-body">
+        {sourceName && (
+          <div className="source-evidence-row">
+            <span className="source-evidence-key">source</span>
+            <span>{sourceName}</span>
+          </div>
+        )}
+        {sourceUrl && (
+          <div className="source-evidence-row">
+            <span className="source-evidence-key">url</span>
+            <a
+              href={sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="source-evidence-link"
+            >
+              {sourceUrl.length > 72 ? sourceUrl.slice(0, 72) + '…' : sourceUrl}
+            </a>
+          </div>
+        )}
+        {sourceImageUrl && (
+          <div className="source-evidence-row">
+            <span className="source-evidence-key">image</span>
+            <span className="text-crt/55 break-all">{sourceImageUrl}</span>
+          </div>
+        )}
+        {captureLines.map((line, i) => (
+          <div key={i} className="source-evidence-row">
+            {i === 0 && <span className="source-evidence-key">notes</span>}
+            {i > 0  && <span className="source-evidence-key" />}
+            <span className="text-crt/55">{line}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function RelatedSignals({ threads }: { threads: ThreadContent[] }) {
+  if (!threads.length) return null;
+  return (
+    <div className="related-signals-section">
+      <div className="related-signals-label">Related Signals</div>
+      <div className="related-signals-grid">
+        {threads.map((t) => {
+          const color = CATEGORY_COLORS[t.category] ?? '#86d46e';
+          return (
+            <Link
+              key={t.id}
+              href={`/threads/${t.id}`}
+              className="related-signal-card"
+            >
+              <div className="related-signal-title">{t.title}</div>
+              <div className="related-signal-meta">
+                <span style={{ color: `color-mix(in srgb, ${color} 72%, transparent)` }}>
+                  {t.category}
+                </span>
+                <span>{t.createdAt?.slice(0, 10) ?? ''}</span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ThreadFooter({
+  sourceEra, sourceName, createdAt,
+}: {
+  sourceEra: string | null;
+  sourceName: string | null;
+  createdAt: string;
+}) {
+  return (
+    <div className="recovered-thread-footer">
+      <span className="recovered-footer-label">Recovered by SWIM AI Signal Scanner</span>
+      <div className="recovered-footer-meta">
+        {sourceEra && <span>Archive era: {sourceEra}</span>}
+        {sourceName && <span>Source: {sourceName}</span>}
+        <span>Discovered: {createdAt.slice(0, 10)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 interface ThreadViewProps {
   threadId: string;
   initialThread?: ThreadContent;
   initialReplies?: Reply[];
+  relatedThreads?: ThreadContent[];
 }
 
 export function ThreadView({
   threadId,
   initialThread,
   initialReplies = [],
+  relatedThreads = [],
 }: ThreadViewProps) {
   const thread = useMemo(
     () => initialThread ?? mockDb.getThread(threadId),
@@ -85,7 +226,6 @@ export function ThreadView({
     setLocalReplies((prev) => [...prev, reply]);
     setBody('');
 
-    // Brief success flash
     setJustPosted(true);
     setTimeout(() => setJustPosted(false), 2800);
   }, [body, identity, threadId, allReplies.length, submitting]);
@@ -109,6 +249,9 @@ export function ThreadView({
       </div>
     );
   }
+
+  const meta = parseThreadMeta(thread.body);
+  const eraClass = getEraClass(meta.sourceEra);
 
   const categoryColor = CATEGORY_COLORS[thread.category] ?? '#86d46e';
   const totalPosts = 1 + allReplies.length;
@@ -144,11 +287,35 @@ export function ThreadView({
         </div>
 
         {/* ── Thread shell ── */}
-        <div className="forum-shell overflow-hidden">
+        <div className={`forum-shell overflow-hidden ${eraClass}`}>
 
-          {/* Thread header */}
+          {/* ── Thread header ── */}
           <div className="border-b border-crt/12 px-4 py-4 md:px-5 md:py-5">
             <h1 className="thread-view-title">{thread.title}</h1>
+
+            {/* TASK 1 — Recovered signal hero metadata */}
+            {meta.isRecoveredSignal && (
+              <div className="mt-3 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {meta.sourceEra && (
+                    <span className="era-badge-inline">{meta.sourceEra.toUpperCase()}</span>
+                  )}
+                  {meta.archiveYear && (
+                    <span className="archive-year-badge">{meta.archiveYear}</span>
+                  )}
+                  <span className="origin-signal-badge">ORIGIN SIGNAL</span>
+                  {meta.sourceName && (
+                    <span className="source-name-inline">↯ {meta.sourceName}</span>
+                  )}
+                </div>
+                <p className="text-[12px] uppercase tracking-[0.20em] text-crt/42">
+                  Recovered from archived internet source.
+                </p>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-crt/28">
+                  Signal recovered: {thread.createdAt?.slice(0, 10) ?? ''}
+                </p>
+              </div>
+            )}
 
             {/* Activity strip */}
             <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-[14px] uppercase tracking-[0.16em] text-crt/45">
@@ -171,8 +338,33 @@ export function ThreadView({
             </div>
           </div>
 
-          {/* OP post */}
-          <ThreadPost post={thread} postNumber={1} isOP />
+          {/* TASK 2 — Recovered excerpt block */}
+          {meta.isRecoveredSignal && meta.excerpt && (
+            <RecoveredExcerptBlock excerpt={meta.excerpt} eraClass={eraClass} />
+          )}
+
+          {/* TASK 3 — Scanner analysis panel */}
+          {meta.isRecoveredSignal && (
+            <ScannerAnalysisPanel lines={meta.scannerLines} />
+          )}
+
+          {/* TASK 6 — Source evidence panel */}
+          {meta.isRecoveredSignal && (
+            <SourceEvidencePanel
+              sourceUrl={meta.sourceUrl}
+              sourceImageUrl={meta.sourceImageUrl}
+              sourceName={meta.sourceName}
+              captureLines={meta.captureLines}
+            />
+          )}
+
+          {/* OP post — body starts after excerpt for recovered threads */}
+          <ThreadPost
+            post={thread}
+            postNumber={1}
+            isOP
+            hideExcerpt={meta.isRecoveredSignal}
+          />
 
           {/* Divider */}
           <div className="thread-divider" />
@@ -254,6 +446,20 @@ export function ThreadView({
             </div>
           </div>
         </div>
+
+        {/* TASK 4 — Related signals */}
+        {relatedThreads.length > 0 && (
+          <RelatedSignals threads={relatedThreads} />
+        )}
+
+        {/* TASK 8 — Thread footer (recovered only) */}
+        {meta.isRecoveredSignal && (
+          <ThreadFooter
+            sourceEra={meta.sourceEra}
+            sourceName={meta.sourceName}
+            createdAt={thread.createdAt ?? ''}
+          />
+        )}
 
         {/* Bottom navigation */}
         <div className="mt-5 flex items-center justify-between text-[14px] uppercase tracking-[0.16em] text-crt/48">

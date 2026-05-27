@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   runFetchSessionAction,
@@ -29,15 +29,7 @@ interface ConsoleStats {
   publicSubmissions: number;
 }
 
-interface PublishedResult {
-  threadSlug:   string;
-  title:        string;
-  category:     string;
-  sourceName:   string;
-  publishedAt:  string;  // ISO
-  telegramText: string;
-  xText:        string;
-}
+// PostedResult is defined near the PostedCard component above.
 
 export interface ScannerConsoleClientProps {
   sources:              DbScannerSource[];
@@ -47,7 +39,7 @@ export interface ScannerConsoleClientProps {
   stats:                ConsoleStats;
 }
 
-type CandidateAction = 'idle' | 'queueing' | 'queued' | 'skipped' | 'error';
+type CandidateAction = 'idle' | 'queueing' | 'queued' | 'skipped' | 'error' | 'posting' | 'posted';
 interface CandidateState { action: CandidateAction; error?: string }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +116,22 @@ function sourceTypeBadgeCls(type: string): string {
 function normalizeTitle(t: string): string {
   return t.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 }
+
+// Era badge — Phase O origin scan display
+const ERA_BADGE_MAP: Record<string, { label: string; cls: string }> = {
+  '1990s web':          { label: '1990s WEB',     cls: 'border-amber-500/45 bg-amber-500/12 text-amber-300' },
+  'early 2000s':        { label: 'EARLY 2000s',   cls: 'border-orange-500/40 bg-orange-500/10 text-orange-300' },
+  'pre-social archive': { label: 'PRE-SOCIAL',    cls: 'border-sky-500/40 bg-sky-500/10 text-sky-300' },
+  'bbs archive':        { label: 'BBS ARCHIVE',   cls: 'border-violet-500/45 bg-violet-500/12 text-violet-300' },
+};
+const ERA_GROUP_ORDER = ['1990s web', 'bbs archive', 'early 2000s', 'pre-social archive', 'modern source'];
+const ERA_GROUP_DISPLAY: Record<string, { label: string; cls: string }> = {
+  '1990s web':          { label: '1990s Web',           cls: 'border-amber-500/25 bg-amber-500/[0.06] text-amber-300' },
+  'bbs archive':        { label: 'BBS / Text Archives', cls: 'border-violet-500/25 bg-violet-500/[0.06] text-violet-300' },
+  'early 2000s':        { label: 'Early 2000s Forums',  cls: 'border-orange-500/22 bg-orange-500/[0.05] text-orange-300' },
+  'pre-social archive': { label: 'Pre-Social Archive',  cls: 'border-sky-500/22 bg-sky-500/[0.05] text-sky-300' },
+  'modern source':      { label: 'Unknown Era',         cls: 'border-white/10 bg-white/[0.025] text-slate-400' },
+};
 
 function sourceReliabilityLabel(sourceType: string): string {
   const map: Record<string, string> = {
@@ -472,6 +480,156 @@ function SourcePreviewCard({
 }
 
 // ---------------------------------------------------------------------------
+// PostedCard — session-posted story with social copy buttons
+// ---------------------------------------------------------------------------
+
+interface PostedResult {
+  threadSlug:   string;
+  title:        string;
+  category:     string;
+  sourceName:   string;
+  publishedAt:  string;
+  telegramText: string;
+  xText:        string;
+}
+
+function PostedCard({ result, isNew }: { result: PostedResult; isNew?: boolean }) {
+  const [copied, setCopied] = useState<'tg' | 'x' | null>(null);
+
+  async function handleCopyLocal(text: string, which: 'tg' | 'x') {
+    await navigator.clipboard.writeText(text);
+    setCopied(which);
+    setTimeout(() => setCopied(null), 2500);
+  }
+
+  return (
+    <div
+      className={`overflow-hidden rounded-2xl border transition-all ${isNew ? 'border-emerald-400/55 bg-emerald-500/[0.09]' : 'border-emerald-500/30 bg-emerald-500/[0.06]'}`}
+      style={isNew ? { animation: 'postedPulse 2s ease-out both' } : undefined}
+    >
+      <div className="border-b border-emerald-500/15 bg-emerald-500/[0.09] px-5 py-3">
+        <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Posted</p>
+        <p className="text-[19px] font-bold leading-snug text-white">{result.title}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[12px] font-semibold text-emerald-300">{result.category}</span>
+          {result.sourceName && (
+            <span className="text-[12px] text-slate-600">{result.sourceName}</span>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 p-4">
+        {result.threadSlug ? (
+          <a href={`/threads/${result.threadSlug}`} target="_blank" rel="noopener noreferrer"
+            className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400">
+            Open Thread ↗
+          </a>
+        ) : (
+          <div className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-[14px] text-amber-300">
+            Thread created — check /threads for the new post.
+          </div>
+        )}
+        <button
+          onClick={() => handleCopyLocal(result.xText, 'x')}
+          className={`flex w-full min-h-[48px] items-center justify-center rounded-2xl border text-[15px] font-semibold transition-all ${
+            copied === 'x' ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300' : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+          }`}>
+          {copied === 'x' ? '✓ Copied X Post' : 'Copy X Post'}
+        </button>
+        <button
+          onClick={() => handleCopyLocal(result.telegramText, 'tg')}
+          className={`flex w-full min-h-[48px] items-center justify-center rounded-2xl border text-[15px] font-semibold transition-all ${
+            copied === 'tg' ? 'border-sky-500/40 bg-sky-500/15 text-sky-300' : 'border-white/12 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+          }`}>
+          {copied === 'tg' ? '✓ Copied Telegram' : 'Copy Telegram Post'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// InlineScanEdit — compact edit form embedded in a scan result card
+// ---------------------------------------------------------------------------
+
+function InlineScanEdit({
+  candidate,
+  onPost,
+  onCancel,
+}: {
+  candidate: FetchedCandidate;
+  onPost: (form: { title: string; body: string; category: string; tags: string }) => void;
+  onCancel: () => void;
+}) {
+  const [title,    setTitle]    = useState(candidate.title);
+  const [body,     setBody]     = useState(candidate.summary);
+  const [category, setCategory] = useState(candidate.category ?? 'Internet Lore');
+  const [tags,     setTags]     = useState((candidate.tags ?? []).join(', '));
+
+  const inp = 'w-full rounded-xl border border-white/12 bg-white/[0.04] px-4 py-3 text-[15px] leading-normal text-white placeholder:text-slate-600 focus:border-sky-500/40 focus:outline-none transition-colors';
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-sky-500/25 bg-sky-500/[0.04]">
+      <div className="border-b border-sky-500/14 bg-sky-500/[0.06] px-5 py-2.5">
+        <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-sky-500/70">Edit Before Posting</p>
+      </div>
+      <div className="flex flex-col gap-3 p-4">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} className={inp} placeholder="Thread title" />
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} className={`${inp} resize-y`} placeholder="Thread body" />
+        <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${inp} bg-[#0a1520]`}>
+          {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <input value={tags} onChange={(e) => setTags(e.target.value)} className={inp} placeholder="tag1, tag2, tag3" />
+        <div className="flex gap-2">
+          <button
+            onClick={() => onPost({ title, body, category, tags })}
+            disabled={!title.trim() || !body.trim()}
+            className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Post to SWIM
+          </button>
+          <button
+            onClick={onCancel}
+            className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// buildRichThreadBody — structured thread body for one-click publish
+// ---------------------------------------------------------------------------
+
+function buildRichThreadBody(candidate: FetchedCandidate, sourceName: string): string {
+  const analysis = generateSignalAnalysis(candidate);
+  const lines: string[] = [];
+
+  lines.push(candidate.summary);
+  lines.push('');
+  lines.push('────────────────────────');
+  lines.push('');
+  lines.push('> SCANNER ANALYSIS');
+  lines.push(`> ${analysis.surfacedBecause}`);
+  if (analysis.anomalyMarkers.length > 0) {
+    lines.push(`> Anomaly markers: ${analysis.anomalyMarkers.slice(0, 5).join(' · ')}`);
+  }
+  lines.push(`> Corroboration: ${analysis.corroborationLevel}  ·  Rarity: ${analysis.rarityLevel}`);
+  if (candidate.sourceEra && candidate.sourceEra !== 'modern source') {
+    lines.push(`> Archive era: ${candidate.sourceEra}${candidate.archiveYear ? ` (${candidate.archiveYear})` : ''}`);
+  }
+  lines.push('');
+  lines.push('> SOURCE ATTRIBUTION');
+  lines.push(`> Source: ${sourceName}`);
+  if (candidate.attributionText) lines.push(`> ${candidate.attributionText}`);
+  lines.push(`> URL: ${candidate.sourceUrl}`);
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -520,23 +678,48 @@ export function ScannerConsoleClient({
   const [prepareOpenId, setPrepareOpenId] = useState<string | null>(null);
   const [publishing,    setPublishing]    = useState<string | null>(null);
   const [publishError,  setPublishError]  = useState<string | null>(null);
-  const [lastPublished, setLastPublished] = useState<PublishedResult | null>(null);
+  const [lastPublished, setLastPublished] = useState<PostedResult | null>(null);
   const [copied,        setCopied]        = useState<'tg' | 'x' | null>(null);
   const [lastApprovedId, setLastApprovedId] = useState<string | null>(null);
   const scanColRef    = useRef<HTMLDivElement>(null);
   const reviewColRef  = useRef<HTMLDivElement>(null);
   const publishColRef = useRef<HTMLDivElement>(null);
 
+  // Phase N: one-click approve+post
+  const [postedResults,       setPostedResults]       = useState<PostedResult[]>([]);
+  const [editOpenUrl,         setEditOpenUrl]         = useState<string | null>(null);
+
+  // Phase N: fresh scan rotation
+  const [seenUrlsThisSession, setSeenUrlsThisSession] = useState<Set<string>>(new Set());
+  const [prevScanResults,     setPrevScanResults]     = useState<SessionSourceResult[]>([]);
+  const [showPrevResults,     setShowPrevResults]     = useState(false);
+
+  // Phase P: collapsed complexity
+  const [showMoreResults, setShowMoreResults] = useState(false);
+  const [moreTab,         setMoreTab]         = useState<'needs-review' | 'low-signal' | 'blocked'>('needs-review');
+  const [showReviewQueue, setShowReviewQueue] = useState(false);
+
+  // Phase Q: live scan feel + animation
+  const [liveCount,          setLiveCount]          = useState(0);
+  const [liveScanningSource, setLiveScanningSource] = useState('');
+  const [newPostedSlug,      setNewPostedSlug]      = useState<string | null>(null);
+  const activeScanSourcesRef = useRef<typeof enabledSources>([]);
+
   // ── Scan status message cycling ──────────────────────────────────────────
 
   const SCAN_STATUS_MESSAGES = [
-    'querying endpoints...',
-    'discovering archive links...',
-    'scoring candidate signals...',
-    'checking corroboration...',
-    'building clusters...',
-    'applying story heuristics...',
-    'filtering low-signal noise...',
+    'recovered signal found...',
+    'analyzing archived fragment...',
+    'origin candidate detected...',
+    'querying archive endpoints...',
+    'scoring anomaly markers...',
+    'checking corroboration layers...',
+    'extracting narrative signal...',
+    'deep archive ping received...',
+    'classifying source era...',
+    'filtering noise...',
+    'signal recovered...',
+    'scanning archive...',
   ];
 
   useEffect(() => {
@@ -546,7 +729,34 @@ export function ScannerConsoleClient({
     const id = window.setInterval(() => {
       scanStatusIdx.current = (scanStatusIdx.current + 1) % SCAN_STATUS_MESSAGES.length;
       setScanStatus(SCAN_STATUS_MESSAGES[scanStatusIdx.current]);
-    }, 1800);
+    }, 1600);
+    return () => window.clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanPhase]);
+
+  // ── Live counter animation during scan ───────────────────────────────────
+  useEffect(() => {
+    if (scanPhase !== 'scanning') { setLiveCount(0); return; }
+    const id = window.setInterval(() => {
+      setLiveCount((prev) => prev + Math.floor(Math.random() * 3));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [scanPhase]);
+
+  // ── Source cycling indicator during scan ─────────────────────────────────
+  useEffect(() => {
+    activeScanSourcesRef.current = activeScanSources;
+  });
+  useEffect(() => {
+    if (scanPhase !== 'scanning') { setLiveScanningSource(''); return; }
+    const sources = activeScanSourcesRef.current;
+    if (!sources.length) return;
+    let idx = 0;
+    setLiveScanningSource(sources[0]?.name ?? '');
+    const id = window.setInterval(() => {
+      idx = (idx + 1) % sources.length;
+      setLiveScanningSource(sources[idx]?.name ?? '');
+    }, 2400);
     return () => window.clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanPhase]);
@@ -640,6 +850,20 @@ export function ScannerConsoleClient({
   async function handleRunScan() {
     const isDebugRun = activePreset === PRESET_DEBUG;
     if (!isDebugRun && !activeScanSources.length) return;
+
+    // Save current results as "previous" and move their URLs into the seen set
+    if (scanPhase === 'done' && scanResults.length > 0) {
+      setPrevScanResults(scanResults);
+      setShowPrevResults(false);
+      setSeenUrlsThisSession((prev) => {
+        const next = new Set(prev);
+        for (const r of scanResults) {
+          if (r.status !== 'error') next.add(r.candidate.sourceUrl);
+        }
+        return next;
+      });
+    }
+
     setScanPhase('scanning');
     setScanError(null);
     setScanResults([]);
@@ -724,6 +948,84 @@ export function ScannerConsoleClient({
 
   function handleSkip(sourceUrl: string) {
     setCandStates((prev) => new Map(prev).set(sourceUrl, { action: 'skipped' }));
+  }
+
+  async function handleApproveAndPost(
+    result: SessionSourceResult,
+    editedForm?: { title: string; body: string; category: string; tags: string },
+  ) {
+    if (result.status === 'error') return;
+    const key = result.candidate.sourceUrl;
+    setCandStates((prev) => new Map(prev).set(key, { action: 'posting' }));
+    const c = result.candidate;
+    const title    = editedForm?.title    ?? c.title;
+    const body     = editedForm?.body     ?? buildRichThreadBody(c, result.sourceName);
+    const category = editedForm?.category ?? (c.category ?? 'Internet Lore');
+    const tags     = editedForm
+      ? editedForm.tags.split(',').map((t) => t.trim()).filter(Boolean)
+      : (c.tags ?? []);
+
+    // Step 1: queue the candidate
+    const qr = await queueFetchedCandidateAction({
+      sourceId:          result.sourceId,
+      title,
+      summary:           body,
+      sourceUrl:         key,
+      category,
+      tags,
+      anomalyScore:      c.anomalyScore,
+      overrideDuplicate: true,
+      sourceImageUrl:    c.sourceImageUrl,
+      mediaType:         c.mediaType,
+      attributionText:   c.attributionText,
+      captureNotes:      c.captureNotes,
+    });
+
+    if ('error' in qr) {
+      setCandStates((prev) => new Map(prev).set(key, { action: 'error', error: qr.error }));
+      return;
+    }
+    if (!('signalId' in qr)) {
+      setCandStates((prev) => new Map(prev).set(key, { action: 'error', error: 'Queue failed — no signal ID returned' }));
+      return;
+    }
+
+    // Step 2: immediately publish (rebirthSignalAsThreadAction does not require
+    // the signal to be in rebirth-ready status — it only guards against double-publish)
+    const pr = await rebirthSignalAsThreadAction({ signalId: qr.signalId, title, body, category, tags });
+
+    if ('error' in pr) {
+      setCandStates((prev) => new Map(prev).set(key, { action: 'error', error: pr.error }));
+      return;
+    }
+
+    setCandStates((prev) => new Map(prev).set(key, { action: 'posted' }));
+    setEditOpenUrl(null);
+
+    // Task 7: prevent re-scanning this URL
+    setSeenUrlsThisSession((prev) => new Set([...prev, key]));
+
+    const shareData = {
+      title, category,
+      summary:     body.slice(0, 200),
+      threadSlug:  pr.threadSlug,
+      sourceName:  result.sourceName,
+      anomalyScore: c.anomalyScore,
+      tags,
+    };
+    const slug = pr.threadSlug;
+    setPostedResults((prev) => [{
+      title, category,
+      sourceName:   result.sourceName,
+      threadSlug:   slug,
+      telegramText: formatTelegramPost(shareData),
+      xText:        formatXPost(shareData),
+      publishedAt:  new Date().toISOString(),
+    }, ...prev]);
+
+    // Task 6: pulse animation on new posted card
+    setNewPostedSlug(slug ?? null);
+    setTimeout(() => setNewPostedSlug(null), 2800);
   }
 
   // ── Review handlers ──────────────────────────────────────────────────────
@@ -900,22 +1202,25 @@ export function ScannerConsoleClient({
         </div>
       )}
 
-      {/* ── 3-column grid ── */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      {/* ── 2-column grid: Live Scan | Live Threads ── */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_380px]">
 
-        {/* ══ 1 · SCAN ══ */}
+        {/* ══ 1 · LIVE SCAN ══ */}
         <div ref={scanColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
 
           {/* Column header */}
           <div className="border-b border-white/8 px-6 py-5">
-            <div className="mb-1 flex items-center gap-3">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-[15px] font-bold text-emerald-400">
-                1
-              </span>
-              <h2 className="text-[22px] font-bold text-white">Scan</h2>
+            <div className="mb-1 flex items-center gap-2.5">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${scanPhase === 'scanning' ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-500/50'}`} />
+              <h2 className="text-[22px] font-bold text-white">Live Scan</h2>
+              {scanPhase === 'done' && scanResults.length > 0 && (
+                <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[13px] font-bold text-emerald-400">
+                  {scanResults.filter(r => r.status !== 'error').length} candidates
+                </span>
+              )}
             </div>
-            <p className="text-[14px] text-slate-500">
-              Presets choose sources. They do not auto-publish.
+            <p className="text-[13px] text-slate-500">
+              Select a preset · approve candidates · threads go live instantly.
             </p>
           </div>
 
@@ -1153,19 +1458,36 @@ export function ScannerConsoleClient({
                 <button
                   onClick={handleRunScan}
                   disabled={scanPhase === 'scanning' || (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG)}
-                  className={BTN_PRIMARY}
+                  className={`${BTN_PRIMARY} ${scanPhase === 'scanning' ? 'ring-2 ring-emerald-500/40 ring-offset-2 ring-offset-black' : ''}`}
                 >
                   {scanPhase === 'scanning'
                     ? <><Spinner /> Scanning…</>
-                    : (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG)
-                      ? 'No sources for this preset'
-                      : `Run Scan${activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG ? ` · ${activeScanSources.length} source${activeScanSources.length !== 1 ? 's' : ''}` : ''}`
+                    : scanPhase === 'done'
+                      ? `↺ Rescan${activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG ? ` · ${activeScanSources.length} source${activeScanSources.length !== 1 ? 's' : ''}` : ''}`
+                      : (activeScanSources.length === 0 && activePreset !== PRESET_DEBUG)
+                        ? 'No sources for this preset'
+                        : `Scan${activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG ? ` · ${activeScanSources.length} source${activeScanSources.length !== 1 ? 's' : ''}` : ''}`
                   }
                 </button>
-                {scanPhase === 'scanning' && scanStatus && (
-                  <p className="text-center text-[14px] tracking-wide text-emerald-400/60 animate-pulse">
-                    {scanStatus}
-                  </p>
+                {scanPhase === 'scanning' && (
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="font-mono text-[13px] tabular-nums text-emerald-400/70">
+                        {liveCount} fragments scanned
+                      </span>
+                    </div>
+                    {liveScanningSource && (
+                      <p className="font-mono text-[11px] text-slate-600 tracking-wide">
+                        ↯ {liveScanningSource}
+                      </p>
+                    )}
+                    {scanStatus && (
+                      <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-400/45 animate-pulse">
+                        {scanStatus}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -1184,6 +1506,45 @@ export function ScannerConsoleClient({
             {/* No results */}
             {scanPhase === 'done' && scanResults.length === 0 && (
               <p className="text-center text-[15px] text-slate-500">No results returned from sources.</p>
+            )}
+
+            {/* Previous scan results — collapsed */}
+            {prevScanResults.length > 0 && (
+              <div className="rounded-xl border border-white/6 bg-white/[0.015]">
+                <button
+                  onClick={() => setShowPrevResults((v) => !v)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left"
+                >
+                  <span className="text-[12px] font-semibold uppercase tracking-widest text-slate-700">
+                    Previous Scan · {prevScanResults.filter((r) => r.status !== 'error').length} candidates
+                  </span>
+                  <span className="text-[12px] text-slate-700">{showPrevResults ? '▲ hide' : '▼ show'}</span>
+                </button>
+                {showPrevResults && (
+                  <div className="border-t border-white/6 px-4 pb-3 pt-2.5">
+                    <div className="flex flex-col gap-1.5">
+                      {prevScanResults.filter((r) => r.status !== 'error').slice(0, 12).map((r) => (
+                        <div key={r.candidate.sourceUrl} className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/[0.015] px-3 py-2">
+                          {r.candidate.sourceType && (
+                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${sourceTypeBadgeCls(r.candidate.sourceType)}`}>
+                              {r.candidate.sourceType.slice(0, 3).toUpperCase()}
+                            </span>
+                          )}
+                          <p className="min-w-0 truncate text-[13px] text-slate-600">{r.candidate.title}</p>
+                          {r.candidate.storyScore != null && (
+                            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-700">{r.candidate.storyScore}pts</span>
+                          )}
+                        </div>
+                      ))}
+                      {prevScanResults.filter((r) => r.status !== 'error').length > 12 && (
+                        <p className="text-[11px] text-slate-700">
+                          +{prevScanResults.filter((r) => r.status !== 'error').length - 12} more
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Scan results — tabbed */}
@@ -1251,8 +1612,11 @@ export function ScannerConsoleClient({
                 if (showSeen) return arr;
                 return arr.filter((r) => {
                   if (r.status === 'error') return true;
-                  const st = candStates.get(r.candidate.sourceUrl);
-                  return !st || (st.action !== 'queued' && st.action !== 'skipped');
+                  const url = r.candidate.sourceUrl;
+                  const st  = candStates.get(url);
+                  if (st && (st.action === 'queued' || st.action === 'skipped' || st.action === 'posted')) return false;
+                  if (seenUrlsThisSession.has(url)) return false;
+                  return true;
                 });
               }
               const visibleGood   = filterSeen(goodResults);
@@ -1272,12 +1636,12 @@ export function ScannerConsoleClient({
               const skippedCnt     = [...candStates.values()].filter((s) => s.action === 'skipped').length;
               void skippedCnt; // suppress unused warning
 
-              // ── Bulk queue (runs sequentially, one at a time) ─────────────────────
-              async function bulkQueue() {
-                const toQueue = goodResults.filter(
+              // ── Bulk approve+post (runs sequentially, one at a time) ──────────────
+              async function bulkApprovePost() {
+                const toPost = goodResults.filter(
                   (r) => r.status !== 'error' && selectedUrls.has(r.candidate.sourceUrl)
                 );
-                for (const result of toQueue) await handleQueueCandidate(result);
+                for (const result of toPost) await handleApproveAndPost(result);
                 setSelectedUrls(new Set());
               }
 
@@ -1322,10 +1686,14 @@ export function ScannerConsoleClient({
               return (
                 <div className="flex flex-col gap-4">
 
-                  {/* ── TASK 1: Big scan results header ── */}
+                  {/* ── Scan results header ── */}
                   <div className="rounded-2xl border border-white/14 bg-white/[0.05] px-5 py-5">
-                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-slate-600">Scan Complete</p>
-                    <h2 className="mb-3 text-[30px] font-bold tracking-tight text-white">SCAN RESULTS</h2>
+                    <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600/70">Scan Complete</p>
+                    <h2 className="mb-3 text-[28px] font-bold tracking-tight text-white">
+                      {goodResults.length > 0
+                        ? `${goodResults.length} strong signal${goodResults.length !== 1 ? 's' : ''} recovered`
+                        : candidatesFetched > 0 ? `${candidatesFetched} fetched — no strong candidates` : 'Scan complete'}
+                    </h2>
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[14px] font-bold tabular-nums text-sky-300">
                         {candidatesFetched} fetched
@@ -1353,7 +1721,7 @@ export function ScannerConsoleClient({
                       { label: 'Sources',    value: sourcesScanned,    color: 'text-slate-400' },
                       { label: 'Fetched',    value: candidatesFetched, color: candidatesFetched > 0 ? 'text-sky-400' : 'text-slate-600' },
                       { label: 'Strong',     value: goodResults.length, color: goodResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
-                      { label: 'Queued',     value: queuedCnt,          color: queuedCnt > 0 ? 'text-emerald-400' : 'text-slate-600' },
+                      { label: 'Posted',     value: postedResults.length, color: postedResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
                       { label: 'Duplicates', value: dupCnt,             color: dupCnt > 0 ? 'text-amber-400' : 'text-slate-600' },
                       { label: 'Low/Err', value: lowSignalResults.length + errorResults.length,
                                                                          color: (lowSignalResults.length + errorResults.length) > 0 ? 'text-slate-500' : 'text-slate-600' },
@@ -1365,92 +1733,59 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
-                  {/* ── TASK 2: Huge tab buttons ── */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {TABS.map(({ id, label, count, color }) => {
-                      const isActive = activeTab === id;
-                      return (
-                        <button
-                          key={id}
-                          onClick={() => setActiveTab(id)}
-                          className={`flex min-h-[60px] flex-col items-center justify-center gap-1 rounded-2xl border px-3 py-3.5 text-center transition-all ${
-                            isActive ? TAB_ACTIVE_CLS[color] : TAB_IDLE_CLS[color]
-                          }`}
-                        >
-                          <span className={`text-[16px] font-bold leading-tight ${isActive ? '' : 'text-slate-500'}`}>{label}</span>
-                          {count > 0 ? (
-                            <span className={`rounded-full px-2.5 py-0.5 text-[13px] font-bold tabular-nums ${
-                              isActive ? TAB_BADGE_CLS[color] : 'bg-white/5 text-slate-600'
-                            }`}>{count}</span>
-                          ) : (
-                            <span className="text-[12px] text-slate-700">none</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* ── TASK 3: Tab description ── */}
-                  <p className={`text-[14px] leading-snug ${TAB_DESC_CLS[activeTab]}`}>
-                    {TAB_DESC[activeTab]}
-                  </p>
-
-                  {/* ── TASK 7: Bulk action bar — large fixed panel ── */}
-                  {(activeTab === 'strong' || activeTab === 'needs-review') &&
-                   (activeTab === 'strong' ? goodResults : needsReview).length > 0 && (
-                    <div className="rounded-2xl border border-white/14 bg-white/[0.05] p-4">
-                      <div className="mb-3 flex items-center gap-3">
-                        <label className="flex cursor-pointer items-center gap-2 text-[15px] font-semibold text-slate-300">
+                  {/* Bulk action bar */}
+                  {goodResults.length > 0 && (
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <label className="flex cursor-pointer items-center gap-2 text-[13px] font-semibold text-slate-400">
                           <input
                             type="checkbox"
                             checked={
                               selectedUrls.size > 0 &&
-                              (activeTab === 'strong' ? goodResults : needsReview)
+                              goodResults
                                 .filter((r) => r.status !== 'error')
                                 .every((r) => selectedUrls.has(r.candidate.sourceUrl))
                             }
                             onChange={(e) => {
-                              const pool = (activeTab === 'strong' ? goodResults : needsReview).filter((r) => r.status !== 'error');
+                              const pool = goodResults.filter((r) => r.status !== 'error');
                               setSelectedUrls(e.target.checked ? new Set(pool.map((r) => r.candidate.sourceUrl)) : new Set());
                             }}
-                            className="h-4 w-4 accent-emerald-400"
+                            className="h-3.5 w-3.5 accent-emerald-400"
                           />
-                          Select All Visible
+                          Select All
                         </label>
                         {selectedUrls.size > 0 && (
-                          <span className="ml-auto text-[14px] font-bold text-slate-400">{selectedUrls.size} selected</span>
+                          <>
+                            <span className="text-[13px] text-slate-500">{selectedUrls.size} selected</span>
+                            <button
+                              onClick={bulkApprovePost}
+                              className="ml-auto rounded-xl bg-emerald-500 px-4 py-2 text-[13px] font-bold text-black transition-colors hover:bg-emerald-400"
+                            >
+                              Approve + Post {selectedUrls.size}
+                            </button>
+                            <button
+                              onClick={() => { for (const url of selectedUrls) handleSkip(url); setSelectedUrls(new Set()); }}
+                              className="rounded-xl border border-white/12 bg-white/[0.04] px-4 py-2 text-[13px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.08]"
+                            >
+                              Skip
+                            </button>
+                          </>
                         )}
+                        <label className={`${selectedUrls.size > 0 ? 'hidden' : 'flex'} ml-auto cursor-pointer items-center gap-1.5 text-[11px] text-slate-700`}>
+                          <input
+                            type="checkbox"
+                            checked={showSeen}
+                            onChange={(e) => setShowSeen(e.target.checked)}
+                            className="h-3 w-3 accent-slate-500"
+                          />
+                          Show all
+                        </label>
                       </div>
-                      {selectedUrls.size > 0 && (
-                        <div className="mb-3 flex gap-2">
-                          <button
-                            onClick={bulkQueue}
-                            className="flex flex-1 min-h-[56px] items-center justify-center rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400"
-                          >
-                            Queue Selected
-                          </button>
-                          <button
-                            onClick={() => { for (const url of selectedUrls) handleSkip(url); setSelectedUrls(new Set()); }}
-                            className="flex min-h-[56px] items-center justify-center rounded-2xl border border-white/15 bg-white/[0.04] px-6 text-[16px] font-semibold text-slate-300 transition-colors hover:bg-white/[0.09]"
-                          >
-                            Skip Selected
-                          </button>
-                        </div>
-                      )}
-                      <label className="flex cursor-pointer items-center gap-2 text-[12px] text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={showSeen}
-                          onChange={(e) => setShowSeen(e.target.checked)}
-                          className="h-3.5 w-3.5 accent-slate-400"
-                        />
-                        Show already queued / skipped
-                      </label>
                     </div>
                   )}
 
-                  {/* ── STRONG TAB ── */}
-                  {activeTab === 'strong' && (() => {
+                  {/* ── STRONG CANDIDATES — always visible ── */}
+                  {(() => {
                     if (visibleGood.length === 0) {
                       const promoted = visibleReview.slice(0, 5);
                       if (promoted.length > 0) {
@@ -1490,9 +1825,9 @@ export function ScannerConsoleClient({
                                     </a>
                                     {st.action === 'idle' && (
                                       <div className="flex gap-2">
-                                        <button onClick={() => handleQueueCandidate(result)}
-                                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/12 text-[17px] font-bold text-amber-300 transition-colors hover:bg-amber-500/22">
-                                          ⚠ Queue (low confidence)
+                                        <button onClick={() => handleApproveAndPost(result)}
+                                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-xl border border-emerald-500/40 bg-emerald-500/12 text-[16px] font-bold text-emerald-300 transition-colors hover:bg-emerald-500/22">
+                                          Approve + Post
                                         </button>
                                         <button onClick={() => handleSkip(result.candidate.sourceUrl)}
                                           className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] text-slate-400 hover:bg-white/10">
@@ -1500,8 +1835,8 @@ export function ScannerConsoleClient({
                                         </button>
                                       </div>
                                     )}
-                                    {st.action === 'queueing' && <div className="flex min-h-[52px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400"><Spinner /> Queueing…</div>}
-                                    {st.action === 'queued'   && <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4 text-[17px] font-bold text-emerald-300">✓ Queued for Review</p>}
+                                    {st.action === 'posting' && <div className="flex min-h-[52px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400"><Spinner /> Posting…</div>}
+                                    {st.action === 'posted'  && <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/8 p-4 text-[17px] font-bold text-emerald-300">✓ Posted to SWIM</p>}
                                     {st.action === 'skipped'  && <p className="text-[14px] text-slate-700">Skipped</p>}
                                   </div>
                                 </div>
@@ -1537,7 +1872,22 @@ export function ScannerConsoleClient({
                           </p>
                           <p className="mt-0.5 text-[13px] text-emerald-400/55">Queue the best stories for review.</p>
                         </div>
-                        {visibleGood.map((result) => {
+                        {/* Sort by priority score; for origin-scan also group by era */}
+                        {(() => {
+                          const isOriginScan = activePreset === 'origin-scan';
+                          const sortedGood = [...visibleGood].sort((a, b) => {
+                            if (a.status === 'error') return 1;
+                            if (b.status === 'error') return -1;
+                            if (isOriginScan) {
+                              const oa = ERA_GROUP_ORDER.indexOf(a.candidate.sourceEra ?? 'modern source');
+                              const ob = ERA_GROUP_ORDER.indexOf(b.candidate.sourceEra ?? 'modern source');
+                              if (oa !== ob) return (oa === -1 ? 99 : oa) - (ob === -1 ? 99 : ob);
+                            }
+                            const sa = a.candidate.originPriorityScore ?? a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0;
+                            const sb = b.candidate.originPriorityScore ?? b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0;
+                            return sb - sa;
+                          });
+                          return sortedGood.map((result, idx) => {
                           if (result.status === 'error') return null;
                           const st        = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
                           const analysis  = generateSignalAnalysis(result.candidate);
@@ -1551,10 +1901,42 @@ export function ScannerConsoleClient({
                             .map((u) => candidatesByUrl.get(u))
                             .filter((r): r is SessionSourceResult => !!r && r.status !== 'error')
                             .slice(0, 3);
+
+                          // Era group header — only for origin-scan, when era changes
+                          const era     = result.candidate.sourceEra ?? 'modern source';
+                          const prevEra = (() => {
+                            for (let i = idx - 1; i >= 0; i--) {
+                              const r = sortedGood[i];
+                              if (r.status !== 'error') return r.candidate.sourceEra ?? 'modern source';
+                            }
+                            return null;
+                          })();
+                          const showEraHeader = isOriginScan && era !== prevEra;
+                          const eraDisplay = ERA_GROUP_DISPLAY[era];
+
+                          const isOriginCard = era !== 'modern source';
+                          const originBorderCls = isOriginCard ? {
+                            '1990s web':          'border-amber-500/30 bg-amber-500/[0.03]',
+                            'bbs archive':        'border-violet-500/28 bg-violet-500/[0.03]',
+                            'early 2000s':        'border-orange-500/25 bg-orange-500/[0.025]',
+                            'pre-social archive': 'border-sky-500/22 bg-sky-500/[0.025]',
+                          }[era] ?? 'border-white/12 bg-white/[0.04]' : '';
+
                           return (
-                            <div key={result.candidate.sourceUrl} className={`overflow-hidden rounded-2xl border transition-all hover:border-white/20 hover:bg-white/[0.055] ${
-                              isSelected ? 'border-emerald-500/35 bg-emerald-500/[0.04]' : 'border-white/12 bg-white/[0.04]'
-                            }`}>
+                            <React.Fragment key={result.candidate.sourceUrl}>
+                            {showEraHeader && eraDisplay && (
+                              <div className={`mt-1 rounded-xl border px-4 py-2.5 ${eraDisplay.cls}`}>
+                                <p className="text-[12px] font-bold uppercase tracking-[0.18em] opacity-80">{eraDisplay.label}</p>
+                              </div>
+                            )}
+                            <div
+                              className={`overflow-hidden rounded-2xl border transition-all hover:brightness-110 ${
+                                isSelected ? 'border-emerald-500/35 bg-emerald-500/[0.04]'
+                                : isOriginCard ? originBorderCls
+                                : 'border-white/12 bg-white/[0.04]'
+                              }`}
+                              style={{ animationDelay: `${idx * 55}ms`, animation: 'scanReveal 0.35s ease both' }}
+                            >
                               {result.candidate.sourceImageUrl && (
                                 <div className="relative h-44 w-full overflow-hidden bg-slate-900/60">
                                   <img src={result.candidate.sourceImageUrl} alt="" className="h-full w-full object-cover opacity-70" />
@@ -1602,13 +1984,30 @@ export function ScannerConsoleClient({
                                       ✓ {result.candidate.passReason}
                                     </span>
                                   )}
+                                  {/* Era badge */}
+                                  {result.candidate.sourceEra && ERA_BADGE_MAP[result.candidate.sourceEra] && (
+                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${ERA_BADGE_MAP[result.candidate.sourceEra].cls}`}>
+                                      {ERA_BADGE_MAP[result.candidate.sourceEra].label}
+                                    </span>
+                                  )}
+                                  {/* Archive year badge */}
+                                  {result.candidate.archiveYear && (
+                                    <span className="rounded-full border border-amber-500/28 bg-amber-500/8 px-2 py-0.5 text-[10px] font-bold tabular-nums text-amber-400/80">
+                                      {result.candidate.archiveYear}
+                                    </span>
+                                  )}
                                   {result.status === 'duplicate' && (
                                     <span className="rounded-full border border-amber-500/25 bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold text-amber-400">
                                       ⚠ duplicate
                                     </span>
                                   )}
                                   <div className="ml-auto flex items-center gap-1.5">
-                                    {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
+                                    {result.candidate.originPriorityScore != null && (
+                                      <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold tabular-nums text-amber-300/80" title="Origin priority score">
+                                        O{result.candidate.originPriorityScore}
+                                      </span>
+                                    )}
+                                    {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && !result.candidate.originPriorityScore && (
                                       <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score">
                                         P{result.candidate.finalPriorityScore}
                                       </span>
@@ -1620,6 +2019,12 @@ export function ScannerConsoleClient({
                                     )}
                                   </div>
                                 </div>
+                                {/* Origin artifact line */}
+                                {isOriginCard && (
+                                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400/55">
+                                    ↯ Recovered from early web archive{result.candidate.archiveYear ? ` · ${result.candidate.archiveYear}` : ''}
+                                  </p>
+                                )}
                                 {/* Title */}
                                 <p className="mb-1.5 text-[24px] font-bold leading-snug text-white">{result.candidate.title}</p>
                                 {/* Why surfaced — prominent */}
@@ -1628,8 +2033,20 @@ export function ScannerConsoleClient({
                                 )}
                                 <StoryTimeline phase="recovered" />
                                 {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
-                                  clusterLabel || (result.candidate.corroborationScore ?? 0) > 0) && (
+                                  clusterLabel || (result.candidate.corroborationScore ?? 0) > 0 ||
+                                  result.candidate.originPriorityScore != null) && (
                                   <div className="mb-3 flex flex-wrap gap-1">
+                                    {/* Phase O: origin / early-web signal badges */}
+                                    {result.candidate.originPriorityScore != null && result.candidate.originPriorityScore > (result.candidate.storyScore ?? 0) && (
+                                      <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-300">
+                                        ◈ ORIGIN SIGNAL
+                                      </span>
+                                    )}
+                                    {result.candidate.sourceEra && result.candidate.sourceEra !== 'modern source' && (
+                                      <span className="rounded-full border border-amber-500/22 bg-amber-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-400/70">
+                                        EARLY WEB
+                                      </span>
+                                    )}
                                     {result.candidate.storySignals?.map((sig) => (
                                       <span key={sig} className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65">{sig}</span>
                                     ))}
@@ -1690,25 +2107,66 @@ export function ScannerConsoleClient({
                                   </div>
                                 )}
 
-                                {/* ── TASK 3: Clear queue decision ── */}
+                                {/* ── Phase N: action area ── */}
                                 {st.action === 'idle' && (
-                                  <div className="mt-2">
-                                    <p className="mb-2.5 text-[14px] leading-snug text-slate-500">
-                                      Queue this if the source preview looks like a real story worth reviewing.
-                                    </p>
-                                    <div className="flex flex-wrap gap-2">
-                                      <button onClick={() => handleQueueCandidate(result)}
-                                        className="flex flex-1 min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400">
-                                        Queue Story
+                                  editOpenUrl === result.candidate.sourceUrl ? (
+                                    <InlineScanEdit
+                                      candidate={result.candidate}
+                                      onPost={(form) => handleApproveAndPost(result, form)}
+                                      onCancel={() => setEditOpenUrl(null)}
+                                    />
+                                  ) : (
+                                    <div className="mt-2">
+                                      <p className="mb-2.5 text-[14px] leading-snug text-slate-500">
+                                        Approve to post instantly. Edit to refine first.
+                                      </p>
+                                      <div className="flex flex-col gap-2">
+                                        <button
+                                          onClick={() => handleApproveAndPost(result)}
+                                          className="flex w-full min-h-[56px] items-center justify-center rounded-xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400"
+                                        >
+                                          Approve + Post to SWIM
+                                        </button>
+                                        <div className="flex gap-2">
+                                          <button
+                                            onClick={() => setEditOpenUrl(result.candidate.sourceUrl)}
+                                            className="flex flex-1 min-h-[48px] items-center justify-center rounded-xl border border-sky-500/35 bg-sky-500/8 text-[15px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/14"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            onClick={() => handleSkip(result.candidate.sourceUrl)}
+                                            className="flex flex-1 min-h-[48px] items-center justify-center rounded-xl border border-white/12 bg-white/5 text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+                                          >
+                                            Skip
+                                          </button>
+                                          <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                            className="flex min-h-[48px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[14px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
+                                            Source ↗
+                                          </a>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                )}
+                                {st.action === 'posting' && (
+                                  <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[16px] text-slate-400">
+                                    <Spinner /> Posting to SWIM…
+                                  </div>
+                                )}
+                                {st.action === 'posted' && (
+                                  <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
+                                    <div className="border-b border-emerald-500/20 bg-emerald-500/[0.10] px-5 py-3">
+                                      <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Live</p>
+                                      <p className="text-[26px] font-bold leading-tight text-emerald-300">POSTED TO SWIM</p>
+                                    </div>
+                                    <div className="p-4">
+                                      <button
+                                        onClick={() => publishColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                                        className="flex w-full min-h-[52px] items-center justify-center rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400"
+                                      >
+                                        See in Posted Column →
                                       </button>
-                                      <button onClick={() => handleSkip(result.candidate.sourceUrl)}
-                                        className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/12 bg-white/5 px-5 text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
-                                        Skip
-                                      </button>
-                                      <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer"
-                                        className="flex min-h-[56px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[15px] font-semibold text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300">
-                                        Open Source ↗
-                                      </a>
                                     </div>
                                   </div>
                                 )}
@@ -1717,11 +2175,10 @@ export function ScannerConsoleClient({
                                     <Spinner /> Queueing…
                                   </div>
                                 )}
-                                {/* ── TASK 1: Story Queued success card ── */}
                                 {st.action === 'queued' && (
                                   <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
                                     <div className="border-b border-emerald-500/20 bg-emerald-500/[0.10] px-5 py-3">
-                                      <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Done</p>
+                                      <p className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.25em] text-emerald-600">Queued</p>
                                       <p className="text-[26px] font-bold leading-tight text-emerald-300">STORY QUEUED</p>
                                     </div>
                                     <div className="flex flex-col gap-2 p-4">
@@ -1743,7 +2200,7 @@ export function ScannerConsoleClient({
                                 {st.action === 'skipped' && <p className="text-[14px] text-slate-700">Skipped — story hidden</p>}
                                 {st.action === 'error' && (
                                   <div className="rounded-xl border border-red-500/35 bg-red-500/10 p-4">
-                                    <p className="mb-1 text-[16px] font-bold text-red-300">Queue Failed</p>
+                                    <p className="mb-1 text-[16px] font-bold text-red-300">Failed</p>
                                     <p className="text-[15px] text-red-200">{st.error}</p>
                                     {st.error?.includes('Missing Supabase column') && (
                                       <p className="mt-2 text-[13px] text-red-400/55">Run the recovered_signals migration to add the missing column.</p>
@@ -1755,14 +2212,52 @@ export function ScannerConsoleClient({
                                 )}
                               </div>
                             </div>
+                            </React.Fragment>
                           );
-                        })}
+                        });
+                        })()}
                       </div>
                     );
                   })()}
 
-                  {/* ── NEEDS REVIEW TAB ── */}
-                  {activeTab === 'needs-review' && (
+                  {/* ── MORE RESULTS — collapsed by default ── */}
+                  {(needsReview.length > 0 || lowSignalResults.length > 0 || errorResults.length > 0) && (
+                    <div className="rounded-xl border border-white/8 bg-white/[0.02]">
+                      <button
+                        onClick={() => setShowMoreResults((v) => !v)}
+                        className="flex w-full items-center justify-between px-4 py-3 text-left"
+                      >
+                        <span className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">
+                          More
+                          {needsReview.length > 0 && ` · ${needsReview.length} needs review`}
+                          {lowSignalResults.length > 0 && ` · ${lowSignalResults.length} low signal`}
+                          {errorResults.length > 0 && ` · ${errorResults.length} blocked`}
+                        </span>
+                        <span className="text-[11px] text-slate-700">{showMoreResults ? '▲' : '▼'}</span>
+                      </button>
+                      {showMoreResults && (
+                        <div className="border-t border-white/6 p-3">
+                          {/* Mini tab strip */}
+                          <div className="mb-3 flex flex-wrap gap-1.5">
+                            {needsReview.length > 0 && (
+                              <button onClick={() => setMoreTab('needs-review')} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${moreTab === 'needs-review' ? 'border-amber-500/40 bg-amber-500/15 text-amber-300' : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20'}`}>
+                                Needs Review · {needsReview.length}
+                              </button>
+                            )}
+                            {lowSignalResults.length > 0 && (
+                              <button onClick={() => setMoreTab('low-signal')} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${moreTab === 'low-signal' ? 'border-white/25 bg-white/[0.06] text-slate-300' : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20'}`}>
+                                Low Signal · {lowSignalResults.length}
+                              </button>
+                            )}
+                            {errorResults.length > 0 && (
+                              <button onClick={() => setMoreTab('blocked')} className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${moreTab === 'blocked' ? 'border-red-500/35 bg-red-500/10 text-red-300' : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20'}`}>
+                                Blocked · {errorResults.length}
+                              </button>
+                            )}
+                          </div>
+
+                  {/* ── NEEDS REVIEW ── */}
+                  {moreTab === 'needs-review' && (
                     visibleReview.length === 0 ? (
                       <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
                         <p className="text-[32px] font-bold text-slate-700">—</p>
@@ -1822,8 +2317,8 @@ export function ScannerConsoleClient({
                     )
                   )}
 
-                  {/* ── LOW SIGNAL TAB ── */}
-                  {activeTab === 'low-signal' && (
+                  {/* ── LOW SIGNAL ── */}
+                  {moreTab === 'low-signal' && (
                     visibleLow.length === 0 ? (
                       <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
                         <p className="text-[32px] font-bold text-slate-700">—</p>
@@ -1862,7 +2357,7 @@ export function ScannerConsoleClient({
                   )}
 
                   {/* ── BLOCKED/FAILED TAB ── */}
-                  {activeTab === 'blocked' && (
+                  {moreTab === 'blocked' && (
                     visibleErrors.length === 0 ? (
                       <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
                         <p className="text-[32px] font-bold text-emerald-700">✓</p>
@@ -1898,8 +2393,10 @@ export function ScannerConsoleClient({
                       </div>
                     )
                   )}
-
-
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* ── Scan Diagnostics ── */}
                   {diagnostics.length > 0 && (
@@ -2006,127 +2503,24 @@ export function ScannerConsoleClient({
           </div>
         </div>
 
-        {/* ══ 2 · REVIEW ══ */}
-        <div ref={reviewColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
-
-          <div className="border-b border-white/8 px-6 py-5">
-            <div className="mb-1 flex items-center gap-3">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-[15px] font-bold text-amber-400">
-                2
-              </span>
-              <h2 className="text-[22px] font-bold text-white">Review Stories</h2>
-              {reviewSignals.length > 0 && (
-                <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-[14px] font-bold text-amber-300">
-                  {reviewSignals.length}
-                </span>
-              )}
-            </div>
-            <p className="text-[14px] text-slate-500">Read the source. Approve to publish. Reject to discard.</p>
-          </div>
-
-          <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
-
-            {/* Review error panel */}
-            {reviewError && (
-              <div className="rounded-2xl border border-red-500/35 bg-red-500/10 p-5">
-                <p className="mb-1 text-[17px] font-bold text-red-300">Action Failed</p>
-                <p className="text-[15px] text-red-200">{reviewError}</p>
-                <button onClick={() => setReviewError(null)} className="mt-3 text-[13px] text-red-400/60 underline-offset-2 hover:underline">
-                  Dismiss
-                </button>
-              </div>
-            )}
-
-            {reviewSignals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl border border-white/8 bg-white/[0.02] py-14 text-center">
-                <p className="text-[20px] font-bold text-slate-500">No stories queued yet</p>
-                <p className="mt-2 text-[15px] text-slate-600">Scan sources and queue a candidate to see it here.</p>
-                <a href="/scanner/queue"
-                  className="mt-5 flex min-h-[48px] items-center justify-center rounded-xl border border-white/10 bg-white/5 px-6 text-[15px] font-semibold text-slate-400 transition-colors hover:bg-white/10">
-                  Open Full Queue →
-                </a>
-              </div>
-            ) : (
-              reviewSignals.map((sig) => {
-                const isChanging = statusChanging === sig.id;
-                return (
-                  <div key={sig.id} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-                    {/* Header — source type + name + category */}
-                    <div className="flex items-center gap-2 border-b border-white/8 px-5 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-[12px] font-bold ${sourceTypeBadgeCls(sig.source_type)}`}>
-                        {sig.source_type.toUpperCase()}
-                      </span>
-                      <span className="text-[14px] text-slate-500">{sig.source_name}</span>
-                      <span className="ml-auto shrink-0 rounded-full bg-white/6 px-2.5 py-0.5 text-[12px] text-slate-500">{sig.category}</span>
-                    </div>
-                    {/* Body */}
-                    <div className="px-5 py-4">
-                      <p className="mb-3 text-[22px] font-bold leading-snug text-white">{sig.title}</p>
-                      <div className="mb-3 rounded-xl border-l-2 border-amber-500/20 bg-white/[0.02] px-4 py-3">
-                        <p className="text-[17px] leading-relaxed text-slate-300 line-clamp-5">{sig.summary}</p>
-                      </div>
-                      {sig.source_url && (
-                        <a href={sig.source_url} target="_blank" rel="noopener noreferrer"
-                          className="flex items-center gap-2 truncate rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2.5 text-[14px] text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-300">
-                          <span className="truncate">{sig.source_url}</span>
-                          <span className="ml-auto shrink-0">↗</span>
-                        </a>
-                      )}
-                    </div>
-                    {/* Actions */}
-                    <div className="flex flex-col gap-2 border-t border-white/8 p-4">
-                      <button
-                        onClick={() => handleStatusChange(sig.id, 'rebirth-ready')}
-                        disabled={isChanging}
-                        className="flex w-full min-h-[56px] items-center justify-center rounded-2xl bg-emerald-500 text-[18px] font-bold text-black transition-colors hover:bg-emerald-400 disabled:opacity-50"
-                      >
-                        {isChanging ? <Spinner /> : 'Approve for Publishing'}
-                      </button>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleStatusChange(sig.id, 'rejected')}
-                          disabled={isChanging}
-                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/8 text-[16px] font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:opacity-40"
-                        >
-                          Reject
-                        </button>
-                        <button
-                          onClick={() => handleStatusChange(sig.id, 'archived')}
-                          disabled={isChanging}
-                          className="flex flex-1 min-h-[52px] items-center justify-center rounded-2xl border border-white/12 bg-white/[0.03] text-[16px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.07] disabled:opacity-40"
-                        >
-                          Archive
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* ══ 3 · PUBLISH ══ */}
+        {/* ══ 2 · LIVE THREADS ══ */}
         <div ref={publishColRef} className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">
 
           <div className="border-b border-white/8 px-6 py-5">
             <div className="mb-1 flex items-center gap-3">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-500/20 text-[15px] font-bold text-purple-400">
-                3
-              </span>
-              <h2 className="text-[22px] font-bold text-white">Publish Thread</h2>
-              {readySignals.length > 0 && (
-                <span className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[14px] font-bold text-purple-300">
-                  {readySignals.length}
+              <h2 className="text-[22px] font-bold text-white">Live Threads</h2>
+              {postedResults.length > 0 && (
+                <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[14px] font-bold text-emerald-300">
+                  {postedResults.length}
                 </span>
               )}
             </div>
-            <p className="text-[14px] text-slate-500">Edit the thread, then publish to SWIM. Copy social posts after.</p>
+            <p className="text-[14px] text-slate-500">Posted this session. Open thread, copy X or Telegram.</p>
           </div>
 
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
 
-            {/* ── Publish error panel (TASK 7) ── */}
+            {/* Publish error */}
             {publishError && (
               <div className="rounded-2xl border border-red-500/40 bg-red-500/12 p-6">
                 <div className="mb-2 flex items-center gap-2">
@@ -2144,7 +2538,12 @@ export function ScannerConsoleClient({
               </div>
             )}
 
-            {/* ── TASK 5: Publish success panel ── */}
+            {/* One-click posted results */}
+            {postedResults.map((p, i) => (
+              <PostedCard key={`posted-${i}-${p.threadSlug}`} result={p} isNew={p.threadSlug === newPostedSlug} />
+            ))}
+
+            {/* Traditional ReadyCard publish success */}
             {lastPublished && (
               <div className="overflow-hidden rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07]">
                 <div className="border-b border-emerald-500/20 bg-emerald-500/[0.10] px-6 py-5">
@@ -2208,25 +2607,90 @@ export function ScannerConsoleClient({
             )}
 
             {/* Empty state */}
-            {readySignals.length === 0 && !lastPublished && (
+            {postedResults.length === 0 && readySignals.length === 0 && !lastPublished && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <p className="text-[20px] font-bold text-slate-600">—</p>
-                <p className="mt-2 text-[18px] font-semibold text-slate-500">Nothing to publish yet</p>
-                <p className="mt-2 text-[14px] text-slate-600">Approve a story in Review to publish it here.</p>
+                <p className="mt-2 text-[18px] font-semibold text-slate-500">No live threads yet</p>
+                <p className="mt-2 text-[14px] text-slate-600">
+                  Approve a scan result to post a thread instantly.
+                </p>
               </div>
             )}
 
-            {/* Ready signal cards */}
-            {readySignals.map((sig) => (
-              <ReadyCard
-                key={sig.id}
-                signal={sig}
-                isOpen={prepareOpenId === sig.id}
-                isPublishing={publishing === sig.id}
-                onToggle={() => setPrepareOpenId((prev) => (prev === sig.id ? null : sig.id))}
-                onPublish={(form) => handlePublish(sig.id, form)}
-              />
-            ))}
+            {/* Ready signals — approved via traditional review flow, need editing */}
+            {readySignals.length > 0 && (
+              <div>
+                <p className="mb-3 text-[12px] font-bold uppercase tracking-widest text-slate-600">
+                  Approved — Edit &amp; Publish
+                </p>
+                <div className="flex flex-col gap-4">
+                  {readySignals.map((sig) => (
+                    <ReadyCard
+                      key={sig.id}
+                      signal={sig}
+                      isOpen={prepareOpenId === sig.id}
+                      isPublishing={publishing === sig.id}
+                      onToggle={() => setPrepareOpenId((prev) => (prev === sig.id ? null : sig.id))}
+                      onPublish={(form) => handlePublish(sig.id, form)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Collapsible review queue */}
+            {reviewSignals.length > 0 && (
+              <div className="rounded-xl border border-white/8 bg-white/[0.02]">
+                <button
+                  onClick={() => setShowReviewQueue((v) => !v)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left"
+                >
+                  <span className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">
+                    Queue · {reviewSignals.length}
+                  </span>
+                  <span className="text-[11px] text-slate-700">{showReviewQueue ? '▲' : '▼'}</span>
+                </button>
+                {showReviewQueue && (
+                  <div className="border-t border-white/6 p-3">
+                    {reviewError && (
+                      <div className="mb-3 rounded-xl border border-red-500/35 bg-red-500/10 p-3">
+                        <p className="text-[14px] font-bold text-red-300">Action Failed</p>
+                        <p className="text-[13px] text-red-200">{reviewError}</p>
+                        <button onClick={() => setReviewError(null)} className="mt-2 text-[12px] text-red-400/60 underline-offset-2 hover:underline">Dismiss</button>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-2">
+                      {reviewSignals.map((sig) => {
+                        const isChanging = statusChanging === sig.id;
+                        return (
+                          <div key={sig.id} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+                            <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5">
+                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${sourceTypeBadgeCls(sig.source_type)}`}>{sig.source_type.toUpperCase()}</span>
+                              <span className="text-[13px] text-slate-500 truncate">{sig.source_name}</span>
+                              <span className="ml-auto shrink-0 text-[11px] text-slate-600">{sig.category}</span>
+                            </div>
+                            <div className="px-4 py-3">
+                              <p className="mb-1.5 text-[16px] font-bold leading-snug text-white">{sig.title}</p>
+                              <p className="text-[13px] leading-relaxed text-slate-400 line-clamp-3">{sig.summary}</p>
+                            </div>
+                            <div className="flex gap-2 border-t border-white/8 p-3">
+                              <button onClick={() => handleStatusChange(sig.id, 'rebirth-ready')} disabled={isChanging}
+                                className="flex flex-1 min-h-[44px] items-center justify-center rounded-xl bg-emerald-500 text-[15px] font-bold text-black transition-colors hover:bg-emerald-400 disabled:opacity-50">
+                                {isChanging ? <Spinner /> : 'Approve'}
+                              </button>
+                              <button onClick={() => handleStatusChange(sig.id, 'rejected')} disabled={isChanging}
+                                className="flex flex-1 min-h-[44px] items-center justify-center rounded-xl border border-red-500/30 bg-red-500/8 text-[14px] font-semibold text-red-300 transition-colors hover:bg-red-500/15 disabled:opacity-40">
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

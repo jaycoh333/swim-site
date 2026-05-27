@@ -44,6 +44,10 @@ export interface FetchedCandidate {
   corroborationNotes?:  string[];  // detected patterns: ['"same thing happened to me"', ...]
   // Composite priority (story + corroboration + archive/source bonus)
   finalPriorityScore?:  number;    // 0–100 composite score for curator triage
+  // Deep Archive / Origin scan fields (Phase O)
+  originPriorityScore?: number;    // 0–100 boosted score for pre-2010 / old-web / BBS content
+  sourceEra?:           string;    // '1990s web' | 'early 2000s' | 'pre-social archive' | 'bbs archive' | 'modern source'
+  archiveYear?:         number;    // year of archive capture (derived from Wayback timestamp)
 }
 
 export interface SignalDuplicate {

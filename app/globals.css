@@ -539,6 +539,23 @@ body::after {
   }
 }
 
+@keyframes scanReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes postedPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45); }
+  60%  { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(52, 211, 153, 0); }
+}
+
 @keyframes glitch {
   0%,
   90%,
@@ -1265,11 +1282,11 @@ body::after {
 /* ── THREAD PAGE ─────────────────────────────────────────── */
 
 .thread-view-title {
-  font-size: clamp(1.55rem, 4vw, 2.2rem);
-  line-height: 1.20;
+  font-size: clamp(1.75rem, 5vw, 2.65rem);
+  line-height: 1.18;
   color: var(--crt);
   letter-spacing: 0.02em;
-  text-shadow: 0 0 8px rgba(134, 212, 110, 0.10);
+  text-shadow: 0 0 10px rgba(134, 212, 110, 0.12);
   margin: 0;
 }
 
@@ -1462,14 +1479,31 @@ body::after {
 }
 
 .post-body {
-  font-size: 1.28rem;
-  line-height: 1.68;
+  font-size: 1.34rem;
+  line-height: 1.78;
   color: rgba(192, 238, 176, 0.85);
   margin-bottom: 18px;
 }
 
 .post-body-line {
-  line-height: 1.62;
+  line-height: 1.72;
+  margin-bottom: 0.25em;
+}
+
+.post-section-hdr {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.38);
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+}
+
+.post-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(134, 212, 110, 0.12) 30%, rgba(134, 212, 110, 0.06) 70%, transparent);
+  margin: 1.2em 0;
 }
 
 /* greentext inside posts */
@@ -2439,6 +2473,346 @@ body::after {
 }
 
 .admin-input::placeholder {
+  color: rgba(134, 212, 110, 0.22);
+}
+
+/* ── RECOVERED THREAD — PHASE R ─────────────────────────── */
+
+/* Era themes: subtle tinting on the forum shell */
+
+.forum-shell.era-1990s-web {
+  border-color: rgba(215, 168, 92, 0.20);
+  box-shadow: 0 0 0 1px rgba(215, 168, 92, 0.025), inset 0 0 18px rgba(215, 168, 92, 0.016);
+  background:
+    linear-gradient(180deg, rgba(10, 8, 4, 0.985), rgba(6, 4, 2, 0.97)),
+    radial-gradient(circle at 50% 0%, rgba(215, 168, 92, 0.028), transparent 22rem);
+}
+
+.forum-shell.era-bbs-archive {
+  border-color: rgba(160, 130, 200, 0.18);
+  box-shadow: 0 0 0 1px rgba(160, 130, 200, 0.022), inset 0 0 18px rgba(160, 130, 200, 0.014);
+  background:
+    linear-gradient(180deg, rgba(4, 4, 8, 0.99), rgba(2, 2, 5, 0.975)),
+    radial-gradient(circle at 50% 0%, rgba(160, 130, 200, 0.022), transparent 22rem);
+}
+
+.forum-shell.era-early-2000s {
+  border-color: rgba(109, 168, 255, 0.17);
+  box-shadow: 0 0 0 1px rgba(109, 168, 255, 0.022), inset 0 0 18px rgba(109, 168, 255, 0.012);
+  background:
+    linear-gradient(180deg, rgba(4, 6, 10, 0.99), rgba(2, 3, 6, 0.975)),
+    radial-gradient(circle at 50% 0%, rgba(109, 168, 255, 0.020), transparent 22rem);
+}
+
+.forum-shell.era-presocial {
+  border-color: rgba(140, 200, 180, 0.16);
+  box-shadow: 0 0 0 1px rgba(140, 200, 180, 0.020), inset 0 0 18px rgba(140, 200, 180, 0.012);
+}
+
+/* ── Hero badges ── */
+
+.era-badge-inline {
+  padding: 3px 10px;
+  border: 1px solid rgba(215, 168, 92, 0.30);
+  background: rgba(215, 168, 92, 0.06);
+  color: rgba(215, 168, 92, 0.82);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.archive-year-badge {
+  padding: 3px 9px;
+  border: 1px solid rgba(215, 168, 92, 0.22);
+  background: rgba(215, 168, 92, 0.04);
+  color: rgba(215, 168, 92, 0.68);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.origin-signal-badge {
+  padding: 3px 10px;
+  border: 1px solid rgba(134, 212, 110, 0.40);
+  background: rgba(134, 212, 110, 0.07);
+  color: rgba(134, 212, 110, 0.82);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-shadow: 0 0 6px rgba(134, 212, 110, 0.18);
+}
+
+.source-name-inline {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.42);
+}
+
+/* ── Recovered excerpt block ── */
+
+.recovered-excerpt-wrap {
+  padding: 20px 20px 0;
+}
+
+@media (min-width: 640px) {
+  .recovered-excerpt-wrap {
+    padding: 24px 28px 0;
+  }
+}
+
+.recovered-excerpt-quote {
+  position: relative;
+  padding: 18px 22px 18px 26px;
+  border-left: 2px solid rgba(134, 212, 110, 0.38);
+  background: rgba(134, 212, 110, 0.030);
+  font-size: 1.24rem;
+  line-height: 1.72;
+  color: rgba(192, 238, 176, 0.84);
+  letter-spacing: 0.01em;
+  margin: 0;
+  box-shadow: inset 0 0 24px rgba(134, 212, 110, 0.014);
+}
+
+.recovered-excerpt-quote.era-1990s-web {
+  border-left-color: rgba(215, 168, 92, 0.42);
+  background: rgba(215, 168, 92, 0.024);
+  box-shadow: inset 0 0 24px rgba(215, 168, 92, 0.010);
+}
+
+.recovered-excerpt-quote.era-bbs-archive {
+  border-left-color: rgba(160, 130, 200, 0.40);
+  background: rgba(160, 130, 200, 0.022);
+}
+
+.recovered-excerpt-quote.era-early-2000s {
+  border-left-color: rgba(109, 168, 255, 0.38);
+  background: rgba(109, 168, 255, 0.020);
+}
+
+.recovered-excerpt-quote.era-presocial {
+  border-left-color: rgba(140, 200, 180, 0.36);
+  background: rgba(140, 200, 180, 0.018);
+}
+
+.recovered-excerpt-caption {
+  margin: 8px 0 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: rgba(134, 212, 110, 0.36);
+}
+
+/* ── Scanner analysis panel ── */
+
+.scanner-panel {
+  margin: 16px 20px 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(134, 212, 110, 0.11);
+  background: rgba(134, 212, 110, 0.014);
+}
+
+@media (min-width: 640px) {
+  .scanner-panel {
+    margin: 16px 28px 0;
+  }
+}
+
+.scanner-panel-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.30em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.40);
+  margin-bottom: 10px;
+}
+
+.scanner-panel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.scanner-panel-line {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: rgba(134, 212, 110, 0.62);
+  display: flex;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.scanner-panel-bullet {
+  color: rgba(134, 212, 110, 0.32);
+  flex-shrink: 0;
+  width: 10px;
+}
+
+/* ── Source evidence panel ── */
+
+.source-evidence-panel {
+  margin: 14px 20px 0;
+  border: 1px solid rgba(134, 212, 110, 0.09);
+  background: rgba(134, 212, 110, 0.008);
+}
+
+@media (min-width: 640px) {
+  .source-evidence-panel {
+    margin: 14px 28px 0;
+  }
+}
+
+.source-evidence-summary {
+  padding: 10px 14px;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.44);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  transition: color 0.12s;
+}
+
+.source-evidence-summary:hover {
+  color: rgba(134, 212, 110, 0.68);
+}
+
+.source-evidence-summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-evidence-body {
+  border-top: 1px solid rgba(134, 212, 110, 0.08);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.source-evidence-row {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: rgba(134, 212, 110, 0.58);
+  align-items: baseline;
+}
+
+.source-evidence-key {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.36);
+  flex-shrink: 0;
+  width: 52px;
+}
+
+.source-evidence-link {
+  color: rgba(134, 212, 110, 0.58);
+  text-decoration: none;
+  word-break: break-all;
+  transition: color 0.12s;
+}
+
+.source-evidence-link:hover {
+  color: rgba(134, 212, 110, 0.82);
+  text-decoration: underline;
+}
+
+/* ── Related signals section ── */
+
+.related-signals-section {
+  margin-top: 28px;
+}
+
+.related-signals-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.30em;
+  text-transform: uppercase;
+  color: rgba(134, 212, 110, 0.36);
+  margin-bottom: 12px;
+}
+
+.related-signals-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .related-signals-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .related-signals-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.related-signal-card {
+  display: block;
+  padding: 14px 16px;
+  border: 1px solid rgba(134, 212, 110, 0.12);
+  background: rgba(4, 7, 5, 0.97);
+  text-decoration: none;
+  transition: border-color 0.14s, background 0.14s;
+}
+
+.related-signal-card:hover {
+  border-color: rgba(134, 212, 110, 0.26);
+  background: rgba(5, 9, 6, 0.99);
+}
+
+.related-signal-title {
+  font-size: 15px;
+  color: rgba(192, 238, 176, 0.80);
+  line-height: 1.38;
+  margin-bottom: 7px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.related-signal-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: rgba(134, 212, 110, 0.40);
+}
+
+/* ── Recovered thread footer ── */
+
+.recovered-thread-footer {
+  margin-top: 28px;
+  padding: 14px 0 6px;
+  border-top: 1px solid rgba(134, 212, 110, 0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recovered-footer-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.26em;
+  color: rgba(134, 212, 110, 0.32);
+}
+
+.recovered-footer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
   color: rgba(134, 212, 110, 0.22);
 }
 

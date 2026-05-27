@@ -396,6 +396,151 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
+  // ── Phase O: Deep Archive / Origin Scan sources ────────────────────────
+  {
+    id: 'src-026',
+    name: 'Wayback — GeoCities Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.geocities.com/',
+    description:
+      'GeoCities was the defining 1990s personal web host — millions of pages about UFOs, paranormal, conspiracy theories, and weird phenomena from anonymous early adopters. Almost entirely deleted by Yahoo in 2009. Wayback CDX will find pre-2009 captures.',
+    category_focus: ['Paranormal', 'UFOs', 'Internet Lore', 'Hidden History', 'Conspiracy Theory'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "GeoCities archive (pre-2009) via Wayback Machine". Note the original page owner handle or site name if visible. Era: 1990s–2000s web.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-027',
+    name: 'Wayback — Angelfire Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.angelfire.com/',
+    description:
+      'Angelfire hosted thousands of personal paranormal and UFO research pages through the late 1990s and 2000s. Strong source for grassroots conspiracy and encounter documentation before social media absorbed personal publishing.',
+    category_focus: ['Paranormal', 'UFOs', 'Conspiracy Theory', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "Angelfire archive (pre-2010) via Wayback Machine". Note original site title and author handle if visible.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-028',
+    name: 'Wayback — Tripod Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.tripod.lycos.com/',
+    description:
+      'Tripod (Lycos) was another major 1990s–2000s free web host with extensive paranormal, UFO, and alternative research content. Captures pre-2008 personal pages about phenomena that have since vanished from the open web.',
+    category_focus: ['Paranormal', 'UFOs', 'Hidden History', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "Tripod/Lycos archive (pre-2010) via Wayback Machine". Note original site title if visible.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-029',
+    name: 'Wayback — AboveTopSecret Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.abovetopsecret.com/',
+    description:
+      'AboveTopSecret forum threads from 2001–2012 before heavy moderation and content removal. Early UAP/disclosure speculation, government whistleblower claims, and first-generation conspiracy deep-dives that influenced later internet culture.',
+    category_focus: ['UFOs', 'Conspiracy Theory', 'Whistleblower Files', 'Hidden History'],
+    risk_level: 'medium',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "AboveTopSecret archive via Wayback Machine · [year]". Note poster handle and original thread date.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-030',
+    name: 'Wayback — Rense.com Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.rense.com/',
+    description:
+      'Rense.com was one of the largest early alternative news aggregators (active since 1997), publishing UFO reports, suppressed science, government conspiracies, and anomalous phenomena. Pre-2010 captures document early internet paranoia culture.',
+    category_focus: ['UFOs', 'Conspiracy Theory', 'Shadow Systems', 'Paranormal', 'Forbidden Tech'],
+    risk_level: 'medium',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "Rense.com archive via Wayback Machine · [year]". Treat claims as internet artifact — do not endorse. Note original publication date.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-031',
+    name: 'Wayback — Bibliotecapleyades Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.bibliotecapleyades.net/',
+    description:
+      'Spanish-origin alternative knowledge archive founded in 2000 — one of the most comprehensive collections of pre-social-media UFO, ancient history, and consciousness research articles. Extensively archived via Wayback.',
+    category_focus: ['UFOs', 'Hidden History', 'Consciousness', 'Paranormal', 'Occult Archives'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "Bibliotecapleyades archive via Wayback Machine". Treat as research artifact. Cite original article title and author if visible.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-032',
+    name: 'Wayback — Paranormal About.com Archive',
+    source_type: 'wayback',
+    base_url: 'https://paranormal.about.com/',
+    description:
+      'About.com\'s paranormal section was one of the web\'s most-visited paranormal reference hubs from the late 1990s through 2010. Covered ghosts, UFOs, cryptids, and unexplained phenomena with a mainstream editorial voice. Largely deleted in 2017.',
+    category_focus: ['Paranormal', 'UFOs', 'Weird Encounters', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "About.com Paranormal archive via Wayback Machine". Note article title, author, and approximate year.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-033',
+    name: 'Wayback — Unexplained Mysteries Archive',
+    source_type: 'wayback',
+    base_url: 'https://www.unexplained-mysteries.com/',
+    description:
+      'Unexplained-Mysteries.com (est. 2001) was a major community hub for paranormal news, forum discussions, and case documentation. Pre-2010 forum threads capture early internet mystery discourse before Reddit dominated the space.',
+    category_focus: ['Paranormal', 'UFOs', 'Internet Mysteries', 'Hidden History'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit as "Unexplained-Mysteries.com archive via Wayback Machine · [year]". Note original poster handle and thread date if visible.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  {
+    id: 'src-034',
+    name: 'Textfiles.com — BBS Archives',
+    source_type: 'bbs',
+    base_url: 'https://www.textfiles.com/',
+    description:
+      'Jason Scott\'s textfiles.com preserves thousands of 1980s–1990s BBS text files: early UFO reports, pre-internet conspiracy theories, occult texts, encounter narratives, and hacker culture artifacts. Pure raw signal from before the web. Content is anonymous by design.',
+    category_focus: ['UFOs', 'Paranormal', 'Conspiracy Theory', 'Occult Archives', 'Hidden History', 'Internet Lore'],
+    risk_level: 'low',
+    refresh_cadence: 'manual',
+    attribution_rules:
+      'Credit textfiles.com with BBS category path and filename. Note approximate decade. Authors are almost universally anonymous — do not fabricate attribution.',
+    enabled: false,
+    last_scanned_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+  },
   // ── Legacy / high-risk sources ──────────────────────────────────────────
   {
     id: 'src-008',

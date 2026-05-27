@@ -122,6 +122,12 @@ export const mockDb = {
     return THREAD_SEED.filter((t) => t.pinned);
   },
 
+  getRelatedThreads(category: string, excludeId: string, limit = 5): ThreadContent[] {
+    return THREAD_SEED
+      .filter((t) => t.category === category && t.id !== excludeId)
+      .slice(0, limit);
+  },
+
   getRecoveredEntries() {
     return ARCHIVE_ENTRY_SEED.slice(0, 3);
   },

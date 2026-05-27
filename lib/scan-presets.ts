@@ -105,6 +105,17 @@ export const SCAN_PRESETS: ScanPreset[] = [
     color:        'sky',
   },
   {
+    id:           'origin-scan',
+    name:         'Origin Scan',
+    tagline:      'Early internet archaeology — 1990s web, BBS, old-web domains',
+    description:  'Targets pre-2013 Wayback snapshots of GeoCities, Angelfire, Tripod, AboveTopSecret, Rense, Bibliotecapleyades, Unexplained-Mysteries, and textfiles.com BBS archives. Prioritizes content from before social media erased the early web.',
+    sourceTypes:  ['wayback', 'bbs', 'archive'],
+    nameKeywords: ['wayback', 'geocities', 'angelfire', 'tripod', 'textfiles', 'bbs', 'archive', 'abovetopsecret', 'rense', 'bibliotecapleyades', 'erowid', 'unexplained', 'deleted'],
+    risk:         'medium',
+    riskNote:     'Medium — archived pages may return index results; BBS content is anonymous and era-unverified. Curator review required.',
+    color:        'amber',
+  },
+  {
     id:           PRESET_DEBUG,
     name:         'Debug Test Feed',
     tagline:      'Static mock candidates — test queue/review/publish pipeline',
