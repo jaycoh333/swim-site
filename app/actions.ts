@@ -54,6 +54,7 @@ import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 import { recordSourceResult } from '@/lib/source-health';
 import { loadSeenUrls, recordSeenUrls } from '@/lib/scan-memory';
+import { pickRandomTopicGroup } from '@/lib/origin-topic-seeds';
 
 // ---------------------------------------------------------------------------
 // URL normalization — strip tracking params, normalize host, drop fragments.
@@ -639,6 +640,7 @@ async function fetchRedditMultipleCandidates(
   source: DbScannerSource,
   includeRejected = false,
   chaosMode = false,
+  originBias = false,
 ): Promise<
   | { candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
   | { error: string;                  rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
@@ -793,8 +795,19 @@ async function fetchRedditMultipleCandidates(
     [allPosts[i], allPosts[j]] = [allPosts[j], allPosts[i]];
   }
 
-  // Cap collection at 120 raw posts
-  const postsToScore = allPosts.slice(0, 120);
+  // Cap collection at 120 raw posts; origin bias pre-filters recent posts
+  let postsToScore = allPosts.slice(0, 120);
+  if (originBias) {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - SIX_MONTHS_MS;
+    // Keep posts older than 6 months, or high-score posts regardless of age
+    postsToScore = postsToScore.filter((post) => {
+      const ts = (post.data.created_utc ?? 0) * 1000;
+      if (ts < cutoff) return true;          // old enough — keep
+      if (post.data.score >= 500) return true; // very high score — exception
+      return false;
+    });
+  }
 
   const rejectedPosts: RejectedPost[] = [];
   const rejectReasonCounts = new Map<string, number>();
@@ -858,13 +871,25 @@ async function fetchRedditMultipleCandidates(
     const jitter = chaosMode
       ? (Math.random() * 40 - 20)  // ±20
       : (Math.random() * 20 - 10); // ±10
-    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus + jitter };
+
+    // Origin bias: penalize posts newer than 90 days; heavily penalize <30 days
+    let agePenalty = 0;
+    let recentPenaltyNote: string | undefined;
+    if (originBias && p.created_utc) {
+      const postAgeMs = Date.now() - p.created_utc * 1000;
+      const postAgeDays = postAgeMs / 86_400_000;
+      if (postAgeDays < 30)       { agePenalty = 25; recentPenaltyNote = 'recent source (-25 origin bias)'; }
+      else if (postAgeDays < 90)  { agePenalty = 15; recentPenaltyNote = 'recent source (-15 origin bias)'; }
+      else if (postAgeDays < 180) { agePenalty =  5; recentPenaltyNote = 'recent source (-5 origin bias)'; }
+    }
+
+    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus + jitter - agePenalty, recentPenaltyNote };
   });
   scored.sort((a, b) => b.totalScore - a.totalScore);
 
   // Chaos mode expands candidate pool to 20; normal is 10.
   const candidateSlice = chaosMode ? 20 : 10;
-  const rawCandidates: FetchedCandidate[] = scored.slice(0, candidateSlice).map(({ p, narrative, heuristics, totalScore }) => {
+  const rawCandidates: FetchedCandidate[] = scored.slice(0, candidateSlice).map(({ p, narrative, heuristics, totalScore, recentPenaltyNote }) => {
     const qualityResult = qualityMap.get(p.permalink) ?? scoreRedditQuality({
       title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
       url: p.url, score: p.score, num_comments: p.num_comments,
@@ -890,7 +915,7 @@ async function fetchRedditMultipleCandidates(
       anomalyScore:         5,
       categoryNote:         buildCategoryNote(source.category_focus, p.title, p.selftext),
       extractionConfidence: conf.confidence,
-      extractionWarning:    conf.warning ?? undefined,
+      extractionWarning:    recentPenaltyNote ?? conf.warning ?? undefined,
       sourceType:           'reddit',
       isArchived:           false,
       passReason:           qualityResult.passReason || `${p.score}↑`,
@@ -899,7 +924,7 @@ async function fetchRedditMultipleCandidates(
       sourceImageUrl:       imageUrl,
       mediaType:            imageUrl ? 'image' : 'webpage',
       attributionText:      `Recovered from r/${p.subreddit} · u/${p.author} · Reddit`,
-      captureNotes:         `r/${p.subreddit} · u/${p.author} · ${p.score}↑ · ${p.num_comments} comments · posted ${postedAt}. Raw content not stored.`,
+      captureNotes:         `r/${p.subreddit} · u/${p.author} · ${p.score}↑ · ${p.num_comments} comments · posted ${postedAt}. Raw content not stored.${recentPenaltyNote ? ` [${recentPenaltyNote}]` : ''}`,
       redditSubreddit:      p.subreddit,
       redditAuthor:         p.author,
       redditScore:          p.score,
@@ -1355,6 +1380,8 @@ export async function runFetchSessionAction(
     excludeUrls?: string[];
     /** Chaos mode — relaxed quality gates, more randomness, obscure candidates */
     chaosMode?: boolean;
+    /** Origin bias — boost old-web/BBS/Wayback, penalize recent Reddit */
+    originBias?: boolean;
   },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
@@ -1505,7 +1532,7 @@ export async function runFetchSessionAction(
       const waybackRejectReasons: string[] = [];
       for (const link of waybackDisc.links.slice(0, 25)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= PER_SOURCE_CANDIDATE_CAP) break;
-        const fr = await fetchWaybackPagePreview(source, link.url);
+        const fr = await fetchWaybackPagePreview(source, link.url, link.topicGroup, link.topicGroupName);
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
         waybackFetched++;
         const url = fr.candidate.sourceUrl;
@@ -1532,7 +1559,7 @@ export async function runFetchSessionAction(
 
     // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
-      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected, options?.chaosMode);
+      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected, options?.chaosMode, options?.originBias);
       const di = multiResult.debugInfo;
       if ('error' in multiResult) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, endpointResults: di.endpointResults, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
@@ -2052,6 +2079,24 @@ const OLD_WEB_DOMAINS = [
   'paranormal.about.com',
   'unexplained-mysteries.com',
   'textfiles.com',
+  // Phase V additions
+  'crystalinks.com',
+  'theblackvault.com',
+  'nicap.org',
+  'cufon.org',
+  'projectcamelot.org',
+  'projectavalon.net',
+  'nexusmagazine.com',
+  'earthfiles.com',
+  'parascope.com',
+  'anomalist.com',
+  'stantonfriedman.com',
+  'mufon.com',
+  'nuforc.org',
+  'virtuallystrange.net',
+  'pub.ezboard.com',
+  'coasttocoastam.com',
+  'forteantimes.com',
 ];
 
 function computeOriginPriorityScore(
@@ -2113,61 +2158,110 @@ const WAYBACK_ERA_WINDOWS: Array<[number, number]> = [
 
 async function discoverWaybackLinks(
   source: DbScannerSource,
-): Promise<{ links: DiscoveredLink[] } | { error: string }> {
+): Promise<{ links: DiscoveredLink[]; topicGroup?: string; topicGroupName?: string } | { error: string }> {
   const baseHostLower = (source.base_url ?? '').toLowerCase();
   const isOldWebSource = OLD_WEB_DOMAINS.some((d) => baseHostLower.includes(d));
 
-  // Randomly rotate era window each run so different time slices surface.
+  // Phase V: rotate topic seed group — use the group's era preference over the
+  // generic WAYBACK_ERA_WINDOWS so each scan session surfaces a distinct topic.
+  const topic = pickRandomTopicGroup();
   let fromYear: number | undefined;
   let toYear:   number | undefined;
   if (isOldWebSource) {
-    const era = WAYBACK_ERA_WINDOWS[Math.floor(Math.random() * WAYBACK_ERA_WINDOWS.length)];
-    [fromYear, toYear] = era;
+    // Prefer topic's era hint, but occasionally fall back to the generic pool
+    // for coverage of periods the topic hint wouldn't normally reach.
+    if (Math.random() < 0.75) {
+      [fromYear, toYear] = topic.eraHint;
+    } else {
+      const era = WAYBACK_ERA_WINDOWS[Math.floor(Math.random() * WAYBACK_ERA_WINDOWS.length)];
+      [fromYear, toYear] = era;
+    }
   }
 
   const result = await searchWaybackSnapshots(source.base_url!, 50, fromYear, toYear);
   if ('error' in result) return result;
 
-  // Shuffle CDX results so we don't always process earliest/latest captures first.
-  const snaps = [...result.snapshots];
-  for (let i = snaps.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [snaps[i], snaps[j]] = [snaps[j], snaps[i]];
-  }
+  // Sort oldest-first so we surface the earliest viable pages for this domain.
+  // Older pages carry more origin weight in the priority score.
+  const snaps = [...result.snapshots].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  // Filter homepage captures (URL path is / or empty) and apply per-domain cap of 2.
+  // Topic path-hint filtering — keep snapshots whose URL contains at least one
+  // topic path hint.  If the filter is too aggressive (< 3 results), fall back
+  // to accepting all non-homepage URLs.
+  const pathHints  = topic.pathHints;
+  const urlLower   = (url: string) => url.toLowerCase();
+  const topicMatch = (url: string) => pathHints.some((h) => urlLower(url).includes(h));
+
+  const topicFiltered = snaps.filter((s) => {
+    try {
+      const u = new URL(s.url);
+      if (u.pathname === '/' || u.pathname === '') return false;
+    } catch { /* keep */ }
+    return topicMatch(s.url);
+  });
+
+  const candidateSnaps = topicFiltered.length >= 3 ? topicFiltered : snaps.filter((s) => {
+    try {
+      const u = new URL(s.url);
+      if (u.pathname === '/' || u.pathname === '') return false;
+    } catch { /* keep */ }
+    return true;
+  });
+
+  // Per-domain diversity cap of 2.
   const domainCount = new Map<string, number>();
   const links: DiscoveredLink[] = [];
 
-  for (const snap of snaps) {
-    // Skip homepage captures — they rarely contain story content.
-    try {
-      const u = new URL(snap.url);
-      if (u.pathname === '/' || u.pathname === '') continue;
-    } catch { /* keep if unparseable */ }
-
-    // Per-domain diversity cap.
+  for (const snap of candidateSnaps) {
     let domain = '';
     try { domain = new URL(snap.url).hostname; } catch { domain = snap.url; }
     if ((domainCount.get(domain) ?? 0) >= 2) continue;
     domainCount.set(domain, (domainCount.get(domain) ?? 0) + 1);
 
     links.push({
-      url:         snap.waybackUrl,
-      linkText:    snap.url.split('/').pop() || snap.url,
-      matchReason: `Wayback snapshot · captured ${waybackTimestampToIso(snap.timestamp).slice(0, 10)}`,
+      url:            snap.waybackUrl,
+      linkText:       snap.url.split('/').pop() || snap.url,
+      matchReason:    `Wayback snapshot · ${topic.name} · captured ${waybackTimestampToIso(snap.timestamp).slice(0, 10)}`,
+      topicGroup:     topic.id,
+      topicGroupName: topic.name,
     });
 
     if (links.length >= 25) break;
   }
 
-  return { links };
+  return { links, topicGroup: topic.id, topicGroupName: topic.name };
+}
+
+// Task 5: Strip the Wayback Machine navigation toolbar from captured HTML.
+//
+// The Wayback toolbar is injected into every archived page as a large block at
+// the top of <body>.  It contains its own scripts, styles, and text that pollute
+// meta extraction (especially the readable snippet), resulting in junk summaries
+// like "Wayback Machine doesn't have that page archived" or toolbar UI text.
+//
+// This is a targeted text removal — no DOM parsing, no heavy libraries.
+function stripWaybackNavigation(html: string): string {
+  // Remove the Wayback toolbar block: <!-- BEGIN WAYBACK TOOLBAR INSERT --> ... <!-- END WAYBACK TOOLBAR INSERT -->
+  let cleaned = html
+    .replace(/<!-- BEGIN WAYBACK TOOLBAR INSERT -->[\s\S]*?<!-- END WAYBACK TOOLBAR INSERT -->/gi, '')
+    .replace(/<div[^>]+id=["']wm-ipp-base["'][^>]*>[\s\S]*?<\/div>/gi, '')
+    .replace(/<div[^>]+id=["']wm-ipp["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+  // Remove inline Wayback scripts that reference archive.org
+  cleaned = cleaned.replace(/<script[^>]*>[\s\S]*?archive\.org[\s\S]*?<\/script>/gi, '');
+
+  // Remove the Wayback stylesheet link
+  cleaned = cleaned.replace(/<link[^>]+web\.archive\.org[^>]*>/gi, '');
+
+  return cleaned;
 }
 
 // Wayback connector — fetch a single archived page and produce a candidate.
 async function fetchWaybackPagePreview(
-  source: DbScannerSource,
-  url:    string,
+  source:         DbScannerSource,
+  url:            string,
+  topicGroup?:    string,
+  topicGroupName?: string,
 ): Promise<{ candidate: FetchedCandidate } | { error: string }> {
   // Extract timestamp and original URL from the Wayback URL
   // Format: https://web.archive.org/web/20231201120000/https://example.com/page
@@ -2195,7 +2289,12 @@ async function fetchWaybackPagePreview(
     return { error: `Wayback page fetch — ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  const extracted  = extractPageData(html, url);
+  // Task 5: Strip Wayback Machine navigation toolbar before extracting content.
+  // The Wayback toolbar injects a large <div id="wm-ipp-base"> block and several
+  // script/style tags that pollute meta extraction and snippet scoring.
+  const cleanedHtml = stripWaybackNavigation(html);
+
+  const extracted  = extractPageData(cleanedHtml, url);
   const title      = cleanTitle(extracted.title) || source.name;
   const summary    = buildSummary(extracted.description, extracted.snippet);
   const conf       = scoreExtractionConfidence(title, summary);
@@ -2207,7 +2306,6 @@ async function fetchWaybackPagePreview(
   }
 
   // Extract the original domain from the Wayback URL
-  // Format: https://web.archive.org/web/20231201120000/https://example.com/page
   let originalDomain: string | undefined;
   const origUrlMatch = url.match(/\/web\/\d{14}\/(https?:\/\/[^/\s]+)/);
   try { if (origUrlMatch) originalDomain = new URL(origUrlMatch[1]).hostname; } catch { /* ignore */ }
@@ -2215,19 +2313,28 @@ async function fetchWaybackPagePreview(
   const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
   const waybackScore = Math.min(heuristics.storyScore + 5, 100); // archived = bonus
 
-  // Origin priority scoring — Phase O
+  // Origin priority scoring
   const originResult = computeOriginPriorityScore(waybackScore, {
     archiveTimestamp: timestamp,
     originalDomain,
     sourceUrl: url,
   });
 
+  const firstSeenYear = originResult.archiveYear;
+
+  // Task 7: Quality safety framing — archived origin content must be labelled
+  // as internet artifact / archived claim, never presented as established fact.
+  const isOldWeb = originalDomain ? OLD_WEB_DOMAINS.some((d) => originalDomain!.includes(d)) : false;
+  const originFraming = isOldWeb || (firstSeenYear != null && firstSeenYear < 2010)
+    ? 'Internet artifact — archived claim from the early web. Content is not verified or endorsed. Curator review required before publishing.'
+    : 'Archived origin signal. Content is not verified or endorsed. Curator review required.';
+
   const candidate: FetchedCandidate = {
     title:                title.slice(0, 200),
     summary:              summary.slice(0, 2000),
     sourceUrl:            extracted.canonicalUrl || url,
     category:             source.category_focus[0] ?? 'Internet Lore',
-    tags:                 ['scanner-source', 'wayback', 'archived', 'discovered-link'],
+    tags:                 ['scanner-source', 'wayback', 'archived', 'discovered-link', 'internet-artifact'],
     anomalyScore:         5,
     categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
     extractionConfidence: conf.confidence,
@@ -2240,7 +2347,7 @@ async function fetchWaybackPagePreview(
     sourceImageUrl:       extracted.imageUrl || undefined,
     mediaType:            extracted.imageUrl ? 'image' : 'webpage',
     attributionText:      `Archived via Wayback Machine · ${source.name}`,
-    captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}. Original page may no longer be accessible. Raw HTML not stored.`,
+    captureNotes:         `Wayback snapshot${archivedAt ? ` from ${archivedAt.slice(0, 10)}` : ''}${topicGroupName ? ` · topic: ${topicGroupName}` : ''}. ${originFraming} Raw HTML not stored.`,
     originalDomain,
     storyScore:           waybackScore,
     storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
@@ -2248,6 +2355,9 @@ async function fetchWaybackPagePreview(
     originPriorityScore:  originResult.score,
     sourceEra:            originResult.era,
     archiveYear:          originResult.archiveYear,
+    topicGroup,
+    topicGroupName,
+    firstSeenYear,
   };
 
   return { candidate };
@@ -2340,7 +2450,13 @@ async function fetchMediaWikiPagePreview(
 //   - No auto-publish, no mass crawl. Max 2 files per category, 5 total.
 // ---------------------------------------------------------------------------
 
-const TEXTFILES_CATEGORIES = ['ufo', 'conspiracy', 'paranormal', 'occult', 'hauntings', 'stories', 'aliens'];
+// Phase V expanded — more categories for deeper origin coverage.
+// Includes BBS-era subject areas beyond the original 7.
+const TEXTFILES_CATEGORIES = [
+  'ufo', 'conspiracy', 'paranormal', 'occult', 'hauntings', 'stories', 'aliens',
+  'phreak', 'hacker', 'anarchy', 'drugs', 'sex', 'reports', 'sf',
+  'humor', 'science', 'media', 'music',
+];
 
 function isTextfilesSource(source: DbScannerSource): boolean {
   return source.source_type === 'bbs' || (source.base_url ?? '').toLowerCase().includes('textfiles.com');
@@ -2362,13 +2478,15 @@ async function fetchTextfilesMultipleCandidates(
     'Accept':     'text/plain, text/html;q=0.9',
   };
 
-  for (const category of TEXTFILES_CATEGORIES) {
-    if (candidates.length >= 5) break;
+  // Shuffle categories so successive scans hit different areas
+  const shuffledCats = [...TEXTFILES_CATEGORIES];
+  for (let i = shuffledCats.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffledCats[i], shuffledCats[j]] = [shuffledCats[j], shuffledCats[i]];
+  }
 
-    const dirUrl = `https://www.textfiles.com/${category}/`;
-    categoriesTried++;
-
-    // Fetch directory listing
+  // Helper — collect .txt links and one level of subdirectory .txt links from a directory URL.
+  async function collectTxtLinksFromDir(dirUrl: string): Promise<string[]> {
     let dirHtml: string;
     try {
       const res = await fetch(dirUrl, {
@@ -2376,33 +2494,73 @@ async function fetchTextfilesMultipleCandidates(
         headers: { ...UA_HDR, Accept: 'text/html,application/xhtml+xml;q=0.9' },
         signal:  AbortSignal.timeout(10_000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) return [];
       dirHtml = await res.text();
-    } catch { continue; }
+    } catch { return []; }
 
-    // Extract .txt file links from directory listing
     const txtLinks: string[] = [];
-    const re = /href=["']([^"'?#]{1,100}\.txt)["']/gi;
+    const subdirs:  string[] = [];
+
+    // Match .txt files and subdirectory links (href ending with / that stays on textfiles.com)
+    const linkRe = /href=["']([^"'?#]{1,120})["']/gi;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(dirHtml)) !== null) {
+    while ((m = linkRe.exec(dirHtml)) !== null) {
+      const href = m[1];
       try {
-        const resolved = new URL(m[1], dirUrl).href;
-        if (resolved.startsWith('https://www.textfiles.com/') && !txtLinks.includes(resolved)) {
-          txtLinks.push(resolved);
+        const resolved = new URL(href, dirUrl).href;
+        if (!resolved.startsWith('https://www.textfiles.com/')) continue;
+        if (resolved === dirUrl) continue;
+        if (href.endsWith('.txt') || href.toLowerCase().endsWith('.txt')) {
+          if (!txtLinks.includes(resolved)) txtLinks.push(resolved);
+        } else if (href.endsWith('/') && resolved !== 'https://www.textfiles.com/' && !subdirs.includes(resolved)) {
+          subdirs.push(resolved);
         }
       } catch { /* skip */ }
     }
 
+    // One level of subdirectory discovery — fetch up to 2 subdirs and collect .txt files
+    for (const subdir of subdirs.slice(0, 2)) {
+      try {
+        const subRes = await fetch(subdir, {
+          cache:   'no-store',
+          headers: { ...UA_HDR, Accept: 'text/html,application/xhtml+xml;q=0.9' },
+          signal:  AbortSignal.timeout(8_000),
+        });
+        if (!subRes.ok) continue;
+        const subHtml = await subRes.text();
+        const subRe = /href=["']([^"'?#]{1,120}\.txt)["']/gi;
+        let sm: RegExpExecArray | null;
+        while ((sm = subRe.exec(subHtml)) !== null) {
+          try {
+            const resolved = new URL(sm[1], subdir).href;
+            if (resolved.startsWith('https://www.textfiles.com/') && !txtLinks.includes(resolved)) {
+              txtLinks.push(resolved);
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+
+    return txtLinks;
+  }
+
+  for (const category of shuffledCats) {
+    if (candidates.length >= 6) break;
+
+    const dirUrl = `https://www.textfiles.com/${category}/`;
+    categoriesTried++;
+
+    const txtLinks = await collectTxtLinksFromDir(dirUrl);
     if (txtLinks.length === 0) continue;
 
-    // Fisher-Yates shuffle to sample randomly
+    // Shuffle for random sampling
     for (let i = txtLinks.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [txtLinks[i], txtLinks[j]] = [txtLinks[j], txtLinks[i]];
     }
 
     for (const txtUrl of txtLinks.slice(0, 2)) {
-      if (candidates.length >= 5) break;
+      if (candidates.length >= 6) break;
 
       let rawText: string;
       try {
@@ -2430,38 +2588,45 @@ async function fetchTextfilesMultipleCandidates(
       const excerpt = cleaned.slice(0, 600).trim();
 
       // Derive title from filename
-      const filename  = txtUrl.split('/').pop() ?? 'unknown.txt';
-      const rawTitle  = filename
+      const filename = txtUrl.split('/').pop() ?? 'unknown.txt';
+      const rawTitle = filename
         .replace(/\.txt$/i, '')
         .replace(/[-_\.]/g, ' ')
         .replace(/\b([a-z])/g, (c) => c.toUpperCase());
       const title = (rawTitle.slice(0, 80) || `BBS Archive · ${category}`).trim();
 
-      const heuristics = scoreStoryHeuristics(`${title} ${excerpt}`);
+      const heuristics   = scoreStoryHeuristics(`${title} ${excerpt}`);
       const originResult = computeOriginPriorityScore(heuristics.storyScore, { sourceType: 'bbs' });
-      const conf  = scoreExtractionConfidence(title, excerpt);
+      const conf         = scoreExtractionConfidence(title, excerpt);
+
+      // Phase V: map textfiles category to nearest topic group
+      const bbsTopicGroup = BBS_CATEGORY_TOPIC[category] ?? 'internet-lore';
+      const bbsTopicName  = BBS_CATEGORY_TOPIC_NAME[category] ?? 'Internet Lore';
 
       const candidate: FetchedCandidate = {
         title,
-        summary:              `[BBS text archive — ${category}] ${excerpt.slice(0, 480)}`,
+        summary:              `[BBS/TEXT ARTIFACT — ${category}] ${excerpt.slice(0, 480)}`,
         sourceUrl:            txtUrl,
         category:             source.category_focus[0] ?? 'Internet Lore',
-        tags:                 ['scanner-source', 'bbs', 'textfiles', 'archive', category, 'internet-artifact'],
+        tags:                 ['scanner-source', 'bbs', 'textfiles', 'archive', category, 'internet-artifact', 'text-artifact'],
         anomalyScore:         5,
-        categoryNote:         `BBS archive · textfiles.com/${category} · ${filename}`,
+        categoryNote:         `BBS/TEXT ARTIFACT · textfiles.com/${category} · ${filename}`,
         extractionConfidence: conf.confidence,
-        extractionWarning:    conf.warning ?? 'BBS-era text — classify as internet artifact; curator review required',
+        extractionWarning:    conf.warning ?? 'BBS-era text — internet artifact; unverified archived claim; curator review required',
         sourceType:           'bbs',
         isArchived:           true,
-        passReason:           'BBS text archive — origin scan',
+        passReason:           'BBS/TEXT ARTIFACT — origin scan',
         attributionText:      `Textfiles.com BBS Archive · ${category} · ${filename}`,
-        captureNotes:         `BBS/pre-internet text file from textfiles.com/${category}/. First 600 chars only — full text not stored. Authors are anonymous by BBS convention. Treat as internet artifact.`,
+        captureNotes:         `BBS/pre-internet text file from textfiles.com/${category}/. First 600 chars only — full text not stored. Authors are anonymous by BBS convention. Internet artifact — archived claim, not verified, not endorsed.`,
         storyScore:           heuristics.storyScore,
         storySignals:         heuristics.storySignals.length > 0 ? heuristics.storySignals : undefined,
         originPriorityScore:  originResult.score,
         sourceEra:            originResult.era,
         archiveYear:          undefined,  // BBS era — no single archive year
         finalPriorityScore:   originResult.score,
+        topicGroup:           bbsTopicGroup,
+        topicGroupName:       bbsTopicName,
+        firstSeenYear:        undefined,  // pre-web BBS — no reliable first-seen year
       };
 
       candidates.push(candidate);
@@ -2474,6 +2639,49 @@ async function fetchTextfilesMultipleCandidates(
 
   return { candidates, debugInfo: { categoriesTried, filesFetched } };
 }
+
+// Map textfiles.com category names to Phase V topic groups
+const BBS_CATEGORY_TOPIC: Record<string, string> = {
+  ufo:       'ufo-disclosure',
+  aliens:    'ufo-disclosure',
+  conspiracy:'ufo-disclosure',
+  paranormal:'ufo-disclosure',
+  occult:    'ancient-occult',
+  hauntings: 'ufo-disclosure',
+  stories:   'internet-lore',
+  phreak:    'internet-lore',
+  hacker:    'internet-lore',
+  anarchy:   'internet-lore',
+  drugs:     'internet-lore',
+  sex:       'internet-lore',
+  reports:   'ufo-disclosure',
+  sf:        'internet-lore',
+  humor:     'internet-lore',
+  science:   'internet-lore',
+  media:     'lost-media',
+  music:     'lost-media',
+};
+
+const BBS_CATEGORY_TOPIC_NAME: Record<string, string> = {
+  ufo:       'UFO / Disclosure',
+  aliens:    'UFO / Disclosure',
+  conspiracy:'UFO / Disclosure',
+  paranormal:'UFO / Disclosure',
+  occult:    'Ancient / Occult',
+  hauntings: 'UFO / Disclosure',
+  stories:   'Internet Lore',
+  phreak:    'Internet Lore',
+  hacker:    'Internet Lore',
+  anarchy:   'Internet Lore',
+  drugs:     'Internet Lore',
+  sex:       'Internet Lore',
+  reports:   'UFO / Disclosure',
+  sf:        'Internet Lore',
+  humor:     'Internet Lore',
+  science:   'Internet Lore',
+  media:     'Lost Media',
+  music:     'Lost Media',
+};
 
 // ---------------------------------------------------------------------------
 // Erowid Experience Vaults connector

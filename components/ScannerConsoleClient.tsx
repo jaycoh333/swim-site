@@ -87,15 +87,20 @@ function Spinner() {
 }
 
 function relativeAge(isoDate: string): string {
-  const days = Math.floor((Date.now() - new Date(isoDate).getTime()) / 86_400_000);
-  if (days === 0) return 'today';
-  if (days === 1) return '1 day ago';
-  if (days < 30)  return `${days} days ago`;
+  if (!isoDate) return 'date unknown';
+  const ts = new Date(isoDate).getTime();
+  if (isNaN(ts)) return 'date unknown';
+  // Reddit launched 2005; anything earlier is a corrupt/zero timestamp
+  const year = new Date(ts).getFullYear();
+  if (year < 2004 || year > new Date().getFullYear() + 1) return 'date unknown';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days <= 0)   return 'today';
+  if (days === 1)  return '1d ago';
+  if (days < 30)   return `${days}d ago`;
   const months = Math.floor(days / 30);
-  if (months === 1) return '1 month ago';
-  if (months < 12)  return `${months} months ago`;
+  if (months < 12) return `${months}mo ago`;
   const years = Math.floor(days / 365);
-  return years === 1 ? '1 year ago' : `${years} years ago`;
+  return `${years}y ago`;
 }
 
 function sourceTypeBadgeCls(type: string): string {
@@ -262,10 +267,15 @@ function EvidenceBlock({ candidate }: { candidate: FetchedCandidate }) {
   if (sourceType === 'wayback' || candidate.isArchived) {
     return (
       <div className="mb-3 rounded-xl border border-violet-500/12 bg-violet-500/[0.03] px-3 py-2.5">
-        <div className="mb-1 flex items-center gap-2">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-widest text-violet-400/70">Archived Snapshot</span>
           {candidate.archivedAt && (
             <span className="text-[12px] text-violet-300/55">{candidate.archivedAt.slice(0, 10)}</span>
+          )}
+          {candidate.firstSeenYear && (
+            <span className="rounded-sm bg-violet-900/30 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-400/60">
+              {candidate.firstSeenYear}
+            </span>
           )}
         </div>
         {candidate.originalDomain && (
@@ -273,7 +283,12 @@ function EvidenceBlock({ candidate }: { candidate: FetchedCandidate }) {
             Original: <span className="text-slate-300">{candidate.originalDomain}</span>
           </p>
         )}
-        <p className="mt-0.5 text-[11px] text-slate-600">Snapshot via Wayback Machine</p>
+        {candidate.topicGroupName && (
+          <p className="mt-0.5 text-[11px] text-slate-600">{candidate.topicGroupName} · internet artifact</p>
+        )}
+        {!candidate.topicGroupName && (
+          <p className="mt-0.5 text-[11px] text-slate-600">Snapshot via Wayback Machine</p>
+        )}
       </div>
     );
   }
@@ -321,45 +336,49 @@ function SourcePreviewCard({
 
   // ── Reddit ─────────────────────────────────────────────────────────────────
   if (sourceType === 'reddit') {
+    const age = candidate.redditPostedAt ? relativeAge(candidate.redditPostedAt) : null;
     return (
       <div className="overflow-hidden rounded-xl border border-orange-500/22 bg-orange-500/[0.05]">
-        {/* Reddit chrome */}
-        <div className="flex items-center gap-2 border-b border-orange-500/14 bg-orange-500/[0.07] px-4 py-2.5">
-          <span className="text-[13px] font-bold text-orange-500/70">● reddit</span>
+        {/* Top row: subreddit · author · age */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-orange-500/14 bg-orange-500/[0.07] px-4 py-2.5">
           {candidate.redditSubreddit && (
-            <span className="text-[15px] font-bold text-orange-300">r/{candidate.redditSubreddit}</span>
+            <span className="text-[13px] font-bold text-orange-400">r/{candidate.redditSubreddit}</span>
           )}
-          <span className="ml-auto text-[12px] text-slate-600">{sourceName}</span>
+          {candidate.redditSubreddit && (candidate.redditAuthor || age) && (
+            <span className="text-orange-500/30 text-[11px]">·</span>
+          )}
+          {candidate.redditAuthor && (
+            <span className="text-[12px] text-slate-500">u/{candidate.redditAuthor}</span>
+          )}
+          {age && (
+            <>
+              <span className="text-orange-500/30 text-[11px]">·</span>
+              <span className="text-[12px] text-slate-600">{age}</span>
+            </>
+          )}
         </div>
-        <div className="px-4 pt-3">
-          {/* Vote/meta row */}
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            {candidate.redditScore != null && (
-              <span className="text-[15px] font-bold text-orange-400/80">▲ {candidate.redditScore.toLocaleString()}</span>
-            )}
-            {candidate.redditComments != null && (
-              <span className="text-[14px] text-slate-500">💬 {candidate.redditComments.toLocaleString()} comments</span>
-            )}
-            {candidate.redditAuthor && (
-              <span className="text-[14px] text-slate-600">u/{candidate.redditAuthor}</span>
-            )}
-            {candidate.redditPostedAt && (
-              <span className="text-[13px] text-slate-700">{relativeAge(candidate.redditPostedAt)}</span>
-            )}
-          </div>
-          {/* Post title */}
-          <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
+        <div className="px-4 py-3">
+          {/* Big title */}
+          <p className="mb-2.5 text-[19px] font-bold leading-snug text-white">{title}</p>
           {/* Excerpt */}
           {excerpt && (
-            <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+            <p className="mb-3 text-[15px] leading-relaxed text-slate-300 line-clamp-6">{excerpt}</p>
           )}
+          {/* Score / comments row */}
+          <div className="flex items-center gap-3">
+            {candidate.redditScore != null && (
+              <span className="text-[13px] font-semibold text-orange-400/70">▲ {candidate.redditScore}</span>
+            )}
+            {candidate.redditComments != null && (
+              <span className="text-[13px] text-slate-600">{candidate.redditComments} comments</span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-3 border-t border-orange-500/12 px-4 py-2.5">
+        <div className="border-t border-orange-500/12 px-4 py-2.5">
           <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
-            className="text-[14px] font-semibold text-orange-400/70 transition-colors hover:text-orange-400">
+            className="text-[13px] font-semibold text-orange-400/70 transition-colors hover:text-orange-400">
             Open Original Post ↗
           </a>
-          <span className="ml-auto max-w-[50%] truncate text-[11px] text-slate-700">{sourceUrl}</span>
         </div>
       </div>
     );
@@ -403,21 +422,39 @@ function SourcePreviewCard({
   if (sourceType === 'wayback' || candidate.isArchived) {
     return (
       <div className="overflow-hidden rounded-xl border border-violet-500/22 bg-violet-500/[0.05]">
-        <div className="flex items-center gap-2 border-b border-violet-500/14 bg-violet-500/[0.08] px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 border-b border-violet-500/14 bg-violet-500/[0.08] px-4 py-2.5">
           <span className="text-[13px] font-bold text-violet-400/70">📦 Wayback Machine</span>
           {candidate.archivedAt && (
             <span className="text-[13px] text-violet-300/60">archived {candidate.archivedAt.slice(0, 10)}</span>
           )}
+          {candidate.sourceEra && candidate.sourceEra !== 'modern source' && (
+            <span className="ml-auto rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-violet-400/70">
+              {candidate.sourceEra}
+            </span>
+          )}
         </div>
         <div className="px-4 pt-3">
           {candidate.originalDomain && (
-            <p className="mb-2 text-[14px] text-slate-500">
-              Original domain: <span className="text-slate-300">{candidate.originalDomain}</span>
+            <p className="mb-1.5 text-[13px] text-slate-500">
+              Original: <span className="text-slate-300">{candidate.originalDomain}</span>
             </p>
           )}
+          {/* Phase V: first-seen year + topic group badges */}
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            {candidate.firstSeenYear && (
+              <span className="rounded-sm bg-violet-900/40 px-2 py-0.5 text-[11px] font-bold tracking-widest text-violet-300/70 uppercase">
+                FIRST SEEN {candidate.firstSeenYear}
+              </span>
+            )}
+            {candidate.topicGroupName && (
+              <span className="rounded-sm bg-violet-900/30 px-2 py-0.5 text-[11px] font-semibold text-violet-400/60 uppercase tracking-wide">
+                {candidate.topicGroupName}
+              </span>
+            )}
+          </div>
           <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
           {excerpt && (
-            <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+            <p className="mb-3 text-[17px] leading-relaxed text-slate-300">{excerpt}</p>
           )}
         </div>
         <div className="flex items-center border-t border-violet-500/12 px-4 py-2.5">
@@ -425,6 +462,7 @@ function SourcePreviewCard({
             className="text-[14px] font-semibold text-violet-400/70 transition-colors hover:text-violet-400">
             Open Snapshot ↗
           </a>
+          <span className="ml-auto text-[11px] text-slate-700">internet artifact · unverified</span>
         </div>
       </div>
     );
@@ -454,26 +492,33 @@ function SourcePreviewCard({
     );
   }
 
-  // ── Generic forum / other ──────────────────────────────────────────────────
+  // ── Generic forum / BBS / other ────────────────────────────────────────────
+  const isBbs = sourceType === 'bbs';
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-500/20 bg-slate-500/[0.04]">
-      <div className="flex items-center gap-2 border-b border-white/8 bg-white/[0.03] px-4 py-2.5">
-        <span className="text-[13px] font-bold text-slate-500">
-          {sourceType === 'forum' ? '⬡ forum' : sourceType === 'bbs' ? '⬡ BBS' : '⬡ source'}
+    <div className={`overflow-hidden rounded-xl border ${isBbs ? 'border-amber-500/20 bg-amber-500/[0.03]' : 'border-slate-500/20 bg-slate-500/[0.04]'}`}>
+      <div className={`flex flex-wrap items-center gap-2 border-b px-4 py-2.5 ${isBbs ? 'border-amber-500/14 bg-amber-500/[0.06]' : 'border-white/8 bg-white/[0.03]'}`}>
+        <span className={`text-[13px] font-bold ${isBbs ? 'text-amber-400/70' : 'text-slate-500'}`}>
+          {sourceType === 'forum' ? '⬡ forum' : isBbs ? '⬡ BBS TEXT ARTIFACT' : '⬡ source'}
         </span>
         <span className="text-[14px] text-slate-400">{sourceName}</span>
+        {candidate.topicGroupName && (
+          <span className={`ml-auto rounded-sm px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${isBbs ? 'bg-amber-900/30 text-amber-400/60' : 'bg-slate-800/50 text-slate-500'}`}>
+            {candidate.topicGroupName}
+          </span>
+        )}
       </div>
       <div className="px-4 pt-3">
         <p className="mb-2 text-[20px] font-bold leading-snug text-white">{title}</p>
         {excerpt && (
-          <p className="mb-3 text-[18px] leading-relaxed text-slate-300">{excerpt}</p>
+          <p className="mb-3 text-[17px] leading-relaxed text-slate-300">{excerpt}</p>
         )}
       </div>
       <div className="flex items-center border-t border-white/8 px-4 py-2.5">
         <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
-          className="text-[14px] font-semibold text-slate-400/70 transition-colors hover:text-slate-300">
+          className={`text-[14px] font-semibold transition-colors ${isBbs ? 'text-amber-400/70 hover:text-amber-400' : 'text-slate-400/70 hover:text-slate-300'}`}>
           Open Source ↗
         </a>
+        {isBbs && <span className="ml-auto text-[11px] text-slate-700">internet artifact · unverified</span>}
       </div>
     </div>
   );
@@ -620,6 +665,12 @@ function buildRichThreadBody(candidate: FetchedCandidate, sourceName: string): s
   if (candidate.sourceEra && candidate.sourceEra !== 'modern source') {
     lines.push(`> Archive era: ${candidate.sourceEra}${candidate.archiveYear ? ` (${candidate.archiveYear})` : ''}`);
   }
+  if (candidate.firstSeenYear) {
+    lines.push(`> First seen: ${candidate.firstSeenYear}`);
+  }
+  if (candidate.topicGroupName) {
+    lines.push(`> Topic group: ${candidate.topicGroupName}`);
+  }
   lines.push('');
   lines.push('> SOURCE ATTRIBUTION');
   lines.push(`> Source: ${sourceName}`);
@@ -681,9 +732,10 @@ export function ScannerConsoleClient({
   const [lastPublished, setLastPublished] = useState<PostedResult | null>(null);
   const [copied,        setCopied]        = useState<'tg' | 'x' | null>(null);
   const [lastApprovedId, setLastApprovedId] = useState<string | null>(null);
-  const scanColRef    = useRef<HTMLDivElement>(null);
-  const reviewColRef  = useRef<HTMLDivElement>(null);
-  const publishColRef = useRef<HTMLDivElement>(null);
+  const scanColRef        = useRef<HTMLDivElement>(null);
+  const reviewColRef      = useRef<HTMLDivElement>(null);
+  const publishColRef     = useRef<HTMLDivElement>(null);
+  const undoSkipTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Phase N: one-click approve+post
   const [postedResults,       setPostedResults]       = useState<PostedResult[]>([]);
@@ -708,6 +760,26 @@ export function ScannerConsoleClient({
 
   // Phase S: chaos mode toggle
   const [chaosMode, setChaosMode] = useState(false);
+
+  // Phase U: origin bias — boosts old-web/BBS/Wayback, penalizes recent Reddit
+  const [originBias, setOriginBias] = useState(false);
+
+  // Phase T: feed sort + filter + quick review
+  const [feedSort,    setFeedSort]    = useState<'best' | 'newest' | 'oldest' | 'weirdest' | 'unseen'>(
+    activePreset === 'origin-scan' ? 'oldest' : 'best'
+  );
+  const [feedFilters, setFeedFilters] = useState<Set<string>>(new Set());
+  const [quickReview, setQuickReview] = useState(false);
+
+  // Phase T: undo skip
+  const [undoSkipUrl,   setUndoSkipUrl]   = useState<string | null>(null);
+  const [undoSkipTitle, setUndoSkipTitle] = useState('');
+
+  // Phase T: source preview open per card (Map<sourceUrl, boolean>)
+  const [previewOpen, setPreviewOpen] = useState<Map<string, boolean>>(new Map());
+
+  // Phase U: per-card details panel open
+  const [detailsOpen, setDetailsOpen] = useState<Map<string, boolean>>(new Map());
 
   // ── Scan status message cycling (source-type aware) ─────────────────────
 
@@ -823,6 +895,11 @@ export function ScannerConsoleClient({
     }
   }, [scanPhase]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Feed sort default: switch to 'oldest' for origin-scan ───────────────
+  useEffect(() => {
+    setFeedSort(activePreset === 'origin-scan' ? 'oldest' : 'best');
+  }, [activePreset]);
+
   // ── Preset helpers ───────────────────────────────────────────────────────
 
   // Sources whose base_url is a root/homepage are excluded from Run Scan —
@@ -834,11 +911,14 @@ export function ScannerConsoleClient({
   }
 
   function sourcesForPreset(presetId: string) {
+    const isOriginPreset = presetId === 'origin-scan';
     const pool = (() => {
       if (presetId === PRESET_ALL) return enabledSources;
       const preset = SCAN_PRESETS.find((p) => p.id === presetId);
       if (!preset) return enabledSources;
       return enabledSources.filter((s) => {
+        // Origin scan must never include Reddit — it's a pure early-web preset
+        if (isOriginPreset && s.source_type === 'reddit') return false;
         if (preset.nameKeywords.length > 0) {
           const lc = s.name.toLowerCase();
           if (preset.nameKeywords.some((kw) => lc.includes(kw))) return true;
@@ -873,7 +953,16 @@ export function ScannerConsoleClient({
       return rank(hb) - rank(ha);
     });
 
-    return sorted.slice(0, MAX_PRESET_SOURCES);
+    const sliced = sorted.slice(0, MAX_PRESET_SOURCES);
+    // Origin bias: cap Reddit to 2 sources so old-web sources dominate
+    if (originBias) {
+      let redditCount = 0;
+      return sliced.filter((s) => {
+        if (s.source_type === 'reddit') { if (redditCount >= 2) return false; redditCount++; }
+        return true;
+      });
+    }
+    return sliced;
   }
 
   const activeScanSources = sourcesForPreset(activePreset);
@@ -927,6 +1016,7 @@ export function ScannerConsoleClient({
       includeRejected: showRejected,
       excludeUrls:     [...seenUrlsThisSession],
       chaosMode,
+      originBias,
     });
     if ('error' in res) {
       setScanError(res.error);
@@ -1002,6 +1092,19 @@ export function ScannerConsoleClient({
 
   function handleSkip(sourceUrl: string) {
     setCandStates((prev) => new Map(prev).set(sourceUrl, { action: 'skipped' }));
+    // Find the title for undo display
+    const found = scanResults.find((r) => r.status !== 'error' && r.candidate.sourceUrl === sourceUrl);
+    const title = (found && found.status !== 'error') ? found.candidate.title : sourceUrl;
+    setUndoSkipUrl(sourceUrl);
+    setUndoSkipTitle(title);
+    if (undoSkipTimerRef.current) clearTimeout(undoSkipTimerRef.current);
+    undoSkipTimerRef.current = setTimeout(() => setUndoSkipUrl(null), 5000);
+  }
+
+  function undoSkip(sourceUrl: string) {
+    setCandStates((prev) => new Map(prev).set(sourceUrl, { action: 'idle' }));
+    setUndoSkipUrl(null);
+    if (undoSkipTimerRef.current) { clearTimeout(undoSkipTimerRef.current); undoSkipTimerRef.current = null; }
   }
 
   async function handleApproveAndPost(
@@ -1506,23 +1609,40 @@ export function ScannerConsoleClient({
               </div>
             )}
 
-            {/* Chaos mode toggle */}
+            {/* Chaos mode + Origin Bias toggles */}
             {(enabledSources.length > 0 || activeScanSources.length > 0) && (
-              <button
-                onClick={() => setChaosMode((v) => !v)}
-                className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
-                  chaosMode
-                    ? 'border-amber-500/30 bg-amber-500/[0.06] text-amber-400'
-                    : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
-                }`}
-              >
-                <span className="font-bold uppercase tracking-[0.14em]">
-                  {chaosMode ? '↯ CHAOS MODE ON' : '↯ chaos mode'}
-                </span>
-                <span className="text-[10px] opacity-60">
-                  {chaosMode ? 'relaxed thresholds · wider pool · ±20 jitter' : 'off'}
-                </span>
-              </button>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  onClick={() => setChaosMode((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
+                    chaosMode
+                      ? 'border-amber-500/30 bg-amber-500/[0.06] text-amber-400'
+                      : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
+                  }`}
+                >
+                  <span className="font-bold uppercase tracking-[0.14em]">
+                    {chaosMode ? '↯ CHAOS MODE ON' : '↯ chaos mode'}
+                  </span>
+                  <span className="text-[10px] opacity-60">
+                    {chaosMode ? 'relaxed thresholds · wider pool · ±20 jitter' : 'off'}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setOriginBias((v) => !v)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
+                    originBias
+                      ? 'border-violet-500/35 bg-violet-500/[0.07] text-violet-300'
+                      : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
+                  }`}
+                >
+                  <span className="font-bold uppercase tracking-[0.14em]">
+                    {originBias ? '◈ ORIGIN BIAS ON' : '◈ origin bias'}
+                  </span>
+                  <span className="text-[10px] opacity-60">
+                    {originBias ? 'old-web boost · recent Reddit penalized' : 'off'}
+                  </span>
+                </button>
+              </div>
             )}
 
             {/* Run scan button */}
@@ -1921,21 +2041,114 @@ export function ScannerConsoleClient({
                       return (
                         <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-10 text-center">
                           <p className="text-[36px] font-bold text-slate-700">—</p>
-                          <p className="mt-2 text-[22px] font-bold text-slate-400">No strong candidates this scan</p>
+                          <p className="mt-2 text-[22px] font-bold text-slate-400">
+                            {seenUrlsThisSession.size > 0 || [...candStates.values()].some(s => s.action === 'skipped')
+                              ? 'No fresh unseen candidates found.'
+                              : 'No strong candidates this scan'}
+                          </p>
                           <p className="mt-2 text-[15px] leading-relaxed text-slate-600">
                             {blockedCnt > 0
                               ? `${blockedCnt} source${blockedCnt !== 1 ? 's' : ''} blocked — fix source types or use Discover Links.`
-                              : 'Try the Encounters or UFO/Entities preset, or check the Needs Review tab.'}
+                              : 'Try Chaos Mode for wider discovery, or check the Needs Review tab.'}
                           </p>
-                          <a href="/scanner/sources"
-                            className="mt-5 inline-flex items-center gap-1.5 rounded-xl border border-white/12 bg-white/5 px-5 py-2.5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200">
-                            + Manage Sources
-                          </a>
+                          <div className="mt-5 flex flex-wrap justify-center gap-2">
+                            <button
+                              onClick={() => { setChaosMode(true); handleRunScan(); }}
+                              className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-5 py-2.5 text-[14px] font-bold text-amber-300 transition-colors hover:bg-amber-500/18"
+                            >
+                              ↯ Run Chaos Scan
+                            </button>
+                            <button
+                              onClick={() => setShowSeen(true)}
+                              className="rounded-xl border border-white/12 bg-white/5 px-5 py-2.5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10"
+                            >
+                              Show Seen Results
+                            </button>
+                            <a href="/scanner/sources"
+                              className="rounded-xl border border-white/12 bg-white/5 px-5 py-2.5 text-[14px] font-semibold text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200">
+                              Change Preset
+                            </a>
+                          </div>
                         </div>
                       );
                     }
                     return (
                       <div className="flex flex-col gap-3">
+                        {/* ── Undo skip banner ── */}
+                        {undoSkipUrl !== null && (
+                          <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
+                            <span className="min-w-0 truncate text-[14px] text-slate-400">
+                              <span className="text-amber-400">skipped</span> — {undoSkipTitle}
+                            </span>
+                            <button onClick={() => undoSkip(undoSkipUrl!)}
+                              className="ml-auto shrink-0 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-[13px] font-bold text-amber-300 hover:bg-amber-500/20">
+                              Undo Skip
+                            </button>
+                          </div>
+                        )}
+                        {/* ── Sort + filter + quick review strip ── */}
+                        <div className="flex flex-col gap-2 rounded-xl border border-white/8 bg-white/[0.025] px-3 py-3">
+                          {/* Sort buttons */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {([
+                              { key: 'best',     label: 'Best' },
+                              { key: 'newest',   label: 'Newest' },
+                              { key: 'oldest',   label: activePreset === 'origin-scan' ? 'Origin' : 'Oldest' },
+                              { key: 'weirdest', label: 'Weirdest' },
+                              { key: 'unseen',   label: 'Unseen' },
+                            ] as const).map(({ key, label }) => (
+                              <button key={key} onClick={() => setFeedSort(key)}
+                                className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${
+                                  feedSort === key
+                                    ? 'border-emerald-500/55 bg-emerald-500/15 text-emerald-300'
+                                    : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-white/20 hover:text-slate-300'
+                                }`}>
+                                {label}
+                              </button>
+                            ))}
+                            <button onClick={() => setQuickReview((v) => !v)}
+                              className={`ml-auto rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${
+                                quickReview
+                                  ? 'border-amber-500/55 bg-amber-500/15 text-amber-300'
+                                  : 'border-white/10 bg-white/[0.03] text-slate-500 hover:border-amber-500/30 hover:text-amber-400/70'
+                              }`}>
+                              ⚡ Quick Review
+                            </button>
+                          </div>
+                          {/* Filter chips */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {([
+                              { key: 'origin',       label: 'Origin Signal',    color: 'amber'   },
+                              { key: 'reddit',       label: 'Reddit',           color: 'orange'  },
+                              { key: 'archive',      label: 'Archive',          color: 'violet'  },
+                              { key: 'needs-review', label: 'Needs Review',     color: 'amber'   },
+                              { key: 'high-priority',label: 'High Priority',    color: 'emerald' },
+                              { key: 'corroboration',label: 'Has Corroboration',color: 'sky'     },
+                            ] as const).map(({ key, label, color }) => {
+                              const isOn = feedFilters.has(key);
+                              const activeCls: Record<string, string> = {
+                                amber:   'border-amber-500/50 bg-amber-500/12 text-amber-300',
+                                orange:  'border-orange-500/50 bg-orange-500/12 text-orange-300',
+                                violet:  'border-violet-500/50 bg-violet-500/12 text-violet-300',
+                                emerald: 'border-emerald-500/50 bg-emerald-500/12 text-emerald-300',
+                                sky:     'border-sky-500/50 bg-sky-500/12 text-sky-300',
+                              };
+                              return (
+                                <button key={key} onClick={() => setFeedFilters((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(key)) next.delete(key); else next.add(key);
+                                  return next;
+                                })}
+                                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                                    isOn ? activeCls[color] : 'border-white/8 bg-white/[0.02] text-slate-600 hover:border-white/16 hover:text-slate-400'
+                                  }`}>
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        {/* Strong Candidates header */}
                         <div className="rounded-xl border border-emerald-500/18 bg-emerald-500/[0.05] px-4 py-3">
                           <p className="text-[17px] font-bold text-emerald-300">
                             Strong Candidates
@@ -1945,22 +2158,75 @@ export function ScannerConsoleClient({
                           </p>
                           <p className="mt-0.5 text-[13px] text-emerald-400/55">Queue the best stories for review.</p>
                         </div>
-                        {/* Sort by priority score; for origin-scan also group by era */}
+                        {/* Sort + filter + render */}
                         {(() => {
                           const isOriginScan = activePreset === 'origin-scan';
+                          // ── Sort ──
                           const sortedGood = [...visibleGood].sort((a, b) => {
                             if (a.status === 'error') return 1;
                             if (b.status === 'error') return -1;
-                            if (isOriginScan) {
-                              const oa = ERA_GROUP_ORDER.indexOf(a.candidate.sourceEra ?? 'modern source');
-                              const ob = ERA_GROUP_ORDER.indexOf(b.candidate.sourceEra ?? 'modern source');
-                              if (oa !== ob) return (oa === -1 ? 99 : oa) - (ob === -1 ? 99 : ob);
+                            switch (feedSort) {
+                              case 'newest': {
+                                const da = a.candidate.redditPostedAt ? new Date(a.candidate.redditPostedAt).getTime() : null;
+                                const db = b.candidate.redditPostedAt ? new Date(b.candidate.redditPostedAt).getTime() : null;
+                                if (da !== null && db !== null) return db - da;
+                                if (da !== null) return -1;
+                                if (db !== null) return 1;
+                                const ya = a.candidate.archiveYear ?? 0;
+                                const yb = b.candidate.archiveYear ?? 0;
+                                if (ya !== yb) return (yb || -1) - (ya || -1);
+                                return (b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0) - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
+                              }
+                              case 'oldest': {
+                                const ya = a.candidate.archiveYear;
+                                const yb = b.candidate.archiveYear;
+                                if (ya != null && yb != null) {
+                                  if (ya !== yb) return ya - yb;
+                                } else if (ya != null) return -1;
+                                else if (yb != null) return 1;
+                                const ea = ERA_GROUP_ORDER.indexOf(a.candidate.sourceEra ?? 'modern source');
+                                const eb = ERA_GROUP_ORDER.indexOf(b.candidate.sourceEra ?? 'modern source');
+                                return (ea === -1 ? 99 : ea) - (eb === -1 ? 99 : eb);
+                              }
+                              case 'weirdest': {
+                                const wa = (a.candidate.corroborationScore ?? 0) + (a.candidate.storySignals?.length ?? 0);
+                                const wb = (b.candidate.corroborationScore ?? 0) + (b.candidate.storySignals?.length ?? 0);
+                                return wb - wa;
+                              }
+                              case 'unseen': {
+                                const ua = seenUrlsThisSession.has(a.candidate.sourceUrl) ? 1 : 0;
+                                const ub = seenUrlsThisSession.has(b.candidate.sourceUrl) ? 1 : 0;
+                                if (ua !== ub) return ua - ub;
+                                return (b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0) - (a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0);
+                              }
+                              default: { // 'best'
+                                if (isOriginScan) {
+                                  const oa = ERA_GROUP_ORDER.indexOf(a.candidate.sourceEra ?? 'modern source');
+                                  const ob = ERA_GROUP_ORDER.indexOf(b.candidate.sourceEra ?? 'modern source');
+                                  if (oa !== ob) return (oa === -1 ? 99 : oa) - (ob === -1 ? 99 : ob);
+                                }
+                                const sa = a.candidate.originPriorityScore ?? a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0;
+                                const sb = b.candidate.originPriorityScore ?? b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0;
+                                return sb - sa;
+                              }
                             }
-                            const sa = a.candidate.originPriorityScore ?? a.candidate.finalPriorityScore ?? a.candidate.storyScore ?? 0;
-                            const sb = b.candidate.originPriorityScore ?? b.candidate.finalPriorityScore ?? b.candidate.storyScore ?? 0;
-                            return sb - sa;
                           });
-                          return sortedGood.map((result, idx) => {
+                          // ── Filter ──
+                          const filterFn = (r: SessionSourceResult): boolean => {
+                            if (r.status === 'error') return true;
+                            if (feedFilters.size === 0) return true;
+                            const c = r.candidate;
+                            if (feedFilters.has('origin')        && c.sourceEra && c.sourceEra !== 'modern source') return true;
+                            if (feedFilters.has('reddit')        && c.sourceType === 'reddit') return true;
+                            if (feedFilters.has('archive')       && (c.sourceType === 'wayback' || c.isArchived)) return true;
+                            if (feedFilters.has('needs-review')  && (c.extractionConfidence !== 'high' || (c.storyScore ?? 0) < 15)) return true;
+                            if (feedFilters.has('high-priority') && (c.finalPriorityScore ?? c.storyScore ?? 0) >= 20) return true;
+                            if (feedFilters.has('corroboration') && (c.corroborationScore ?? 0) > 0) return true;
+                            return false;
+                          };
+                          const filteredGood = sortedGood.filter(filterFn);
+
+                          return filteredGood.map((result, idx) => {
                           if (result.status === 'error') return null;
                           const st        = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
                           const analysis  = generateSignalAnalysis(result.candidate);
@@ -1975,11 +2241,11 @@ export function ScannerConsoleClient({
                             .filter((r): r is SessionSourceResult => !!r && r.status !== 'error')
                             .slice(0, 3);
 
-                          // Era group header — only for origin-scan, when era changes
+                          // Era group header — only for origin-scan / oldest sort, when era changes
                           const era     = result.candidate.sourceEra ?? 'modern source';
                           const prevEra = (() => {
                             for (let i = idx - 1; i >= 0; i--) {
-                              const r = sortedGood[i];
+                              const r = filteredGood[i];
                               if (r.status !== 'error') return r.candidate.sourceEra ?? 'modern source';
                             }
                             return null;
@@ -1995,6 +2261,8 @@ export function ScannerConsoleClient({
                             'pre-social archive': 'border-sky-500/22 bg-sky-500/[0.025]',
                           }[era] ?? 'border-white/12 bg-white/[0.04]' : '';
 
+                          const isSkipped = st.action === 'skipped';
+
                           return (
                             <React.Fragment key={result.candidate.sourceUrl}>
                             {showEraHeader && eraDisplay && (
@@ -2003,7 +2271,7 @@ export function ScannerConsoleClient({
                               </div>
                             )}
                             <div
-                              className={`overflow-hidden rounded-2xl border transition-all hover:brightness-110 ${
+                              className={`overflow-hidden rounded-2xl border transition-all hover:brightness-110 ${isSkipped ? 'opacity-30' : ''} ${
                                 isSelected ? 'border-emerald-500/35 bg-emerald-500/[0.04]'
                                 : isOriginCard ? originBorderCls
                                 : 'border-white/12 bg-white/[0.04]'
@@ -2075,21 +2343,19 @@ export function ScannerConsoleClient({
                                     </span>
                                   )}
                                   <div className="ml-auto flex items-center gap-1.5">
-                                    {result.candidate.originPriorityScore != null && (
-                                      <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold tabular-nums text-amber-300/80" title="Origin priority score">
-                                        O{result.candidate.originPriorityScore}
-                                      </span>
-                                    )}
-                                    {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && !result.candidate.originPriorityScore && (
-                                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80" title="Priority score">
-                                        P{result.candidate.finalPriorityScore}
-                                      </span>
-                                    )}
-                                    {result.candidate.storyScore != null && (
-                                      <span className="rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[12px] font-bold tabular-nums text-slate-500">
-                                        {result.candidate.storyScore}pts
-                                      </span>
-                                    )}
+                                    {/* Score summary — tappable to open details */}
+                                    <button
+                                      onClick={() => setDetailsOpen((prev) => {
+                                        const next = new Map(prev);
+                                        next.set(result.candidate.sourceUrl, !prev.get(result.candidate.sourceUrl));
+                                        return next;
+                                      })}
+                                      className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600 transition-colors hover:text-slate-400"
+                                      title="Show / hide analysis details"
+                                    >
+                                      {result.candidate.storyScore != null ? `${Math.round(result.candidate.storyScore)}` : '—'}
+                                      {detailsOpen.get(result.candidate.sourceUrl) ? ' ▲' : ' ▼'}
+                                    </button>
                                   </div>
                                 </div>
                                 {/* Origin artifact line */}
@@ -2104,48 +2370,73 @@ export function ScannerConsoleClient({
                                 {analysis.surfacedBecause && (
                                   <p className="mb-2 text-[13px] leading-snug text-emerald-400/65">{analysis.surfacedBecause}</p>
                                 )}
-                                <StoryTimeline phase="recovered" />
-                                {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
-                                  clusterLabel || (result.candidate.corroborationScore ?? 0) > 0 ||
-                                  result.candidate.originPriorityScore != null) && (
-                                  <div className="mb-3 flex flex-wrap gap-1">
-                                    {/* Phase O: origin / early-web signal badges */}
-                                    {result.candidate.originPriorityScore != null && result.candidate.originPriorityScore > (result.candidate.storyScore ?? 0) && (
-                                      <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-300">
-                                        ◈ ORIGIN SIGNAL
-                                      </span>
+                                {/* Collapsible details: signals, cluster, analysis block */}
+                                {detailsOpen.get(result.candidate.sourceUrl) && !quickReview && (
+                                  <div className="mb-3">
+                                    {<StoryTimeline phase="recovered" />}
+                                    {((result.candidate.storySignals && result.candidate.storySignals.length > 0) ||
+                                      clusterLabel || (result.candidate.corroborationScore ?? 0) > 0 ||
+                                      result.candidate.originPriorityScore != null) && (
+                                      <div className="mb-3 flex flex-wrap gap-1">
+                                        {result.candidate.originPriorityScore != null && result.candidate.originPriorityScore > (result.candidate.storyScore ?? 0) && (
+                                          <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-300">
+                                            ◈ ORIGIN SIGNAL
+                                          </span>
+                                        )}
+                                        {result.candidate.sourceEra && result.candidate.sourceEra !== 'modern source' && (
+                                          <span className="rounded-full border border-amber-500/22 bg-amber-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-400/70">
+                                            EARLY WEB
+                                          </span>
+                                        )}
+                                        {result.candidate.storySignals?.map((sig) => (
+                                          <span key={sig} className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65">{sig}</span>
+                                        ))}
+                                        {clusterLabel && (
+                                          <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">⬡ {clusterLabel}</span>
+                                        )}
+                                        {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
+                                          <span className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80" title={result.candidate.corroborationNotes?.join(', ')}>
+                                            ⟳ {result.candidate.corroborationScore} corroboration
+                                          </span>
+                                        )}
+                                        {result.candidate.originPriorityScore != null && (
+                                          <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold tabular-nums text-amber-300/80">
+                                            O{result.candidate.originPriorityScore}
+                                          </span>
+                                        )}
+                                        {result.candidate.finalPriorityScore != null && result.candidate.finalPriorityScore !== result.candidate.storyScore && (
+                                          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold tabular-nums text-emerald-400/80">
+                                            P{result.candidate.finalPriorityScore}
+                                          </span>
+                                        )}
+                                      </div>
                                     )}
-                                    {result.candidate.sourceEra && result.candidate.sourceEra !== 'modern source' && (
-                                      <span className="rounded-full border border-amber-500/22 bg-amber-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-400/70">
-                                        EARLY WEB
-                                      </span>
-                                    )}
-                                    {result.candidate.storySignals?.map((sig) => (
-                                      <span key={sig} className="rounded-full border border-emerald-500/20 bg-emerald-500/6 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-400/65">{sig}</span>
-                                    ))}
-                                    {clusterLabel && (
-                                      <span className="rounded-full border border-violet-500/25 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-400/75">⬡ {clusterLabel}</span>
-                                    )}
-                                    {result.candidate.corroborationScore != null && result.candidate.corroborationScore > 0 && (
-                                      <span className="rounded-full border border-sky-500/25 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold text-sky-400/80" title={result.candidate.corroborationNotes?.join(', ')}>
-                                        ⟳ {result.candidate.corroborationScore} corroboration
-                                      </span>
+                                    <SignalAnalysisBlock analysis={analysis} />
+                                  </div>
+                                )}
+                                <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
+                                  <p className={`text-[18px] leading-relaxed text-slate-300 ${quickReview ? 'line-clamp-2' : 'line-clamp-5'}`}>{result.candidate.summary}</p>
+                                </div>
+                                {/* ── Original Source Preview — collapsible (Phase T, TASK 1) ── */}
+                                {!quickReview && (
+                                  <div className="mb-3">
+                                    <button
+                                      onClick={() => setPreviewOpen((prev) => {
+                                        const next = new Map(prev);
+                                        next.set(result.candidate.sourceUrl, !prev.get(result.candidate.sourceUrl));
+                                        return next;
+                                      })}
+                                      className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600 hover:text-slate-400 transition-colors"
+                                    >
+                                      {previewOpen.get(result.candidate.sourceUrl) ? '▲ hide source preview' : '▼ show source preview'}
+                                    </button>
+                                    {previewOpen.get(result.candidate.sourceUrl) && (
+                                      <SourcePreviewCard candidate={result.candidate} sourceName={result.sourceName} />
                                     )}
                                   </div>
                                 )}
-                                <SignalAnalysisBlock analysis={analysis} />
-                                <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
-                                  <p className="text-[18px] leading-relaxed text-slate-300 line-clamp-5">{result.candidate.summary}</p>
-                                </div>
-                                {/* ── Original Source Preview (Phase L, TASK 2) ── */}
-                                <div className="mb-3">
-                                  <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">
-                                    Original Source Preview
-                                  </p>
-                                  <SourcePreviewCard candidate={result.candidate} sourceName={result.sourceName} />
-                                </div>
 
-                                {relatedResults.length > 0 && (
+                                {!quickReview && relatedResults.length > 0 && (
                                   <div className="mb-3">
                                     <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">Related signals · cluster: {clusterLabel}</p>
                                     <div className="flex flex-col gap-1.5">
@@ -2270,7 +2561,18 @@ export function ScannerConsoleClient({
                                     </div>
                                   </div>
                                 )}
-                                {st.action === 'skipped' && <p className="text-[14px] text-slate-700">Skipped — story hidden</p>}
+                                {st.action === 'skipped' && (
+                                  <div className="flex items-center gap-3">
+                                    <p className="text-[14px] text-slate-700">skipped</p>
+                                    {undoSkipUrl === result.candidate.sourceUrl && (
+                                      <button onClick={() => undoSkip(result.candidate.sourceUrl)}
+                                        style={{ pointerEvents: 'auto' }}
+                                        className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-1 text-[13px] font-bold text-amber-300 hover:bg-amber-500/16">
+                                        Undo
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                                 {st.action === 'error' && (
                                   <div className="rounded-xl border border-red-500/35 bg-red-500/10 p-4">
                                     <p className="mb-1 text-[16px] font-bold text-red-300">Failed</p>

@@ -48,6 +48,10 @@ export interface FetchedCandidate {
   originPriorityScore?: number;    // 0–100 boosted score for pre-2010 / old-web / BBS content
   sourceEra?:           string;    // '1990s web' | 'early 2000s' | 'pre-social archive' | 'bbs archive' | 'modern source'
   archiveYear?:         number;    // year of archive capture (derived from Wayback timestamp)
+  // Phase V origin fields
+  topicGroup?:          string;    // topic group ID that surfaced this candidate (e.g. 'ufo-disclosure')
+  topicGroupName?:      string;    // human-readable topic group name (e.g. 'UFO / Disclosure')
+  firstSeenYear?:       number;    // earliest known year this content appeared online
 }
 
 export interface SignalDuplicate {
@@ -59,9 +63,11 @@ export interface SignalDuplicate {
 
 // Discovered link from a limited-depth source scan (max 5, same-domain, no recursion).
 export interface DiscoveredLink {
-  url:         string;
-  linkText:    string;
-  matchReason: string;
+  url:            string;
+  linkText:       string;
+  matchReason:    string;
+  topicGroup?:    string;  // Phase V: topic group ID that found this link
+  topicGroupName?: string; // Phase V: human-readable topic group name
 }
 
 // Discriminated union — one result per source in a fetch session.
