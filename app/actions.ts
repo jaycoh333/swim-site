@@ -53,6 +53,32 @@ import {
 import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 import { recordSourceResult } from '@/lib/source-health';
+import { loadSeenUrls, recordSeenUrls } from '@/lib/scan-memory';
+
+// ---------------------------------------------------------------------------
+// URL normalization — strip tracking params, normalize host, drop fragments.
+// ---------------------------------------------------------------------------
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'old.reddit.com' || u.hostname === 'www.reddit.com') {
+      u.hostname = 'reddit.com';
+    }
+    u.hostname = u.hostname.toLowerCase();
+    const TRACKING = [
+      'utm_source','utm_medium','utm_campaign','utm_term','utm_content',
+      'fbclid','gclid','ref','source','_ga','mc_cid','mc_eid','share_id',
+    ];
+    for (const p of TRACKING) u.searchParams.delete(p);
+    u.hash = '';
+    let pn = u.pathname;
+    while (pn.endsWith('/') && pn.length > 1) pn = pn.slice(0, -1);
+    u.pathname = pn;
+    return u.toString();
+  } catch {
+    return url.toLowerCase().replace(/\/$/, '');
+  }
+}
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -612,6 +638,7 @@ type RedditMultiDebugInfo = {
 async function fetchRedditMultipleCandidates(
   source: DbScannerSource,
   includeRejected = false,
+  chaosMode = false,
 ): Promise<
   | { candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
   | { error: string;                  rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
@@ -626,12 +653,17 @@ async function fetchRedditMultipleCandidates(
   const subreddit = urlMatch[1];
 
   // Sort-endpoint pool — shuffle each run so different sort windows get sampled.
-  // This prevents every scan from always pulling the same /new posts.
+  // Chaos mode adds controversial/week + rising for extra discovery surface.
   const sortPool = [
     `https://www.reddit.com/r/${subreddit}/new.json?limit=100`,
     `https://www.reddit.com/r/${subreddit}/hot.json?limit=100`,
     `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=100`,
     `https://www.reddit.com/r/${subreddit}/top.json?t=month&limit=100`,
+    `https://www.reddit.com/r/${subreddit}/top.json?t=day&limit=100`,
+    ...(chaosMode ? [
+      `https://www.reddit.com/r/${subreddit}/controversial.json?t=week&limit=100`,
+      `https://www.reddit.com/r/${subreddit}/rising.json?limit=100`,
+    ] : []),
   ];
   // Fisher-Yates shuffle
   for (let i = sortPool.length - 1; i > 0; i--) {
@@ -822,11 +854,17 @@ async function fetchRedditMultipleCandidates(
       (p.num_comments > 10 ? 1 : 0),
       3,
     ) * 8;
-    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus };
+    // Jitter prevents the same top-scored posts from winning every run.
+    const jitter = chaosMode
+      ? (Math.random() * 40 - 20)  // ±20
+      : (Math.random() * 20 - 10); // ±10
+    return { p, narrative, heuristics, totalScore: heuristics.storyScore + criteriaBonus + jitter };
   });
   scored.sort((a, b) => b.totalScore - a.totalScore);
 
-  const rawCandidates: FetchedCandidate[] = scored.slice(0, 10).map(({ p, narrative, heuristics, totalScore }) => {
+  // Chaos mode expands candidate pool to 20; normal is 10.
+  const candidateSlice = chaosMode ? 20 : 10;
+  const rawCandidates: FetchedCandidate[] = scored.slice(0, candidateSlice).map(({ p, narrative, heuristics, totalScore }) => {
     const qualityResult = qualityMap.get(p.permalink) ?? scoreRedditQuality({
       title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
       url: p.url, score: p.score, num_comments: p.num_comments,
@@ -1311,7 +1349,13 @@ const SESSION_TOTAL_CANDIDATE_CAP = 30; // max total candidates per run
 
 export async function runFetchSessionAction(
   sourceIds: string[],
-  options?: { includeRejected?: boolean },
+  options?: {
+    includeRejected?: boolean;
+    /** Normalized or raw URLs already shown/posted client-side — excluded from this run */
+    excludeUrls?: string[];
+    /** Chaos mode — relaxed quality gates, more randomness, obscure candidates */
+    chaosMode?: boolean;
+  },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
   if (sourceIds.length > 20) return { error: 'max 20 sources per session' };
@@ -1341,6 +1385,14 @@ export async function runFetchSessionAction(
   // already-archived candidates without N individual round trips.
   const existingUrls = await getExistingSignalUrls();
 
+  // Persistent memory: URLs seen/posted/skipped in prior sessions (decays over time).
+  const persistedSeenUrls = loadSeenUrls();
+
+  // Client-side exclusions passed from the scanner UI (already-shown candidates).
+  const excludeSet = new Set<string>(
+    (options?.excludeUrls ?? []).map(normalizeUrl),
+  );
+
   // Session-level dedup: URLs pushed in this run (catches cross-source dupes).
   const seenThisSession = new Set<string>();
 
@@ -1352,12 +1404,18 @@ export async function runFetchSessionAction(
 
   // Helper: check freshness before attempting checkSignalDuplicates.
   function isAlreadyArchived(url: string): boolean {
-    return existingUrls.has(url) || seenThisSession.has(url);
+    const norm = normalizeUrl(url);
+    return existingUrls.has(url) || existingUrls.has(norm)
+      || seenThisSession.has(norm)
+      || persistedSeenUrls.has(norm)
+      || excludeSet.has(norm);
   }
 
   function trackResult(sourceId: string, r: SessionSourceResult) {
     if (r.status !== 'error') {
-      seenThisSession.add((r as { candidate: { sourceUrl: string } }).candidate.sourceUrl);
+      const rawUrl = (r as { candidate: { sourceUrl: string } }).candidate.sourceUrl;
+      const norm   = normalizeUrl(rawUrl);
+      seenThisSession.add(norm);
       perSourceCount.set(sourceId, (perSourceCount.get(sourceId) ?? 0) + 1);
     }
     results.push(r);
@@ -1474,7 +1532,7 @@ export async function runFetchSessionAction(
 
     // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
-      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected);
+      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected, options?.chaosMode);
       const di = multiResult.debugInfo;
       if ('error' in multiResult) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, endpointResults: di.endpointResults, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
@@ -1733,6 +1791,9 @@ export async function runFetchSessionAction(
     try { recordSourceResult(diag.sourceId, diag.sourceName, success, diag.candidatesPassed); }
     catch { /* never block the return */ }
   }
+
+  // Persist all URLs seen this session so future scans skip them automatically.
+  try { recordSeenUrls(seenThisSession, 'seen'); } catch { /* never block */ }
 
   return { results, diagnostics };
 }
@@ -2041,22 +2102,64 @@ function computeOriginPriorityScore(
 // Wayback CDX connector — discover snapshots of a domain registered as a source
 // ---------------------------------------------------------------------------
 
+// Era windows for Wayback deep-mode rotation — each run picks one at random so
+// successive scans surface content from different periods of the old web.
+const WAYBACK_ERA_WINDOWS: Array<[number, number]> = [
+  [1997, 2000],
+  [2001, 2004],
+  [2005, 2009],
+  [2010, 2012],
+];
+
 async function discoverWaybackLinks(
   source: DbScannerSource,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
-  // For old-web domains, filter to 1997–2012 captures to prefer early-web content
   const baseHostLower = (source.base_url ?? '').toLowerCase();
   const isOldWebSource = OLD_WEB_DOMAINS.some((d) => baseHostLower.includes(d));
-  const fromYear = isOldWebSource ? 1997 : undefined;
-  const toYear   = isOldWebSource ? 2012 : undefined;
-  const result = await searchWaybackSnapshots(source.base_url!, 25, fromYear, toYear);
+
+  // Randomly rotate era window each run so different time slices surface.
+  let fromYear: number | undefined;
+  let toYear:   number | undefined;
+  if (isOldWebSource) {
+    const era = WAYBACK_ERA_WINDOWS[Math.floor(Math.random() * WAYBACK_ERA_WINDOWS.length)];
+    [fromYear, toYear] = era;
+  }
+
+  const result = await searchWaybackSnapshots(source.base_url!, 50, fromYear, toYear);
   if ('error' in result) return result;
 
-  const links: DiscoveredLink[] = result.snapshots.map((snap) => ({
-    url:         snap.waybackUrl,
-    linkText:    snap.url.split('/').pop() || snap.url,
-    matchReason: `Wayback snapshot · captured ${waybackTimestampToIso(snap.timestamp).slice(0, 10)}`,
-  }));
+  // Shuffle CDX results so we don't always process earliest/latest captures first.
+  const snaps = [...result.snapshots];
+  for (let i = snaps.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [snaps[i], snaps[j]] = [snaps[j], snaps[i]];
+  }
+
+  // Filter homepage captures (URL path is / or empty) and apply per-domain cap of 2.
+  const domainCount = new Map<string, number>();
+  const links: DiscoveredLink[] = [];
+
+  for (const snap of snaps) {
+    // Skip homepage captures — they rarely contain story content.
+    try {
+      const u = new URL(snap.url);
+      if (u.pathname === '/' || u.pathname === '') continue;
+    } catch { /* keep if unparseable */ }
+
+    // Per-domain diversity cap.
+    let domain = '';
+    try { domain = new URL(snap.url).hostname; } catch { domain = snap.url; }
+    if ((domainCount.get(domain) ?? 0) >= 2) continue;
+    domainCount.set(domain, (domainCount.get(domain) ?? 0) + 1);
+
+    links.push({
+      url:         snap.waybackUrl,
+      linkText:    snap.url.split('/').pop() || snap.url,
+      matchReason: `Wayback snapshot · captured ${waybackTimestampToIso(snap.timestamp).slice(0, 10)}`,
+    });
+
+    if (links.length >= 25) break;
+  }
 
   return { links };
 }

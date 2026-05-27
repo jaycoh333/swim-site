@@ -700,39 +700,80 @@ export function ScannerConsoleClient({
   const [showReviewQueue, setShowReviewQueue] = useState(false);
 
   // Phase Q: live scan feel + animation
-  const [liveCount,          setLiveCount]          = useState(0);
-  const [liveScanningSource, setLiveScanningSource] = useState('');
-  const [newPostedSlug,      setNewPostedSlug]      = useState<string | null>(null);
+  const [liveCount,              setLiveCount]              = useState(0);
+  const [liveScanningSource,     setLiveScanningSource]     = useState('');
+  const [liveScanningSourceType, setLiveScanningSourceType] = useState('');
+  const [newPostedSlug,          setNewPostedSlug]          = useState<string | null>(null);
   const activeScanSourcesRef = useRef<typeof enabledSources>([]);
 
-  // ── Scan status message cycling ──────────────────────────────────────────
+  // Phase S: chaos mode toggle
+  const [chaosMode, setChaosMode] = useState(false);
 
-  const SCAN_STATUS_MESSAGES = [
-    'recovered signal found...',
-    'analyzing archived fragment...',
-    'origin candidate detected...',
-    'querying archive endpoints...',
-    'scoring anomaly markers...',
-    'checking corroboration layers...',
-    'extracting narrative signal...',
-    'deep archive ping received...',
-    'classifying source era...',
-    'filtering noise...',
-    'signal recovered...',
-    'scanning archive...',
-  ];
+  // ── Scan status message cycling (source-type aware) ─────────────────────
+
+  const SCAN_STATUS_BY_TYPE: Record<string, string[]> = {
+    reddit: [
+      'querying subreddit endpoints...',
+      'shuffling sort windows...',
+      'scoring story quality...',
+      'checking corroboration threads...',
+      'extracting narrative signal...',
+      'filtering noise...',
+    ],
+    wayback: [
+      'probing archive.org CDX...',
+      'rotating era window...',
+      'recovering old-web fragment...',
+      'classifying source era...',
+      'deep archive ping received...',
+      'filtering homepage captures...',
+    ],
+    bbs: [
+      'connecting to BBS node...',
+      'scanning thread index...',
+      'recovering archived post...',
+      'classifying forum era...',
+      'extracting board signal...',
+      'filtering noise...',
+    ],
+    mediawiki: [
+      'querying wiki index...',
+      'scanning article space...',
+      'recovering documented signal...',
+      'classifying entry...',
+      'extracting narrative...',
+      'filtering noise...',
+    ],
+    default: [
+      'recovered signal found...',
+      'analyzing archived fragment...',
+      'origin candidate detected...',
+      'querying archive endpoints...',
+      'scoring anomaly markers...',
+      'checking corroboration layers...',
+      'extracting narrative signal...',
+      'deep archive ping received...',
+      'classifying source era...',
+      'filtering noise...',
+      'signal recovered...',
+      'scanning archive...',
+    ],
+  };
 
   useEffect(() => {
     if (scanPhase !== 'scanning') { setScanStatus(''); return; }
     scanStatusIdx.current = 0;
-    setScanStatus(SCAN_STATUS_MESSAGES[0]);
+    const getMessages = () =>
+      SCAN_STATUS_BY_TYPE[liveScanningSourceType] ?? SCAN_STATUS_BY_TYPE.default;
+    setScanStatus(getMessages()[0]);
     const id = window.setInterval(() => {
-      scanStatusIdx.current = (scanStatusIdx.current + 1) % SCAN_STATUS_MESSAGES.length;
-      setScanStatus(SCAN_STATUS_MESSAGES[scanStatusIdx.current]);
+      const msgs = getMessages();
+      scanStatusIdx.current = (scanStatusIdx.current + 1) % msgs.length;
+      setScanStatus(msgs[scanStatusIdx.current]);
     }, 1600);
     return () => window.clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanPhase]);
+  }, [scanPhase, liveScanningSourceType]);
 
   // ── Live counter animation during scan ───────────────────────────────────
   useEffect(() => {
@@ -748,14 +789,16 @@ export function ScannerConsoleClient({
     activeScanSourcesRef.current = activeScanSources;
   });
   useEffect(() => {
-    if (scanPhase !== 'scanning') { setLiveScanningSource(''); return; }
+    if (scanPhase !== 'scanning') { setLiveScanningSource(''); setLiveScanningSourceType(''); return; }
     const sources = activeScanSourcesRef.current;
     if (!sources.length) return;
     let idx = 0;
     setLiveScanningSource(sources[0]?.name ?? '');
+    setLiveScanningSourceType(sources[0]?.source_type ?? '');
     const id = window.setInterval(() => {
       idx = (idx + 1) % sources.length;
       setLiveScanningSource(sources[idx]?.name ?? '');
+      setLiveScanningSourceType(sources[idx]?.source_type ?? '');
     }, 2400);
     return () => window.clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -809,7 +852,14 @@ export function ScannerConsoleClient({
     // Prefer sources with recent successful health records over blocked/unknown ones.
     if (presetId === PRESET_ALL) return nonHomepage;
 
-    const sorted = [...nonHomepage].sort((a, b) => {
+    // Fisher-Yates shuffle before health sort so equal-ranked sources rotate between runs.
+    const shuffled = [...nonHomepage];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const sorted = [...shuffled].sort((a, b) => {
       const ha = healthMap.get(a.id);
       const hb = healthMap.get(b.id);
       const rank = (h: typeof ha) => {
@@ -873,7 +923,11 @@ export function ScannerConsoleClient({
     const sourceIdsToRun = isDebugRun
       ? ['__debug_test__']
       : activeScanSources.map((s) => s.id);
-    const res = await runFetchSessionAction(sourceIdsToRun, { includeRejected: showRejected });
+    const res = await runFetchSessionAction(sourceIdsToRun, {
+      includeRejected: showRejected,
+      excludeUrls:     [...seenUrlsThisSession],
+      chaosMode,
+    });
     if ('error' in res) {
       setScanError(res.error);
       setScanPhase('idle');
@@ -1450,6 +1504,25 @@ export function ScannerConsoleClient({
                   Manage Sources →
                 </a>
               </div>
+            )}
+
+            {/* Chaos mode toggle */}
+            {(enabledSources.length > 0 || activeScanSources.length > 0) && (
+              <button
+                onClick={() => setChaosMode((v) => !v)}
+                className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-[12px] transition-colors ${
+                  chaosMode
+                    ? 'border-amber-500/30 bg-amber-500/[0.06] text-amber-400'
+                    : 'border-white/8 bg-white/[0.02] text-slate-600 hover:text-slate-400'
+                }`}
+              >
+                <span className="font-bold uppercase tracking-[0.14em]">
+                  {chaosMode ? '↯ CHAOS MODE ON' : '↯ chaos mode'}
+                </span>
+                <span className="text-[10px] opacity-60">
+                  {chaosMode ? 'relaxed thresholds · wider pool · ±20 jitter' : 'off'}
+                </span>
+              </button>
             )}
 
             {/* Run scan button */}
