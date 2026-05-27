@@ -67,3 +67,31 @@ export type SessionSourceResult =
   | { sourceId: string; sourceName: string; status: 'preview';   candidate: FetchedCandidate }
   | { sourceId: string; sourceName: string; status: 'duplicate'; candidate: FetchedCandidate; duplicates: SignalDuplicate[] }
   | { sourceId: string; sourceName: string; status: 'error';     error: string };
+
+export interface RejectedPost {
+  title:           string;
+  url?:            string;
+  rejectReason:    string;
+  storyScore?:     number;
+  redditScore?:    number;
+  redditComments?: number;
+}
+
+export interface SourceDiagnostic {
+  sourceId:            string;
+  sourceName:          string;
+  sourceType:          string;
+  enabled:             boolean;
+  baseUrl:             string;
+  routeUsed:           string;
+  linksDiscovered:     number;
+  pagesFetched:        number;
+  candidatesPassed:    number;
+  candidatesRejected:  number;
+  rejectReasons:       string[];
+  rejectedCandidates?: RejectedPost[];
+  subreddit?:          string;
+  searchQuery?:        string;
+  endpointsAttempted?: string[];
+  errorMessage?:       string;
+}

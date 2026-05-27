@@ -37,7 +37,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
-import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink } from '@/lib/scanner-fetch-types';
+import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink, RejectedPost, SourceDiagnostic } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource } from '@/lib/supabase/types';
 import {
   searchWaybackSnapshots,
@@ -600,10 +600,11 @@ async function fetchRedditSourcePreview(
 
 async function fetchRedditMultipleCandidates(
   source: DbScannerSource,
-): Promise<{ candidates: FetchedCandidate[] } | { error: string }> {
+  includeRejected = false,
+): Promise<{ candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } } | { error: string; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } }> {
   const urlMatch = (source.base_url ?? '').match(/\/r\/([A-Za-z0-9_]+)/i);
   if (!urlMatch) {
-    return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName' };
+    return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName', rejected: [], debugInfo: { subreddit: '', endpointsAttempted: [], postsFound: 0, postsPassedQuality: 0, rejectReasons: ['invalid url'] } };
   }
   const subreddit = urlMatch[1];
 
@@ -612,6 +613,8 @@ async function fetchRedditMultipleCandidates(
     `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=25`,
     `https://www.reddit.com/r/${subreddit}/hot.json?limit=25`,
   ];
+
+  const debugEndpoints: string[] = [];
 
   type RPost = {
     data: {
@@ -626,6 +629,7 @@ async function fetchRedditMultipleCandidates(
   const allPosts: RPost[] = [];
 
   for (const endpoint of endpoints) {
+    debugEndpoints.push(endpoint.replace(/^https:\/\/[^/]+/, ''));
     try {
       const res = await fetch(endpoint, {
         cache:   'no-store',
@@ -648,8 +652,15 @@ async function fetchRedditMultipleCandidates(
   }
 
   if (!allPosts.length) {
-    return { error: `Reddit JSON fetch failed — r/${subreddit} may be private, quarantined, or removed` };
+    return {
+      error: `Reddit JSON fetch failed — r/${subreddit} may be private, quarantined, or removed`,
+      rejected: [],
+      debugInfo: { subreddit, endpointsAttempted: debugEndpoints, postsFound: 0, postsPassedQuality: 0, rejectReasons: ['fetch failed'] },
+    };
   }
+
+  const rejectedPosts: RejectedPost[] = [];
+  const rejectReasonCounts = new Map<string, number>();
 
   const filtered = allPosts.filter(({ data: p }) => {
     const q = scoreRedditQuality({
@@ -657,11 +668,40 @@ async function fetchRedditMultipleCandidates(
       url: p.url, score: p.score, num_comments: p.num_comments,
       stickied: p.stickied, author: p.author,
     });
+    if (!q.passes && q.rejectReason) {
+      rejectReasonCounts.set(q.rejectReason, (rejectReasonCounts.get(q.rejectReason) ?? 0) + 1);
+      if (includeRejected) {
+        rejectedPosts.push({
+          title:          p.title.slice(0, 120),
+          url:            `https://www.reddit.com${p.permalink}`,
+          rejectReason:   q.rejectReason,
+          redditScore:    p.score,
+          redditComments: p.num_comments,
+        });
+      }
+    }
     return q.passes;
   });
 
+  const topRejectReasons = [...rejectReasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([reason, count]) => `${reason} (×${count})`);
+
+  const baseDebugInfo = {
+    subreddit,
+    endpointsAttempted: debugEndpoints,
+    postsFound:         allPosts.length,
+    postsPassedQuality: filtered.length,
+    rejectReasons:      topRejectReasons,
+  };
+
   if (!filtered.length) {
-    return { error: `No story-quality posts in r/${subreddit} — posts lack longform text, engagement, or anomaly content. Use Discover Links to browse manually.` };
+    return {
+      error: `No story-quality posts in r/${subreddit} — ${allPosts.length} posts fetched, 0 passed quality gate. Top reject reasons: ${topRejectReasons.slice(0, 2).join('; ')}. Use Discover Links to browse manually.`,
+      rejected: rejectedPosts,
+      debugInfo: baseDebugInfo,
+    };
   }
 
   const scored = filtered.map(({ data: p }) => {
@@ -751,7 +791,7 @@ async function fetchRedditMultipleCandidates(
     }
   }
 
-  return { candidates };
+  return { candidates, rejected: rejectedPosts, debugInfo: { ...baseDebugInfo, postsPassedQuality: filtered.length } };
 }
 
 // ---------------------------------------------------------------------------
@@ -819,14 +859,16 @@ async function fetchMediaWikiSourcePreview(
 
 async function fetchMediaWikiMultipleCandidates(
   source: DbScannerSource,
-): Promise<{ candidates: FetchedCandidate[] } | { error: string }> {
+): Promise<{ candidates: FetchedCandidate[]; debugInfo: { searchQuery: string; searchResultCount: number; articlesFetched: number } } | { error: string; debugInfo: { searchQuery: string; searchResultCount: number; articlesFetched: number } }> {
   const baseUrl = (source.base_url ?? '').replace(/\/(api\.php|wiki\/?.*)$/, '');
   const query   = source.category_focus.slice(0, 2).join(' ') || 'lost found mystery recovered';
   const searchResult = await searchMediaWikiArticles(baseUrl, query, 10);
-  if ('error' in searchResult) return searchResult;
+  if ('error' in searchResult) return { ...searchResult, debugInfo: { searchQuery: query, searchResultCount: 0, articlesFetched: 0 } };
+
+  const wikiDebug = { searchQuery: query, searchResultCount: searchResult.results.length, articlesFetched: 0 };
 
   if (!searchResult.results.length) {
-    return { error: `No MediaWiki articles found for "${query}" on ${source.name}` };
+    return { error: `No MediaWiki articles found for "${query}" on ${source.name}`, debugInfo: wikiDebug };
   }
 
   const candidates: FetchedCandidate[] = [];
@@ -865,10 +907,10 @@ async function fetchMediaWikiMultipleCandidates(
   }
 
   if (!candidates.length) {
-    return { error: `Failed to fetch any articles from ${source.name}` };
+    return { error: `Failed to fetch any articles from ${source.name}`, debugInfo: wikiDebug };
   }
 
-  return { candidates };
+  return { candidates, debugInfo: { ...wikiDebug, articlesFetched: candidates.length } };
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1177,8 @@ export async function queueFetchedCandidateAction(input: {
 
 export async function runFetchSessionAction(
   sourceIds: string[],
-): Promise<{ results: SessionSourceResult[] } | { error: string }> {
+  options?: { includeRejected?: boolean },
+): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
   if (sourceIds.length > 20) return { error: 'max 20 sources per session' };
 
@@ -1154,6 +1197,7 @@ export async function runFetchSessionAction(
   const perSourceCount = new Map<string, number>();
 
   const results: SessionSourceResult[] = [];
+  const diagnostics: SourceDiagnostic[] = [];
 
   // Helper: check freshness before attempting checkSignalDuplicates.
   function isAlreadyArchived(url: string): boolean {
@@ -1172,14 +1216,17 @@ export async function runFetchSessionAction(
     const source = sourceMap.get(sourceId);
 
     if (!source) {
+      diagnostics.push({ sourceId, sourceName: sourceId, sourceType: 'unknown', enabled: false, baseUrl: '', routeUsed: 'error', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [], errorMessage: 'not found in registry' });
       results.push({ sourceId, sourceName: sourceId, status: 'error', error: 'not found in registry' });
       continue;
     }
     if (!source.enabled) {
+      diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: false, baseUrl: source.base_url ?? '', routeUsed: 'disabled', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: ['source disabled'] });
       results.push({ sourceId, sourceName: source.name, status: 'error', error: 'source is not enabled' });
       continue;
     }
     if (!source.base_url) {
+      diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: '', routeUsed: 'error', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: ['no base URL'] });
       results.push({ sourceId, sourceName: source.name, status: 'error', error: 'no base URL configured' });
       continue;
     }
@@ -1188,27 +1235,35 @@ export async function runFetchSessionAction(
     if (isErowidSource(source)) {
       const erowidDisc = await discoverErowidExperienceLinks(source);
       if ('error' in erowidDisc) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'erowid-discovery', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [], errorMessage: erowidDisc.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: erowidDisc.error });
         continue;
       }
       let erowidFetched = 0;
+      let erowidPassed  = 0;
+      let erowidRejected = 0;
+      const erowidRejectReasons: string[] = [];
       for (const link of erowidDisc.links.slice(0, 8)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
-        if ('error' in fr) continue;
+        erowidFetched++;
+        if ('error' in fr) { erowidRejected++; erowidRejectReasons.push(fr.error.slice(0, 80)); continue; }
         const url = fr.candidate.sourceUrl;
         if (isAlreadyArchived(url)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });
+          erowidRejected++;
         } else {
           const dupes = await checkSignalDuplicates(url, fr.candidate.title);
           if (dupes.length > 0) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            erowidPassed++;
           } else {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+            erowidPassed++;
           }
         }
-        erowidFetched++;
       }
+      diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'erowid-discovery', linksDiscovered: erowidDisc.links.length, pagesFetched: erowidFetched, candidatesPassed: erowidPassed, candidatesRejected: erowidRejected, rejectReasons: erowidRejectReasons });
       if (erowidFetched === 0) {
         results.push({ sourceId, sourceName: source.name, status: 'error', error: 'No fetchable Erowid experience reports found — try a substance category URL (e.g. erowid.org/experiences/subs/exp_DMT.shtml).' });
       }
@@ -1224,27 +1279,35 @@ export async function runFetchSessionAction(
       }
       const waybackDisc = await discoverWaybackLinks(source);
       if ('error' in waybackDisc) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'wayback-cdx', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [], errorMessage: waybackDisc.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: waybackDisc.error });
         continue;
       }
       let waybackFetched = 0;
+      let waybackPassed  = 0;
+      let waybackRejected = 0;
+      const waybackRejectReasons: string[] = [];
       for (const link of waybackDisc.links.slice(0, 8)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchWaybackPagePreview(source, link.url);
-        if ('error' in fr) continue;
+        waybackFetched++;
+        if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
         const url = fr.candidate.sourceUrl;
         if (isAlreadyArchived(url)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });
+          waybackRejected++;
         } else {
           const dupes = await checkSignalDuplicates(url, fr.candidate.title);
           if (dupes.length > 0) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: fr.candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            waybackPassed++;
           } else {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: fr.candidate });
+            waybackPassed++;
           }
         }
-        waybackFetched++;
       }
+      diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'wayback-cdx', linksDiscovered: waybackDisc.links.length, pagesFetched: waybackFetched, candidatesPassed: waybackPassed, candidatesRejected: waybackRejected, rejectReasons: waybackRejectReasons });
       if (waybackFetched === 0) {
         results.push({ sourceId, sourceName: source.name, status: 'error', error: 'No usable Wayback snapshots found for this source URL — check the CDX API or configure a more specific domain.' });
       }
@@ -1253,33 +1316,46 @@ export async function runFetchSessionAction(
 
     // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
-      const multiResult = await fetchRedditMultipleCandidates(source);
+      const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected);
+      const di = 'debugInfo' in multiResult ? multiResult.debugInfo : { subreddit: '', endpointsAttempted: [] as string[], postsFound: 0, postsPassedQuality: 0, rejectReasons: [] as string[] };
       if ('error' in multiResult) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
+        let redditPassed = 0;
+        let redditRejected = 0;
+        const redditRejectReasons: string[] = [];
         for (const candidate of multiResult.candidates) {
           if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
           const url = candidate.sourceUrl;
           if (isAlreadyArchived(url)) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive — already queued or published' } });
+            redditRejected++;
+            redditRejectReasons.push('already archived');
             continue;
           }
           const dupes = await checkSignalDuplicates(url, candidate.title);
           if (dupes.length > 0) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            redditPassed++;
           } else {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
+            redditPassed++;
           }
         }
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: redditPassed, candidatesRejected: (di.postsFound - di.postsPassedQuality) + redditRejected, rejectReasons: [...di.rejectReasons, ...redditRejectReasons], subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, rejectedCandidates: multiResult.rejected });
       }
       continue;
     }
 
     if (source.source_type === 'mediawiki' || isMediaWikiHost(source.base_url)) {
       const multiResult = await fetchMediaWikiMultipleCandidates(source);
+      const wdi = 'debugInfo' in multiResult ? multiResult.debugInfo : { searchQuery: '', searchResultCount: 0, articlesFetched: 0 };
       if ('error' in multiResult) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'mediawiki-api', linksDiscovered: wdi.searchResultCount, pagesFetched: wdi.articlesFetched, candidatesPassed: 0, candidatesRejected: wdi.articlesFetched, rejectReasons: [multiResult.error.slice(0, 100)], searchQuery: wdi.searchQuery, errorMessage: multiResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
+        let wikiPassed = 0;
         for (const candidate of multiResult.candidates) {
           if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
           const url = candidate.sourceUrl;
@@ -1290,10 +1366,13 @@ export async function runFetchSessionAction(
           const dupes = await checkSignalDuplicates(url, candidate.title);
           if (dupes.length > 0) {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            wikiPassed++;
           } else {
             trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
+            wikiPassed++;
           }
         }
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'mediawiki-api', linksDiscovered: wdi.searchResultCount, pagesFetched: wdi.articlesFetched, candidatesPassed: wikiPassed, candidatesRejected: wdi.articlesFetched - wikiPassed, rejectReasons: [], searchQuery: wdi.searchQuery });
       }
       continue;
     }
@@ -1457,7 +1536,7 @@ export async function runFetchSessionAction(
     }
   }
 
-  return { results };
+  return { results, diagnostics };
 }
 
 // ---------------------------------------------------------------------------

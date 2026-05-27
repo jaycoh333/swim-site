@@ -15,7 +15,7 @@ import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
 import { detectClusters, type ClusterResult } from '@/lib/cluster-detection';
 import type { DbScannerSource, DbRecoveredSignal } from '@/lib/supabase/types';
-import type { SessionSourceResult, FetchedCandidate } from '@/lib/scanner-fetch-types';
+import type { SessionSourceResult, FetchedCandidate, SourceDiagnostic } from '@/lib/scanner-fetch-types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -226,6 +226,9 @@ export function ScannerConsoleClient({
   // Source health + cluster analysis (computed after each scan)
   const [healthMap,      setHealthMap]      = useState<Map<string, SourceHealth>>(new Map());
   const [clusterList,    setClusterList]    = useState<ClusterResult[]>([]);
+  const [diagnostics,      setDiagnostics]      = useState<SourceDiagnostic[]>([]);
+  const [showDiagnostics,  setShowDiagnostics]  = useState(false);
+  const [showRejected,     setShowRejected]     = useState(false);
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
@@ -281,13 +284,14 @@ export function ScannerConsoleClient({
     setScanResults([]);
     setCandStates(new Map());
     setLowQualityOpen(false);
-    const res = await runFetchSessionAction(activeScanSources.map((s) => s.id));
+    const res = await runFetchSessionAction(activeScanSources.map((s) => s.id), { includeRejected: showRejected });
     if ('error' in res) {
       setScanError(res.error);
       setScanPhase('idle');
       return;
     }
     setScanResults(res.results);
+    setDiagnostics(res.diagnostics ?? []);
     setScanPhase('done');
     // Health + cluster analysis
     setHealthMap(computeSourceHealthMap(res.results));
@@ -735,6 +739,57 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
+                  {/* ── Needs Review — low score but valid story posts ── */}
+                  {(() => {
+                    const needsReview = lowQualResults.filter((r) => r.status !== 'error' && !r.candidate.isIndexPage && !r.candidate.badCandidateReason);
+                    if (!needsReview.length) return null;
+                    return (
+                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04]">
+                        <button
+                          className="flex w-full items-center justify-between px-4 py-3 text-left"
+                          onClick={() => setLowQualityOpen((v) => !v)}
+                        >
+                          <span className="text-[12px] font-semibold uppercase tracking-widest text-amber-500/70">
+                            Needs Review · {needsReview.length} low-signal
+                          </span>
+                          <span className="text-[11px] text-amber-500/50">{lowQualityOpen ? '▲' : '▼'} Low confidence — curator review required</span>
+                        </button>
+                        {lowQualityOpen && (
+                          <div className="flex flex-col gap-2 border-t border-amber-500/12 px-4 pb-4 pt-3">
+                            {needsReview.map((result) => {
+                              if (result.status === 'error') return null;
+                              const st = candStates.get(result.candidate.sourceUrl) ?? { action: 'idle' as CandidateAction };
+                              return (
+                                <div key={result.candidate.sourceUrl} className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+                                  <div className="mb-1 flex items-start justify-between gap-2">
+                                    <p className="text-[14px] font-semibold leading-snug text-slate-300">{result.candidate.title}</p>
+                                    {result.candidate.storyScore != null && (
+                                      <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-400">{result.candidate.storyScore}pts</span>
+                                    )}
+                                  </div>
+                                  <p className="mb-2 text-[11px] text-slate-600">{result.sourceName} · {result.candidate.sourceType}</p>
+                                  <p className="mb-3 text-[12px] leading-relaxed text-slate-500 line-clamp-2">{result.candidate.summary}</p>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      disabled={st.action === 'queueing' || st.action === 'queued'}
+                                      onClick={() => handleQueueCandidate(result)}
+                                      className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-400 disabled:opacity-40 hover:border-amber-500/50"
+                                    >
+                                      {st.action === 'queueing' ? 'Queueing…' : st.action === 'queued' ? '✓ Queued' : '⚠ Queue (low confidence)'}
+                                    </button>
+                                    <a href={result.candidate.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-600 hover:text-slate-400">
+                                      source ↗
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* ── Good candidates ── */}
                   {goodResults.length === 0 ? (
                     <div className="rounded-xl border border-white/8 bg-white/[0.015] px-5 py-8 text-center">
@@ -1033,6 +1088,86 @@ export function ScannerConsoleClient({
                               );
                             }
                           })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Scan Diagnostics ── */}
+                  {diagnostics.length > 0 && (
+                    <div className="rounded-xl border border-white/6 bg-white/[0.018]">
+                      <button
+                        className="flex w-full items-center justify-between px-4 py-3 text-left"
+                        onClick={() => setShowDiagnostics((v) => !v)}
+                      >
+                        <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-600">
+                          Scan Diagnostics · {diagnostics.length} sources
+                        </span>
+                        <span className="text-[10px] text-slate-700">{showDiagnostics ? '▲ hide' : '▼ show'}</span>
+                      </button>
+                      {showDiagnostics && (
+                        <div className="border-t border-white/6 px-4 pb-4 pt-3">
+                          <div className="mb-3 flex items-center gap-3">
+                            <label className="flex cursor-pointer items-center gap-2 text-[11px] text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={showRejected}
+                                onChange={(e) => setShowRejected(e.target.checked)}
+                                className="h-3 w-3 accent-amber-400"
+                              />
+                              Show rejected posts (re-scan to apply)
+                            </label>
+                          </div>
+                          <div className="flex flex-col gap-3">
+                            {diagnostics.map((d) => (
+                              <div key={d.sourceId} className="rounded-lg border border-white/6 bg-white/[0.02] p-3">
+                                <div className="mb-2 flex flex-wrap items-center gap-2">
+                                  <span className="text-[12px] font-semibold text-slate-400">{d.sourceName}</span>
+                                  <span className="rounded border border-white/8 px-1.5 py-0.5 text-[10px] font-mono text-slate-600">{d.routeUsed}</span>
+                                  {d.subreddit && <span className="text-[10px] text-slate-600">r/{d.subreddit}</span>}
+                                  {d.searchQuery && <span className="text-[10px] text-slate-600">q: &quot;{d.searchQuery}&quot;</span>}
+                                  {d.errorMessage && <span className="rounded border border-red-500/20 bg-red-500/8 px-1.5 py-0.5 text-[10px] text-red-400">error</span>}
+                                </div>
+                                <div className="mb-1.5 grid grid-cols-4 gap-1 text-center">
+                                  {[
+                                    { label: 'discovered', val: d.linksDiscovered },
+                                    { label: 'fetched',    val: d.pagesFetched },
+                                    { label: 'passed',     val: d.candidatesPassed,  green: true },
+                                    { label: 'rejected',   val: d.candidatesRejected, red: d.candidatesRejected > 0 },
+                                  ].map(({ label, val, green, red }) => (
+                                    <div key={label} className="rounded border border-white/5 bg-white/[0.015] px-1 py-1.5">
+                                      <div className={`font-mono text-[16px] font-bold ${green ? 'text-emerald-400' : red ? 'text-red-400' : 'text-slate-500'}`}>{val}</div>
+                                      <div className="mt-0.5 text-[9px] uppercase tracking-wide text-slate-700">{label}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                {d.errorMessage && (
+                                  <p className="mb-1 rounded bg-red-500/5 px-2 py-1 text-[11px] leading-relaxed text-red-400/80">{d.errorMessage}</p>
+                                )}
+                                {d.rejectReasons.length > 0 && (
+                                  <p className="text-[10px] text-slate-700">
+                                    Reject reasons: {d.rejectReasons.slice(0, 4).join(' · ')}
+                                  </p>
+                                )}
+                                {d.rejectedCandidates && d.rejectedCandidates.length > 0 && (
+                                  <details className="mt-2">
+                                    <summary className="cursor-pointer text-[10px] text-slate-700 hover:text-slate-500">
+                                      {d.rejectedCandidates.length} rejected posts
+                                    </summary>
+                                    <div className="mt-1.5 flex flex-col gap-1.5 pl-2">
+                                      {d.rejectedCandidates.slice(0, 8).map((rp, i) => (
+                                        <div key={i} className="text-[10px]">
+                                          <span className="text-slate-500">{rp.title}</span>
+                                          <span className="ml-1.5 text-slate-700">— {rp.rejectReason}</span>
+                                          {rp.redditScore != null && <span className="ml-1 text-slate-700">{rp.redditScore}↑</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
