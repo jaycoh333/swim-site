@@ -37,7 +37,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
-import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink, RejectedPost, SourceDiagnostic } from '@/lib/scanner-fetch-types';
+import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink, RejectedPost, SourceDiagnostic, EndpointResult } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource } from '@/lib/supabase/types';
 import {
   searchWaybackSnapshots,
@@ -52,6 +52,7 @@ import {
 } from '@/lib/story-intelligence';
 import { computeFinalPriorityScore } from '@/lib/discovery-engine';
 import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
+import { recordSourceResult } from '@/lib/source-health';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -599,26 +600,40 @@ async function fetchRedditSourcePreview(
 // Reddit multi-candidate — /new + /top?t=week + /hot, top 10 quality posts
 // ---------------------------------------------------------------------------
 
+type RedditMultiDebugInfo = {
+  subreddit: string;
+  endpointsAttempted: string[];
+  endpointResults: EndpointResult[];
+  postsFound: number;
+  postsPassedQuality: number;
+  rejectReasons: string[];
+};
+
 async function fetchRedditMultipleCandidates(
   source: DbScannerSource,
   includeRejected = false,
-): Promise<{ candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } } | { error: string; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } }> {
+): Promise<
+  | { candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
+  | { error: string;                  rejected: RejectedPost[]; debugInfo: RedditMultiDebugInfo }
+> {
   // Normalize: handle https://reddit.com/r/Sub/, r/Sub, /r/Sub
   const rawUrl   = source.base_url ?? '';
   const urlMatch = rawUrl.match(/(?:^|\/|\b)r\/([A-Za-z0-9_]+)/i);
+  const emptyDebug: RedditMultiDebugInfo = { subreddit: '', endpointsAttempted: [], endpointResults: [], postsFound: 0, postsPassedQuality: 0, rejectReasons: ['invalid url'] };
   if (!urlMatch) {
-    return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName', rejected: [], debugInfo: { subreddit: '', endpointsAttempted: [], postsFound: 0, postsPassedQuality: 0, rejectReasons: ['invalid url'] } };
+    return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName', rejected: [], debugInfo: emptyDebug };
   }
   const subreddit = urlMatch[1];
 
   const endpoints = [
-    `https://www.reddit.com/r/${subreddit}/new.json?limit=50`,
-    `https://www.reddit.com/r/${subreddit}/hot.json?limit=50`,
-    `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=50`,
-    `https://old.reddit.com/r/${subreddit}/new.json?limit=50`,
+    `https://www.reddit.com/r/${subreddit}/new.json?limit=100`,
+    `https://www.reddit.com/r/${subreddit}/hot.json?limit=100`,
+    `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=100`,
+    `https://old.reddit.com/r/${subreddit}/new.json?limit=100`,
   ];
 
   const debugEndpoints: string[] = [];
+  const endpointResults: EndpointResult[] = [];
 
   type RPost = {
     data: {
@@ -633,9 +648,13 @@ async function fetchRedditMultipleCandidates(
   const allPosts: RPost[] = [];
 
   for (const endpoint of endpoints) {
-    debugEndpoints.push(endpoint.replace(/^https:\/\/[^/]+/, ''));
+    if (allPosts.length >= 120) break; // TASK 3: cap raw collection at 120
+    const shortPath = endpoint.replace(/^https:\/\/[^/]+/, '');
+    debugEndpoints.push(shortPath);
+    const t0 = Date.now();
+    const epResult: EndpointResult = { endpoint: shortPath, status: 0, childCount: 0, ok: false };
     try {
-      const res = await fetch(endpoint, {
+      let res = await fetch(endpoint, {
         cache:   'no-store',
         headers: {
           'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
@@ -643,35 +662,102 @@ async function fetchRedditMultipleCandidates(
         },
         signal: AbortSignal.timeout(12_000),
       });
-      if (!res.ok) continue;
+      epResult.status = res.status;
+
+      // Retry on rate-limit / forbidden with alternate UA
+      if (res.status === 403 || res.status === 429) {
+        try {
+          const retry = await fetch(endpoint, {
+            cache:   'no-store',
+            headers: { 'User-Agent': 'SWIMArchiveBot/1.0', 'Accept': 'application/json' },
+            signal:  AbortSignal.timeout(10_000),
+          });
+          if (retry.ok) { res = retry; epResult.status = retry.status; }
+        } catch { /* keep original response */ }
+      }
+
+      if (!res.ok) { epResult.error = `HTTP ${res.status}`; endpointResults.push(epResult); continue; }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const posts: RPost[] = ((await res.json()) as any)?.data?.children ?? [];
+      epResult.childCount = posts.length;
+      epResult.ok         = true;
+      epResult.timing     = Date.now() - t0;
+      endpointResults.push(epResult);
+
       for (const post of posts) {
         if (!seen.has(post.data.permalink)) {
           seen.add(post.data.permalink);
           allPosts.push(post);
         }
       }
-    } catch { continue; }
+    } catch (err) {
+      epResult.error = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
+      endpointResults.push(epResult);
+      continue;
+    }
+  }
+
+  // RSS fallback — titles only, last resort if all JSON endpoints failed
+  if (allPosts.length === 0) {
+    try {
+      const rssUrl = `https://www.reddit.com/r/${subreddit}/new.rss?limit=100`;
+      const rssRes = await fetch(rssUrl, {
+        cache:   'no-store',
+        headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0', 'Accept': 'application/rss+xml,application/atom+xml,text/xml' },
+        signal:  AbortSignal.timeout(10_000),
+      });
+      if (rssRes.ok) {
+        const xml = await rssRes.text();
+        const entries = xml.match(/<entry>([\s\S]*?)<\/entry>/g) ?? [];
+        for (const entry of entries) {
+          const titleM = entry.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/);
+          const linkM  = entry.match(/<link[^>]*href="([^"]+)"/);
+          const authorM = entry.match(/<name>([\s\S]*?)<\/name>/);
+          if (titleM?.[1] && linkM?.[1]) {
+            const title = titleM[1].trim().replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"');
+            const link  = linkM[1];
+            const perm  = link.replace('https://www.reddit.com', '').replace('https://old.reddit.com', '');
+            if (!seen.has(perm)) {
+              seen.add(perm);
+              allPosts.push({
+                data: {
+                  title, permalink: perm, selftext: '', score: 0, num_comments: 0,
+                  subreddit, author: authorM?.[1]?.trim() ?? 'unknown',
+                  created_utc: 0, stickied: false, is_self: true, url: link,
+                }
+              });
+            }
+          }
+        }
+        endpointResults.push({ endpoint: '/new.rss', status: rssRes.status, childCount: allPosts.length, ok: allPosts.length > 0 });
+      }
+    } catch { /* RSS also failed — handled below */ }
   }
 
   if (!allPosts.length) {
     return {
       error: `Reddit JSON fetch failed — r/${subreddit} may be private, quarantined, or removed`,
       rejected: [],
-      debugInfo: { subreddit, endpointsAttempted: debugEndpoints, postsFound: 0, postsPassedQuality: 0, rejectReasons: ['fetch failed'] },
+      debugInfo: { subreddit, endpointsAttempted: debugEndpoints, endpointResults, postsFound: 0, postsPassedQuality: 0, rejectReasons: ['fetch failed'] },
     };
   }
+
+  // Cap collection at 120 raw posts
+  const postsToScore = allPosts.slice(0, 120);
 
   const rejectedPosts: RejectedPost[] = [];
   const rejectReasonCounts = new Map<string, number>();
 
-  const filtered = allPosts.filter(({ data: p }) => {
+  const qualityMap = new Map<string, ReturnType<typeof scoreRedditQuality>>();
+
+  const filtered = postsToScore.filter(({ data: p }) => {
     const q = scoreRedditQuality({
       title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
       url: p.url, score: p.score, num_comments: p.num_comments,
       stickied: p.stickied, author: p.author,
     });
+    qualityMap.set(p.permalink, q);
     if (!q.passes && q.rejectReason) {
       rejectReasonCounts.set(q.rejectReason, (rejectReasonCounts.get(q.rejectReason) ?? 0) + 1);
       if (includeRejected) {
@@ -692,17 +778,18 @@ async function fetchRedditMultipleCandidates(
     .slice(0, 5)
     .map(([reason, count]) => `${reason} (×${count})`);
 
-  const baseDebugInfo = {
+  const baseDebugInfo: RedditMultiDebugInfo = {
     subreddit,
     endpointsAttempted: debugEndpoints,
-    postsFound:         allPosts.length,
+    endpointResults,
+    postsFound:         postsToScore.length,
     postsPassedQuality: filtered.length,
     rejectReasons:      topRejectReasons,
   };
 
   if (!filtered.length) {
     return {
-      error: `No story-quality posts in r/${subreddit} — ${allPosts.length} posts fetched, 0 passed quality gate. Top reject reasons: ${topRejectReasons.slice(0, 2).join('; ')}. Use Discover Links to browse manually.`,
+      error: `No story-quality posts in r/${subreddit} — ${postsToScore.length} posts fetched, 0 passed quality gate. Top reject reasons: ${topRejectReasons.slice(0, 2).join('; ')}. Use Discover Links to browse manually.`,
       rejected: rejectedPosts,
       debugInfo: baseDebugInfo,
     };
@@ -722,7 +809,7 @@ async function fetchRedditMultipleCandidates(
   scored.sort((a, b) => b.totalScore - a.totalScore);
 
   const rawCandidates: FetchedCandidate[] = scored.slice(0, 10).map(({ p, narrative, heuristics, totalScore }) => {
-    const qualityResult = scoreRedditQuality({
+    const qualityResult = qualityMap.get(p.permalink) ?? scoreRedditQuality({
       title: p.title, selftext: p.selftext ?? '', is_self: p.is_self,
       url: p.url, score: p.score, num_comments: p.num_comments,
       stickied: p.stickied, author: p.author,
@@ -751,6 +838,7 @@ async function fetchRedditMultipleCandidates(
       sourceType:           'reddit',
       isArchived:           false,
       passReason:           qualityResult.passReason || `${p.score}↑`,
+      qualityTier:          qualityResult.qualityTier,
       badCandidateReason:   bad.bad ? bad.reason : undefined,
       sourceImageUrl:       imageUrl,
       mediaType:            imageUrl ? 'image' : 'webpage',
@@ -881,12 +969,12 @@ async function fetchMediaWikiMultipleCandidates(
   let lastError = '';
 
   for (const q of queries) {
-    const sr = await searchMediaWikiArticles(baseUrl, q, 10);
+    const sr = await searchMediaWikiArticles(baseUrl, q, 15);
     if ('error' in sr) { lastError = sr.error; continue; }
     for (const r of sr.results) {
       if (!seenTitles.has(r.title)) { seenTitles.add(r.title); allSearchResults.push(r); }
     }
-    if (allSearchResults.length >= 12) break;
+    if (allSearchResults.length >= 20) break;
   }
 
   const primaryQuery = queries[0];
@@ -897,7 +985,7 @@ async function fetchMediaWikiMultipleCandidates(
   }
 
   const candidates: FetchedCandidate[] = [];
-  for (const searchItem of allSearchResults.slice(0, 12)) {
+  for (const searchItem of allSearchResults.slice(0, 20)) {
     const articleResult = await fetchMediaWikiArticle(baseUrl, searchItem.title);
     if ('error' in articleResult) continue;
 
@@ -1285,7 +1373,7 @@ export async function runFetchSessionAction(
       let erowidPassed  = 0;
       let erowidRejected = 0;
       const erowidRejectReasons: string[] = [];
-      for (const link of erowidDisc.links.slice(0, 8)) {
+      for (const link of erowidDisc.links.slice(0, 20)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
         if ('error' in fr) { erowidRejected++; erowidRejectReasons.push(fr.error.slice(0, 80)); continue; }
@@ -1329,7 +1417,7 @@ export async function runFetchSessionAction(
       let waybackPassed  = 0;
       let waybackRejected = 0;
       const waybackRejectReasons: string[] = [];
-      for (const link of waybackDisc.links.slice(0, 8)) {
+      for (const link of waybackDisc.links.slice(0, 25)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchWaybackPagePreview(source, link.url);
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
@@ -1359,9 +1447,9 @@ export async function runFetchSessionAction(
     // Route to multi-candidate API connectors — avoids HTML fetches that get blocked or return garbage
     if (source.source_type === 'reddit' || REDDIT_HOST.test(new URL(source.base_url).hostname)) {
       const multiResult = await fetchRedditMultipleCandidates(source, options?.includeRejected);
-      const di = 'debugInfo' in multiResult ? multiResult.debugInfo : { subreddit: '', endpointsAttempted: [] as string[], postsFound: 0, postsPassedQuality: 0, rejectReasons: [] as string[] };
+      const di = multiResult.debugInfo;
       if ('error' in multiResult) {
-        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: 0, candidatesRejected: di.postsFound - di.postsPassedQuality, rejectReasons: di.rejectReasons, subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, endpointResults: di.endpointResults, rejectedCandidates: multiResult.rejected, errorMessage: multiResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: multiResult.error });
       } else {
         let redditPassed = 0;
@@ -1385,7 +1473,7 @@ export async function runFetchSessionAction(
             redditPassed++;
           }
         }
-        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: redditPassed, candidatesRejected: (di.postsFound - di.postsPassedQuality) + redditRejected, rejectReasons: [...di.rejectReasons, ...redditRejectReasons], subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, rejectedCandidates: multiResult.rejected });
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'reddit-json', linksDiscovered: di.postsFound, pagesFetched: di.postsFound, candidatesPassed: redditPassed, candidatesRejected: (di.postsFound - di.postsPassedQuality) + redditRejected, rejectReasons: [...di.rejectReasons, ...redditRejectReasons], subreddit: di.subreddit, endpointsAttempted: di.endpointsAttempted, endpointResults: di.endpointResults, rejectedCandidates: multiResult.rejected });
       }
       continue;
     }
@@ -1459,8 +1547,9 @@ export async function runFetchSessionAction(
     const seenLinks    = new Set<string>([source.base_url, source.base_url + '/']);
     const storyLinks: string[] = [];
 
+    let htmlFetchCount = 0;
     for (const { href, text } of pageAnchors) {
-      if (storyLinks.length >= 8) break;
+      if (storyLinks.length >= 30) break;
       if (seenLinks.has(href)) continue;
       seenLinks.add(href);
       if (SKIP_EXTENSIONS.test(href)) continue;
@@ -1513,8 +1602,9 @@ export async function runFetchSessionAction(
         }
       }
     } else {
-      // Fetch each story-quality link individually and build candidates
+      // Fetch each story-quality link individually and build candidates (max 15 fetches)
       for (const linkUrl of storyLinks) {
+        if (htmlFetchCount >= 15) break;
         let linkHtml: string;
         try {
           const res = await fetch(linkUrl, {
@@ -1529,6 +1619,7 @@ export async function runFetchSessionAction(
           const ct = res.headers.get('content-type') ?? '';
           if (!ct.includes('text/html') && !ct.includes('xhtml')) continue;
           linkHtml = await res.text();
+          htmlFetchCount++;
         } catch { continue; }
 
         const extracted  = extractPageData(linkHtml, linkUrl);
@@ -1576,6 +1667,14 @@ export async function runFetchSessionAction(
         }
       }
     }
+  }
+
+  // Record health outcomes for each scanned source (fire-and-forget; errors ignored)
+  for (const diag of diagnostics) {
+    if (diag.sourceId === '__debug_test__') continue;
+    const success = diag.candidatesPassed > 0;
+    try { recordSourceResult(diag.sourceId, diag.sourceName, success, diag.candidatesPassed); }
+    catch { /* never block the return */ }
   }
 
   return { results, diagnostics };
@@ -1820,7 +1919,7 @@ function candidatePassesQuality(url: string, title: string, summary: string): { 
 async function discoverWaybackLinks(
   source: DbScannerSource,
 ): Promise<{ links: DiscoveredLink[] } | { error: string }> {
-  const result = await searchWaybackSnapshots(source.base_url!, DISCOVERY_MAX_LINKS);
+  const result = await searchWaybackSnapshots(source.base_url!, 25);
   if ('error' in result) return result;
 
   const links: DiscoveredLink[] = result.snapshots.map((snap) => ({

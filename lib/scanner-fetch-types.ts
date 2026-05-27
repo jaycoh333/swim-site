@@ -21,6 +21,7 @@ export interface FetchedCandidate {
   isArchived?:          boolean; // true when the URL is a Wayback Machine archive link
   archivedAt?:          string;  // ISO date string when the snapshot was captured
   passReason?:          string;  // why the candidate passed quality filters
+  qualityTier?:         'strong' | 'soft-pass'; // 'strong' = passed full gate; 'soft-pass' = low-confidence but includeable
   badCandidateReason?:  string;  // set when extraction looks like nav/index junk — blocks queueing
   // Evidence context (URLs only — no binary stored)
   sourceImageUrl?:      string;  // og:image or twitter:image — absolute URL
@@ -77,6 +78,15 @@ export interface RejectedPost {
   redditComments?: number;
 }
 
+export interface EndpointResult {
+  endpoint:   string;
+  status:     number;
+  childCount: number;
+  ok:         boolean;
+  error?:     string;
+  timing?:    number; // ms
+}
+
 export interface SourceDiagnostic {
   sourceId:            string;
   sourceName:          string;
@@ -93,5 +103,6 @@ export interface SourceDiagnostic {
   subreddit?:          string;
   searchQuery?:        string;
   endpointsAttempted?: string[];
+  endpointResults?:    EndpointResult[];
   errorMessage?:       string;
 }

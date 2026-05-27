@@ -17,6 +17,21 @@ export const ANOMALY_PHRASES: string[] = [
   'happened to me', 'never told anyone', 'witnessed', 'saw something', 'heard something',
   'to this day', 'still unexplained', 'recovered', 'deleted',
   'true story', 'it really happened', 'no one believed', 'lost memory',
+  // expanded anomaly terms
+  'missing time', 'signal', 'archive', 'entity', 'coordinates', 'unexplained', 'recurring',
+];
+
+// Expanded eyewitness phrases for soft-pass detection
+export const EYEWITNESS_EXPANDED: string[] = [
+  'i saw', 'i experienced', 'my friend', 'we found', 'happened to me',
+  'i was there', 'i noticed', 'i witnessed', 'we saw', 'i heard',
+];
+
+// Internet mystery terms — old web, archives, forgotten sites
+export const INTERNET_MYSTERY: string[] = [
+  'deleted', 'mirror', 'wayback', 'guestbook', 'old web', 'bbs', 'forum',
+  'dead link', 'archived page', 'geocities', 'angelfire', 'tripod',
+  'lost page', 'removed', '404', 'cached',
 ];
 
 // ---------------------------------------------------------------------------
@@ -50,16 +65,23 @@ export interface RedditQualityResult {
   criteriaCount: number;
   passReason:    string;
   rejectReason?: string;
+  qualityTier?:  'strong' | 'soft-pass';
 }
+
+const SPAM_DOMAINS = /\b(onlyfans|camsite|escort|promo|referral|discount code)\b/i;
 
 /**
  * Score a Reddit post for story quality.
- * Requires 2+ of: longform text, engagement score, comment count, anomaly phrase.
+ *
+ * STRONG pass: 2+ of [longform>300, score>20, comments>10, anomaly phrase]
+ * SOFT pass:   2+ of [title>40, comments>5, body>120, anomaly phrase, eyewitness phrase, score>8]
+ * Hard reject: deleted/removed, meme/image-only, title<18 chars, spam, stickied
  */
 export function scoreRedditQuality(p: RedditQualityInput): RedditQualityResult {
   const titleLc = p.title.toLowerCase();
   const textLc  = (p.selftext ?? '').toLowerCase();
 
+  // ── Hard rejects ─────────────────────────────────────────────────────────
   if (p.stickied) {
     return { passes: false, criteriaCount: 0, passReason: '', rejectReason: 'stickied post' };
   }
@@ -72,31 +94,58 @@ export function scoreRedditQuality(p: RedditQualityInput): RedditQualityResult {
   if (GENERIC_PROMPTS.some((prompt) => titleLc.includes(prompt))) {
     return { passes: false, criteriaCount: 0, passReason: '', rejectReason: 'generic discussion prompt' };
   }
-  if (p.is_self && p.selftext.trim().length < 50) {
+  if (p.title.trim().length < 18) {
+    return { passes: false, criteriaCount: 0, passReason: '', rejectReason: 'title too short' };
+  }
+  if (SPAM_DOMAINS.test(p.title) || SPAM_DOMAINS.test(p.selftext ?? '')) {
+    return { passes: false, criteriaCount: 0, passReason: '', rejectReason: 'spam content' };
+  }
+  // Allow title-only posts (is_self=false links) through; only reject truly empty self posts
+  if (p.is_self && p.selftext.trim().length < 30 && p.title.trim().length < 40) {
     return { passes: false, criteriaCount: 0, passReason: '', rejectReason: 'no text content' };
   }
 
-  const met: string[] = [];
-  if (p.selftext.trim().length > 300) met.push('longform');
-  if (p.score > 20)                   met.push(`${p.score}↑`);
-  if (p.num_comments > 10)            met.push(`${p.num_comments} comments`);
-
   const combined = `${titleLc} ${textLc}`;
-  if (ANOMALY_PHRASES.some((ph) => combined.includes(ph))) met.push('anomaly phrase');
 
-  const count = met.length;
-  if (count < 2) {
+  // ── Strong pass: original 4-criteria gate ────────────────────────────────
+  const strong: string[] = [];
+  if (p.selftext.trim().length > 300) strong.push('longform');
+  if (p.score > 20)                   strong.push(`${p.score}↑`);
+  if (p.num_comments > 10)            strong.push(`${p.num_comments} comments`);
+  if (ANOMALY_PHRASES.some((ph) => combined.includes(ph))) strong.push('anomaly phrase');
+
+  if (strong.length >= 2) {
     return {
-      passes:        false,
-      criteriaCount: count,
-      passReason:    '',
-      rejectReason:  count === 0
-        ? 'no story criteria met'
-        : `only 1/2 criteria met (need longform, score>20, comments>10, or anomaly phrase)`,
+      passes: true, criteriaCount: strong.length,
+      passReason: strong.slice(0, 3).join(' · '), qualityTier: 'strong',
     };
   }
 
-  return { passes: true, criteriaCount: count, passReason: met.slice(0, 3).join(' · ') };
+  // ── Soft pass: relaxed 7-criteria gate ───────────────────────────────────
+  const soft: string[] = [];
+  if (p.title.trim().length > 40)          soft.push('descriptive title');
+  if (p.num_comments > 5)                  soft.push(`${p.num_comments} comments`);
+  if ((p.selftext ?? '').trim().length > 120) soft.push('body text');
+  if (ANOMALY_PHRASES.some((ph) => combined.includes(ph))) soft.push('anomaly phrase');
+  if (EYEWITNESS_EXPANDED.some((ph) => combined.includes(ph))) soft.push('eyewitness language');
+  if (p.score > 8)                         soft.push(`${p.score}↑`);
+
+  if (soft.length >= 2) {
+    return {
+      passes: true, criteriaCount: soft.length,
+      passReason: soft.slice(0, 3).join(' · '), qualityTier: 'soft-pass',
+    };
+  }
+
+  const total = Math.max(strong.length, soft.length);
+  return {
+    passes:        false,
+    criteriaCount: total,
+    passReason:    '',
+    rejectReason:  total === 0
+      ? 'no story criteria met'
+      : 'insufficient story signals (need 2+ of: body text, engagement, anomaly phrase, eyewitness language)',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +243,12 @@ export function scoreStoryHeuristics(text: string): StoryHeuristicsResult {
   if (UNRESOLVED.some((s)           => lc.includes(s))) { score += 15; signals.push('unresolved');       }
   if (INTENSITY.some((s)            => lc.includes(s))) { score += 10; signals.push('high intensity');   }
   if (ANOMALY_PHRASES.some((s)      => lc.includes(s))) { score +=  8; signals.push('anomaly phrase');   }
+
+  // Expanded eyewitness / internet mystery groups (lower weight — secondary signals)
+  if (!signals.includes('eyewitness') && EYEWITNESS_EXPANDED.some((s) => lc.includes(s))) {
+    score += 10; signals.push('eyewitness');
+  }
+  if (INTERNET_MYSTERY.some((s) => lc.includes(s))) { score += 6; signals.push('internet mystery'); }
 
   // Length bonus — more substance in longer text
   if (text.length > 300)  score += 5;
