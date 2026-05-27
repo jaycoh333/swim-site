@@ -1609,7 +1609,7 @@ export async function runFetchSessionAction(
         results.push({ sourceId, sourceName: source.name, status: 'error', error: 'Wayback source requires a specific domain URL as base_url (e.g. "https://oldsite.example.com") — not the archive root.' });
         continue;
       }
-      const waybackDisc = await discoverWaybackLinks(source);
+      const waybackDisc = await discoverWaybackLinks(source, effectiveOriginScan);
       if ('error' in waybackDisc) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'wayback-cdx', linksDiscovered: 0, pagesFetched: 0, candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [], errorMessage: waybackDisc.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: waybackDisc.error });
@@ -1711,7 +1711,7 @@ export async function runFetchSessionAction(
 
     // BBS / Textfiles.com connector — Phase O origin scan
     if (isTextfilesSource(source)) {
-      const bbsResult = await fetchTextfilesMultipleCandidates(source);
+      const bbsResult = await fetchTextfilesMultipleCandidates(source, effectiveOriginScan);
       if (bbsResult.error && bbsResult.candidates.length === 0) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'bbs-textfiles', linksDiscovered: 0, pagesFetched: bbsResult.debugInfo.filesFetched, candidatesPassed: 0, candidatesRejected: bbsResult.debugInfo.filesFetched, rejectReasons: [bbsResult.error.slice(0, 100)], errorMessage: bbsResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: bbsResult.error });
@@ -2279,7 +2279,7 @@ function computeOriginPriorityScore(
     isArchivedForum?: boolean;   // true for forum/thread pages recovered from archive
     isNotArchived?: boolean;     // true for live pages with no archive provenance
   },
-): { score: number; era: string; archiveYear: number | undefined } {
+): { score: number; era: string; archiveYear: number | undefined; isPreSocialEra: boolean } {
   let bonus = 0;
   let era   = 'modern source';
   const { archiveTimestamp, sourceType, originalDomain, sourceUrl, isArchivedWayback, isArchivedForum, isNotArchived } = opts;
@@ -2290,18 +2290,19 @@ function computeOriginPriorityScore(
     archiveYear = parseInt(archiveTimestamp.slice(0, 4), 10) || undefined;
   }
 
-  // Phase W: increased era bonuses — origin archaeology mode
-  // 1996–1999 strongest, modern = heavy penalty
+  // Phase AC: strong era bonuses + hard modern penalties
+  // Pre-social internet (≤2010) aggressively prioritised; modern content penalised.
   if (archiveYear) {
-    if      (archiveYear <= 1999) { bonus += 60; era = '1990s web'; }
-    else if (archiveYear <= 2004) { bonus += 45; era = 'early 2000s'; }
-    else if (archiveYear <= 2009) { bonus += 30; era = 'early 2000s'; }
-    else if (archiveYear <= 2014) { bonus += 15; era = 'pre-social archive'; }
-    // 2015+ archived page gets no era bonus — only domain bonus applies
+    if      (archiveYear <= 1999) { bonus += 80; era = '1990s web'; }
+    else if (archiveYear <= 2004) { bonus += 60; era = 'early 2000s'; }
+    else if (archiveYear <= 2010) { bonus += 45; era = 'early 2000s'; }
+    else if (archiveYear <= 2014) { bonus += 20; era = 'pre-social archive'; }
+    else if (archiveYear <= 2019) { bonus -= 10; }  // modern content penalty
+    else                           { bonus -= 25; }  // hard penalty: 2020+
   }
 
-  // BBS source type — raw pre-internet text gets a strong boost
-  if (sourceType === 'bbs') { bonus += 25; era = 'bbs archive'; }
+  // BBS source type — raw pre-internet text gets the strongest boost
+  if (sourceType === 'bbs') { bonus += 30; era = 'bbs archive'; }
 
   // Phase W: Wayback snapshot and archived forum bonuses
   if (isArchivedWayback) bonus += 20;
@@ -2309,7 +2310,7 @@ function computeOriginPriorityScore(
 
   // Phase W: penalise live pages with no archive provenance (not BBS, not Wayback)
   // This pushes unarchived modern sources to the bottom of origin scan results.
-  if (isNotArchived && sourceType !== 'bbs' && !isArchivedWayback) bonus -= 20;
+  if (isNotArchived && sourceType !== 'bbs' && !isArchivedWayback) bonus -= 25;
 
   // Old-web domain markers
   const domStr = `${originalDomain ?? ''} ${sourceUrl ?? ''}`.toLowerCase();
@@ -2318,11 +2319,38 @@ function computeOriginPriorityScore(
     if (era === 'modern source') era = 'early 2000s';
   }
   if (domStr.includes('geocities') || domStr.includes('angelfire') || domStr.includes('tripod') || domStr.includes('fortunecity')) {
-    bonus += 10;
+    bonus += 12;
     if (era !== 'bbs archive') era = '1990s web';
   }
 
-  return { score: Math.min(Math.max(baseScore + bonus, 0), 100), era, archiveYear };
+  // Phase AC: isPreSocialEra — true for ≤2010 captures and all BBS artifacts
+  const isPreSocialEra = sourceType === 'bbs' || (archiveYear != null && archiveYear <= 2010);
+
+  return { score: Math.min(Math.max(baseScore + bonus, 0), 100), era, archiveYear, isPreSocialEra };
+}
+
+// Phase AC: pre-social language signal detector.
+// Awards bonus for old-web/BBS/Usenet formatting patterns;
+// penalises modern social-media language.
+function computePreSocialLanguageBonus(text: string): number {
+  const lc = text.toLowerCase();
+  let bonus = 0;
+  const OLD_SIGNALS = [
+    'posted by', 'original message', 'from:', 'subject:', 'wrote:',
+    'forwarded', 're:', 'newsgroup', 'usenet', 'fidonet', 'bbs ',
+    'sysop', 'guestbook', 'webmaster', 'webring', 'modem', 'download',
+    'caller id', 'dial-up', 'fido', 'listserv', 'mailing list',
+    'message board', 'bulletin board', 'original post', 'thread:', 'reply to',
+  ];
+  const MODERN_SIGNALS = [
+    'tiktok', 'twitter', '#', ' lol ', ' lmao ', ' tbh ', ' imo ',
+    'going viral', 'ratio ', 'dm me', 'check out my', 'follow me',
+    'no cap', 'cringe', 'slay', 'vibe check', 'ngl ', 'based ',
+    'main character', 'it hits different',
+  ];
+  for (const s of OLD_SIGNALS)    if (lc.includes(s)) bonus += 3;
+  for (const s of MODERN_SIGNALS) if (lc.includes(s)) bonus -= 5;
+  return Math.max(-15, Math.min(15, bonus));
 }
 
 // ---------------------------------------------------------------------------
@@ -2340,6 +2368,7 @@ const WAYBACK_ERA_WINDOWS: Array<[number, number]> = [
 
 async function discoverWaybackLinks(
   source: DbScannerSource,
+  isOriginScan = false,
 ): Promise<{ links: DiscoveredLink[]; topicGroup?: string; topicGroupName?: string } | { error: string }> {
   const baseHostLower = (source.base_url ?? '').toLowerCase();
   const isOldWebSource = OLD_WEB_DOMAINS.some((d) => baseHostLower.includes(d));
@@ -2349,20 +2378,31 @@ async function discoverWaybackLinks(
   const topic = pickRandomTopicGroup();
   let fromYear: number | undefined;
   let toYear:   number | undefined;
-  if (isOldWebSource) {
-    // Prefer topic's era hint, but occasionally fall back to the generic pool
-    // for coverage of periods the topic hint wouldn't normally reach.
-    if (Math.random() < 0.75) {
-      [fromYear, toYear] = topic.eraHint;
+
+  // Phase AC: origin scan forces pre-2010 era windows with 95% probability
+  const PRE_SOCIAL_WINDOWS: Array<[number, number]> = [
+    [1996, 1999], [1997, 2001], [1998, 2003], [2000, 2004], [2002, 2006], [2005, 2010],
+  ];
+  if (isOldWebSource || isOriginScan) {
+    const biasToPreSocial = isOriginScan ? 0.95 : 0.75;
+    if (Math.random() < biasToPreSocial) {
+      if (isOriginScan) {
+        // Pick from dedicated pre-social windows for maximum archaeology depth
+        const win = PRE_SOCIAL_WINDOWS[Math.floor(Math.random() * PRE_SOCIAL_WINDOWS.length)];
+        [fromYear, toYear] = win;
+      } else {
+        [fromYear, toYear] = topic.eraHint;
+      }
     } else {
       const era = WAYBACK_ERA_WINDOWS[Math.floor(Math.random() * WAYBACK_ERA_WINDOWS.length)];
       [fromYear, toYear] = era;
     }
   }
 
-  // Phase W: fetch 100 snapshots; TASK 5: randomise CDX offset to surface different captures each run
+  // Phase AC: origin scan fetches 200 CDX snapshots for maximum depth; Phase W: randomise offset
+  const cdxLimit  = isOriginScan ? 200 : 100;
   const cdxOffset = Math.floor(Math.random() * 40);
-  const result = await searchWaybackSnapshots(source.base_url!, 100, fromYear, toYear, cdxOffset > 0 ? cdxOffset : undefined);
+  const result = await searchWaybackSnapshots(source.base_url!, cdxLimit, fromYear, toYear, cdxOffset > 0 ? cdxOffset : undefined);
   if ('error' in result) return result;
 
   // Sort oldest-first so we surface the earliest viable pages for this domain.
@@ -2420,12 +2460,15 @@ async function discoverWaybackLinks(
   else if (deepFiltered.length >= 3)  candidateSnaps = deepFiltered;
   else                               candidateSnaps = validSnaps;
 
-  // Per-domain diversity cap — deep paths get cap of 3, others cap of 2.
+  // Phase AC: per-domain diversity cap — origin scan allows more deep-path results.
+  const perDomainDeepCap  = isOriginScan ? 5 : 3;
+  const perDomainShallowCap = isOriginScan ? 3 : 2;
+  const maxLinks = isOriginScan ? 50 : 30;
   const domainCount = new Map<string, number>();
   const links: DiscoveredLink[] = [];
 
   for (const snap of candidateSnaps) {
-    const cap = isDeepPath(snap.url) ? 3 : 2;
+    const cap = isDeepPath(snap.url) ? perDomainDeepCap : perDomainShallowCap;
     let domain = '';
     try { domain = new URL(snap.url).hostname; } catch { domain = snap.url; }
     if ((domainCount.get(domain) ?? 0) >= cap) continue;
@@ -2439,7 +2482,7 @@ async function discoverWaybackLinks(
       topicGroupName: topic.name,
     });
 
-    if (links.length >= 30) break;
+    if (links.length >= maxLinks) break;
   }
 
   return { links, topicGroup: topic.id, topicGroupName: topic.name };
@@ -2524,7 +2567,8 @@ async function fetchWaybackPagePreview(
   try { if (origUrlMatch) originalDomain = new URL(origUrlMatch[1]).hostname; } catch { /* ignore */ }
 
   const heuristics = scoreStoryHeuristics(`${title} ${summary}`);
-  const waybackScore = Math.min(heuristics.storyScore + 5, 100); // archived = bonus
+  const langBonus  = computePreSocialLanguageBonus(`${title} ${summary}`);
+  const waybackScore = Math.min(heuristics.storyScore + 5 + langBonus, 100); // archived + language bonus
 
   // Origin priority scoring — Wayback snapshots get the isArchivedWayback bonus
   const originResult = computeOriginPriorityScore(waybackScore, {
@@ -2569,6 +2613,7 @@ async function fetchWaybackPagePreview(
     originPriorityScore:  originResult.score,
     sourceEra:            originResult.era,
     archiveYear:          originResult.archiveYear,
+    isPreSocialEra:       originResult.isPreSocialEra,
     topicGroup,
     topicGroupName,
     firstSeenYear,
@@ -2666,10 +2711,13 @@ async function fetchMediaWikiPagePreview(
 
 // Phase V expanded — more categories for deeper origin coverage.
 // Includes BBS-era subject areas beyond the original 7.
+// Phase AC: expanded category list — more pre-social text domains covered
 const TEXTFILES_CATEGORIES = [
   'ufo', 'conspiracy', 'paranormal', 'occult', 'hauntings', 'stories', 'aliens',
-  'phreak', 'hacker', 'anarchy', 'drugs', 'sex', 'reports', 'sf',
-  'humor', 'science', 'media', 'music',
+  'phreak', 'hacker', 'anarchy', 'drugs', 'reports', 'sf',
+  'humor', 'science', 'media', 'music', 'hypnosis', 'drugs',
+  'history', 'politics', 'piracy', 'underground', 'survival',
+  'religion', 'cult', 'cia', 'security',
 ];
 
 function isTextfilesSource(source: DbScannerSource): boolean {
@@ -2678,6 +2726,7 @@ function isTextfilesSource(source: DbScannerSource): boolean {
 
 async function fetchTextfilesMultipleCandidates(
   source: DbScannerSource,
+  isOriginScan = false,
 ): Promise<{
   candidates: FetchedCandidate[];
   error?: string;
@@ -2758,8 +2807,12 @@ async function fetchTextfilesMultipleCandidates(
     return txtLinks;
   }
 
+  // Phase AC: origin scan fetches more BBS files per run for archive saturation
+  const bbsCap      = isOriginScan ? 12 : 6;
+  const bbsPerCatCap = isOriginScan ? 4  : 2;
+
   for (const category of shuffledCats) {
-    if (candidates.length >= 6) break;
+    if (candidates.length >= bbsCap) break;
 
     const dirUrl = `https://www.textfiles.com/${category}/`;
     categoriesTried++;
@@ -2773,8 +2826,8 @@ async function fetchTextfilesMultipleCandidates(
       [txtLinks[i], txtLinks[j]] = [txtLinks[j], txtLinks[i]];
     }
 
-    for (const txtUrl of txtLinks.slice(0, 2)) {
-      if (candidates.length >= 6) break;
+    for (const txtUrl of txtLinks.slice(0, bbsPerCatCap)) {
+      if (candidates.length >= bbsCap) break;
 
       let rawText: string;
       try {
@@ -2810,7 +2863,9 @@ async function fetchTextfilesMultipleCandidates(
       const title = (rawTitle.slice(0, 80) || `BBS Archive · ${category}`).trim();
 
       const heuristics   = scoreStoryHeuristics(`${title} ${excerpt}`);
-      const originResult = computeOriginPriorityScore(heuristics.storyScore, { sourceType: 'bbs' });
+      const langBonus    = computePreSocialLanguageBonus(`${title} ${excerpt}`);
+      const bbsBaseScore = Math.min(heuristics.storyScore + langBonus, 100);
+      const originResult = computeOriginPriorityScore(bbsBaseScore, { sourceType: 'bbs' });
       const conf         = scoreExtractionConfidence(title, excerpt);
 
       // Phase V: map textfiles category to nearest topic group
@@ -2837,6 +2892,7 @@ async function fetchTextfilesMultipleCandidates(
         originPriorityScore:  originResult.score,
         sourceEra:            originResult.era,
         archiveYear:          undefined,  // BBS era — no single archive year
+        isPreSocialEra:       true,       // BBS artifacts are always pre-social
         finalPriorityScore:   originResult.score,
         topicGroup:           bbsTopicGroup,
         topicGroupName:       bbsTopicName,

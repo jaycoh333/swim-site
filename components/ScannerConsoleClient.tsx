@@ -138,13 +138,14 @@ const ERA_GROUP_ORDER = ['1990s web', 'bbs archive', 'early 2000s', 'pre-social 
 // Phase W: archive-first source type priority for origin scan results.
 // Lower number = surfaces earlier. BBS/Wayback dominate; Reddit appears last.
 const ORIGIN_SOURCE_TYPE_RANK: Record<string, number> = {
-  'bbs':        0,
-  'wayback':    1,
-  'archive':    2,
-  'mediawiki':  3,
-  'forum':      4,
-  'imageboard': 5,
-  'reddit':     99,
+  'bbs':          0,
+  'wayback':      1,
+  'archive_forum':2,
+  'archive':      3,
+  'mediawiki':    4,
+  'forum':        5,
+  'imageboard':   6,
+  'reddit':       99,
 };
 const ERA_GROUP_DISPLAY: Record<string, { label: string; cls: string }> = {
   '1990s web':          { label: '1990s Web',           cls: 'border-amber-500/25 bg-amber-500/[0.06] text-amber-300' },
@@ -1984,6 +1985,69 @@ export function ScannerConsoleClient({
                 }
               }
 
+              // ── Phase AC TASK 2: Modern content quota for origin scan ────────────
+              const isOriginScan = activePreset === 'origin-scan';
+              let filteredGoodResults = goodResults;
+              if (isOriginScan && goodResults.length > 0) {
+                const preSocialCount = goodResults.filter((r) =>
+                  r.status !== 'error' && (
+                    r.candidate.isPreSocialEra === true ||
+                    (r.candidate.archiveYear != null && r.candidate.archiveYear <= 2010)
+                  )
+                ).length;
+                if (preSocialCount >= 10) {
+                  // Enough pre-social content — filter out modern candidates entirely
+                  filteredGoodResults = goodResults.filter((r) =>
+                    r.status === 'error' ||
+                    r.candidate.isPreSocialEra === true ||
+                    (r.candidate.archiveYear != null && r.candidate.archiveYear <= 2010)
+                  );
+                } else {
+                  // Allow up to 15% modern — keep at most ceil(total * 0.15) modern items
+                  const modernItems = goodResults.filter((r) =>
+                    r.status !== 'error' &&
+                    r.candidate.isPreSocialEra !== true &&
+                    (r.candidate.archiveYear == null || r.candidate.archiveYear > 2015)
+                  );
+                  const maxModern = Math.ceil(goodResults.length * 0.15);
+                  if (modernItems.length > maxModern) {
+                    const allowedModernUrls = new Set(modernItems.slice(0, maxModern).map((r) => r.status !== 'error' ? r.candidate.sourceUrl : ''));
+                    filteredGoodResults = goodResults.filter((r) =>
+                      r.status === 'error' ||
+                      r.candidate.isPreSocialEra === true ||
+                      (r.candidate.archiveYear != null && r.candidate.archiveYear <= 2015) ||
+                      allowedModernUrls.has(r.candidate.sourceUrl)
+                    );
+                  }
+                }
+              }
+
+              // ── Phase AC TASK 7: Origin scan metrics ─────────────────────────────
+              const originMetrics = (() => {
+                if (!isOriginScan || filteredGoodResults.length === 0) return null;
+                const withYear = filteredGoodResults.filter((r) => r.status !== 'error' && r.candidate.archiveYear != null);
+                const years = withYear.map((r) => r.status !== 'error' ? (r.candidate.archiveYear as number) : 9999);
+                const avgYear = years.length > 0 ? Math.round(years.reduce((a, b) => a + b, 0) / years.length) : null;
+                const oldestYear = years.length > 0 ? Math.min(...years) : null;
+                const total = filteredGoodResults.filter((r) => r.status !== 'error').length;
+                const preSocial = filteredGoodResults.filter((r) =>
+                  r.status !== 'error' && (
+                    r.candidate.isPreSocialEra === true ||
+                    (r.candidate.archiveYear != null && r.candidate.archiveYear <= 2010)
+                  )
+                ).length;
+                const modern = filteredGoodResults.filter((r) =>
+                  r.status !== 'error' && r.candidate.isPreSocialEra !== true &&
+                  (r.candidate.archiveYear == null || r.candidate.archiveYear > 2015)
+                ).length;
+                return {
+                  avgYear,
+                  oldestYear,
+                  preSocialPct: total > 0 ? Math.round((preSocial / total) * 100) : 0,
+                  modernPct:    total > 0 ? Math.round((modern    / total) * 100) : 0,
+                };
+              })();
+
               // ── Other categories ──────────────────────────────────────────────────
               const needsReview      = dedupedResults.filter((r) =>
                 r.status !== 'error' && !r.candidate.isIndexPage && !r.candidate.badCandidateReason &&
@@ -2006,7 +2070,7 @@ export function ScannerConsoleClient({
                   return true;
                 });
               }
-              const visibleGood   = filterSeen(goodResults);
+              const visibleGood   = filterSeen(filteredGoodResults);
               const visibleReview = filterSeen(needsReview);
               const visibleLow    = filterSeen(lowSignalResults);
               const visibleErrors = filterSeen(errorResults);
@@ -2025,7 +2089,7 @@ export function ScannerConsoleClient({
 
               // ── Bulk approve+post (runs sequentially, one at a time) ──────────────
               async function bulkApprovePost() {
-                const toPost = goodResults.filter(
+                const toPost = filteredGoodResults.filter(
                   (r) => r.status !== 'error' && selectedUrls.has(r.candidate.sourceUrl)
                 );
                 for (const result of toPost) await handleApproveAndPost(result);
@@ -2034,7 +2098,7 @@ export function ScannerConsoleClient({
 
               // Tab data — TASK 2
               const TABS = [
-                { id: 'strong'       as const, label: 'Strong Candidates', count: goodResults.length,      color: 'emerald' },
+                { id: 'strong'       as const, label: 'Strong Candidates', count: filteredGoodResults.length,      color: 'emerald' },
                 { id: 'needs-review' as const, label: 'Needs Review',      count: needsReview.length,      color: 'amber'   },
                 { id: 'low-signal'   as const, label: 'Low Signal',        count: lowSignalResults.length, color: 'slate'   },
                 { id: 'blocked'      as const, label: 'Blocked / Failed',  count: errorResults.length,     color: 'red'     },
@@ -2079,16 +2143,16 @@ export function ScannerConsoleClient({
                       Scan #{scanId} · {candidatesFetched} found{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
                     </p>
                     <h2 className="mb-3 text-[28px] font-bold tracking-tight text-white">
-                      {goodResults.length > 0
-                        ? `${goodResults.length} strong signal${goodResults.length !== 1 ? 's' : ''} recovered`
+                      {filteredGoodResults.length > 0
+                        ? `${filteredGoodResults.length} strong signal${filteredGoodResults.length !== 1 ? 's' : ''} recovered`
                         : candidatesFetched > 0 ? `${candidatesFetched} fetched — no strong candidates` : 'Scan complete'}
                     </h2>
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[14px] font-bold tabular-nums text-sky-300">
                         {candidatesFetched} fetched
                       </span>
-                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${goodResults.length > 0 ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
-                        {goodResults.length} strong
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${filteredGoodResults.length > 0 ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
+                        {filteredGoodResults.length} strong
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${needsReview.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
                         {needsReview.length} needs review
@@ -2109,7 +2173,7 @@ export function ScannerConsoleClient({
                     {[
                       { label: 'Sources',    value: sourcesScanned,    color: 'text-slate-400' },
                       { label: 'Fetched',    value: candidatesFetched, color: candidatesFetched > 0 ? 'text-sky-400' : 'text-slate-600' },
-                      { label: 'Strong',     value: goodResults.length, color: goodResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
+                      { label: 'Strong',     value: filteredGoodResults.length, color: filteredGoodResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
                       { label: 'Posted',     value: postedResults.length, color: postedResults.length > 0 ? 'text-emerald-400' : 'text-slate-600' },
                       { label: 'Duplicates', value: dupCnt,             color: dupCnt > 0 ? 'text-amber-400' : 'text-slate-600' },
                       { label: 'Low/Err', value: lowSignalResults.length + errorResults.length,
@@ -2122,8 +2186,28 @@ export function ScannerConsoleClient({
                     ))}
                   </div>
 
+                  {/* Phase AC TASK 7 — Origin scan metrics panel */}
+                  {originMetrics && (
+                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-3">
+                      <p className="mb-2 text-[9px] font-black uppercase tracking-[0.3em] text-amber-400/50">Origin Scan Intelligence</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {[
+                          { label: 'Avg Year',     value: originMetrics.avgYear    != null ? String(originMetrics.avgYear)  : '—', color: 'text-amber-300' },
+                          { label: 'Oldest',       value: originMetrics.oldestYear != null ? String(originMetrics.oldestYear) : '—', color: 'text-amber-300/90' },
+                          { label: 'Pre-Social',   value: `${originMetrics.preSocialPct}%`, color: originMetrics.preSocialPct >= 60 ? 'text-emerald-300' : 'text-amber-400' },
+                          { label: 'Modern',       value: `${originMetrics.modernPct}%`,    color: originMetrics.modernPct  <= 15 ? 'text-slate-500'  : 'text-red-400/70' },
+                        ].map(({ label, value, color }) => (
+                          <div key={label} className="rounded-lg border border-white/6 bg-white/[0.02] px-2 py-2 text-center">
+                            <div className={`font-mono text-[18px] font-bold tabular-nums ${color}`}>{value}</div>
+                            <div className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Bulk action bar */}
-                  {goodResults.length > 0 && (
+                  {filteredGoodResults.length > 0 && (
                     <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
                       <div className="flex items-center gap-3">
                         <label className="flex cursor-pointer items-center gap-2 text-[13px] font-semibold text-slate-400">
@@ -2131,12 +2215,12 @@ export function ScannerConsoleClient({
                             type="checkbox"
                             checked={
                               selectedUrls.size > 0 &&
-                              goodResults
+                              filteredGoodResults
                                 .filter((r) => r.status !== 'error')
                                 .every((r) => selectedUrls.has(r.candidate.sourceUrl))
                             }
                             onChange={(e) => {
-                              const pool = goodResults.filter((r) => r.status !== 'error');
+                              const pool = filteredGoodResults.filter((r) => r.status !== 'error');
                               setSelectedUrls(e.target.checked ? new Set(pool.map((r) => r.candidate.sourceUrl)) : new Set());
                             }}
                             className="h-3.5 w-3.5 accent-emerald-400"
@@ -2348,8 +2432,8 @@ export function ScannerConsoleClient({
                         <div className="rounded-xl border border-emerald-500/18 bg-emerald-500/[0.05] px-4 py-3">
                           <p className="text-[17px] font-bold text-emerald-300">
                             Strong Candidates
-                            {visibleGood.length < goodResults.length && (
-                              <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">· showing {visibleGood.length} of {goodResults.length}</span>
+                            {visibleGood.length < filteredGoodResults.length && (
+                              <span className="ml-2 text-[14px] font-semibold text-emerald-400/55">· showing {visibleGood.length} of {filteredGoodResults.length}</span>
                             )}
                           </p>
                           <p className="mt-0.5 text-[13px] text-emerald-400/55">Queue the best stories for review.</p>
@@ -2575,25 +2659,29 @@ export function ScannerConsoleClient({
                                     </button>
                                   </div>
                                 </div>
-                                {/* Origin artifact — archive year hero (TASK 6) */}
+                                {/* Origin artifact — archive age hero (Phase AC TASK 5) */}
                                 {isOriginCard && (
-                                  <div className="mb-2 flex items-center gap-2.5">
-                                    {result.candidate.archiveYear && (
-                                      <span className={`shrink-0 text-[32px] font-black tabular-nums leading-none ${
-                                        era === 'bbs archive'        ? 'text-violet-300/70'
-                                        : era === '1990s web'         ? 'text-amber-300/70'
-                                        : era === 'early 2000s'       ? 'text-orange-300/65'
-                                        : 'text-sky-300/60'
+                                  <div className="mb-3 flex items-center gap-3">
+                                    <div className="flex flex-col">
+                                      <p className={`text-[9px] font-black uppercase tracking-[0.35em] ${
+                                        era === 'bbs archive'        ? 'text-violet-400/45'
+                                        : era === '1990s web'         ? 'text-amber-400/45'
+                                        : era === 'early 2000s'       ? 'text-orange-400/45'
+                                        : 'text-sky-400/40'
                                       }`}>
-                                        {result.candidate.archiveYear}
-                                      </span>
-                                    )}
-                                    <div className="flex flex-col gap-0.5">
-                                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/50">
-                                        {result.candidate.sourceType === 'bbs' ? 'BBS Archive' : 'Early Web Capture'}
+                                        {result.candidate.sourceType === 'bbs' ? 'BBS Archive' : 'First Seen'}
                                       </p>
+                                      <span className={`text-[36px] font-black tabular-nums leading-none tracking-tight ${
+                                        era === 'bbs archive'        ? 'text-violet-300/80'
+                                        : era === '1990s web'         ? 'text-amber-300/80'
+                                        : era === 'early 2000s'       ? 'text-orange-300/75'
+                                        : result.candidate.archiveYear ? 'text-sky-300/70'
+                                        : 'text-slate-600/60'
+                                      }`}>
+                                        {result.candidate.archiveYear ?? result.candidate.firstSeenYear ?? '—'}
+                                      </span>
                                       {result.candidate.sourceEra && (
-                                        <p className="text-[10px] uppercase tracking-[0.14em] text-slate-600">
+                                        <p className="mt-0.5 text-[9px] uppercase tracking-[0.18em] text-slate-600">
                                           {result.candidate.sourceEra}
                                         </p>
                                       )}

@@ -52,6 +52,8 @@ export interface FetchedCandidate {
   topicGroup?:          string;    // topic group ID that surfaced this candidate (e.g. 'ufo-disclosure')
   topicGroupName?:      string;    // human-readable topic group name (e.g. 'UFO / Disclosure')
   firstSeenYear?:       number;    // earliest known year this content appeared online
+  // Phase AC: pre-social era flag
+  isPreSocialEra?:      boolean;   // true when content is from ≤2010 (pre-social internet era)
   // Phase Y lineage fields
   signalFingerprint?:   string;    // content fingerprint for narrative lineage detection
   originStatus?:        'possible-origin' | 'related-signal' | 'mirror' | 'earlier-variant'; // lineage role
