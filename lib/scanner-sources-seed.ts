@@ -23,7 +23,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'weekly',
     attribution_rules:
       'Credit "Erowid.org Experience Vaults" with original author handle if public. Summarize — do not reproduce full trip report text.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -103,7 +103,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit textfiles.com with the BBS name and subdirectory path. Note approximate year of the file. Most authors are anonymous by design.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -409,7 +409,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "GeoCities archive (pre-2009) via Wayback Machine". Note the original page owner handle or site name if visible. Era: 1990s–2000s web.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -425,7 +425,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Angelfire archive (pre-2010) via Wayback Machine". Note original site title and author handle if visible.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -441,7 +441,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Tripod/Lycos archive (pre-2010) via Wayback Machine". Note original site title if visible.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -537,7 +537,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit textfiles.com with BBS category path and filename. Note approximate decade. Authors are almost universally anonymous — do not fabricate attribution.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -554,7 +554,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit "Crystalinks.com" with article title and URL. Note original publication year when visible. Content is personal research — treat as internet artifact.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -586,7 +586,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit "NICAP.org Case Files" with case ID and date. Treat as historical primary source — note the era (Cold War UAP documentation).',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -682,7 +682,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Earthfiles.com archive via Wayback Machine · [year]". Credit Linda Moulton Howe as author/investigator. Note original report date.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -698,7 +698,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "CUFON archive via Wayback Machine · [year]". Note document type (government file, case report, BBS bulletin). Era: 1988–late 1990s digital UFO research.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -714,7 +714,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "UFO UpDates mailing list archive via Wayback Machine · [year]". Credit researcher name and original post date when visible.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -746,7 +746,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "ParaScope archive via Wayback Machine · [year]". Era: 1995–2002 early web UFO research. Authors are named in original articles where visible.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -762,7 +762,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "The Anomalist archive via Wayback Machine · [year]". Note original linked source and date.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -778,7 +778,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Fortean Times archive via Wayback Machine · [year]". Note article title and author. Era: 1997–2012 web archive of UK anomaly journalism.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -794,7 +794,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Stanton Friedman archive via Wayback Machine · [year]". Credit Stanton T. Friedman as author/researcher. Note document type.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -810,7 +810,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "MUFON archive via Wayback Machine · [year]". Note case number, investigator, and incident date where available.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -842,7 +842,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "Coast to Coast AM archive via Wayback Machine · [year]". Note host (Art Bell / George Noory) and guest name. Era: 1998–2010 web archive.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -858,7 +858,7 @@ export const SCANNER_SOURCES_SEED: DbScannerSource[] = [
     refresh_cadence: 'manual',
     attribution_rules:
       'Credit as "NUFORC sighting report via Wayback Machine · [year]". Note report date, location, and report ID if visible.',
-    enabled: false,
+    enabled: true,
     last_scanned_at: null,
     created_at: '2024-01-01T00:00:00Z',
   },

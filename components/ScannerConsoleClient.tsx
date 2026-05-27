@@ -9,6 +9,7 @@ import {
   rebirthSignalAsThreadAction,
   getScanMemoryStatsAction,
   clearScanMemoryAction,
+  autoEnableOriginSourcesAction,
   type ScanMode,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
@@ -1018,9 +1019,9 @@ export function ScannerConsoleClient({
       if (presetId === PRESET_ALL) return enabledSources;
       const preset = SCAN_PRESETS.find((p) => p.id === presetId);
       if (!preset) return enabledSources;
-      // Phase W: origin scan is locked to archive-only types.
-      // Reddit, imageboard, and live forum sources are completely excluded.
-      const ORIGIN_ALLOWED_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki']);
+      // Phase W/AB: origin scan is locked to archive-only types.
+      // Reddit, imageboard, and live non-archive forums are completely excluded.
+      const ORIGIN_ALLOWED_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki', 'archive_forum']);
       return enabledSources.filter((s) => {
         if (isOriginPreset) {
           // Hard lock — only archival source types, no exceptions
@@ -1065,7 +1066,16 @@ export function ScannerConsoleClient({
       ...sorted.filter((s) => !lastScanSrcIds.has(s.id)),
       ...sorted.filter((s) =>  lastScanSrcIds.has(s.id)),
     ];
-    const sliced = fairSorted.slice(0, MAX_PRESET_SOURCES);
+
+    // Origin scan: sort BBS → Wayback → archive first for archive dominance (TASK 3/5)
+    const ORIGIN_TYPE_RANK: Record<string, number> = { bbs: 0, wayback: 1, archive: 2, archive_forum: 3, mediawiki: 4 };
+    const originSorted = isOriginPreset
+      ? [...fairSorted].sort((a, b) => (ORIGIN_TYPE_RANK[a.source_type] ?? 9) - (ORIGIN_TYPE_RANK[b.source_type] ?? 9))
+      : fairSorted;
+
+    // Origin scan gets a higher cap (20) to surface more archive sources
+    const presetCap = isOriginPreset ? 20 : MAX_PRESET_SOURCES;
+    const sliced = originSorted.slice(0, presetCap);
     // Deep Archive mode: cap Reddit to 2 sources so old-web sources dominate
     if (scanMode === 'deep-archive') {
       let redditCount = 0;
@@ -1128,6 +1138,7 @@ export function ScannerConsoleClient({
       includeRejected: showRejected,
       excludeUrls:     [...seenUrlsThisSession],
       scanMode,
+      isOriginScan:    activePreset === 'origin-scan',
     });
     if ('error' in res) {
       setScanError(res.error);
@@ -1834,6 +1845,16 @@ export function ScannerConsoleClient({
                           </div>
                         ))}
                       </div>
+                      <button
+                        onClick={async () => {
+                          const r2 = await autoEnableOriginSourcesAction();
+                          setMemStats((prev) => prev); // trigger re-render
+                          if (r2.enabled.length > 0) window.location.reload();
+                        }}
+                        className="w-full rounded-lg border border-violet-500/25 bg-violet-500/[0.04] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-violet-400/70 transition-colors hover:bg-violet-500/10 hover:text-violet-300"
+                      >
+                        Enable Archive Sources
+                      </button>
                       <button
                         onClick={async () => {
                           await clearScanMemoryAction();
@@ -2554,11 +2575,30 @@ export function ScannerConsoleClient({
                                     </button>
                                   </div>
                                 </div>
-                                {/* Origin artifact line */}
+                                {/* Origin artifact — archive year hero (TASK 6) */}
                                 {isOriginCard && (
-                                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400/55">
-                                    ↯ Recovered from early web archive{result.candidate.archiveYear ? ` · ${result.candidate.archiveYear}` : ''}
-                                  </p>
+                                  <div className="mb-2 flex items-center gap-2.5">
+                                    {result.candidate.archiveYear && (
+                                      <span className={`shrink-0 text-[32px] font-black tabular-nums leading-none ${
+                                        era === 'bbs archive'        ? 'text-violet-300/70'
+                                        : era === '1990s web'         ? 'text-amber-300/70'
+                                        : era === 'early 2000s'       ? 'text-orange-300/65'
+                                        : 'text-sky-300/60'
+                                      }`}>
+                                        {result.candidate.archiveYear}
+                                      </span>
+                                    )}
+                                    <div className="flex flex-col gap-0.5">
+                                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/50">
+                                        {result.candidate.sourceType === 'bbs' ? 'BBS Archive' : 'Early Web Capture'}
+                                      </p>
+                                      {result.candidate.sourceEra && (
+                                        <p className="text-[10px] uppercase tracking-[0.14em] text-slate-600">
+                                          {result.candidate.sourceEra}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
                                 )}
                                 {/* Title */}
                                 <p className="mb-1.5 text-[24px] font-bold leading-snug text-white">{result.candidate.title}</p>

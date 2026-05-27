@@ -1401,6 +1401,33 @@ export async function clearScanMemoryAction(): Promise<{ ok: boolean }> {
   return { ok: true };
 }
 
+// Phase AB: bulk-enable all low-risk origin/archive sources that are not yet enabled.
+// Safe to call repeatedly — skips already-enabled and high-risk sources.
+export async function autoEnableOriginSourcesAction(): Promise<{ enabled: string[]; errors: string[] }> {
+  const SAFE_NAME_FRAGMENTS = [
+    'geocities', 'angelfire', 'tripod', 'fortunecity',
+    'textfiles', 'nicap', 'nuforc', 'mufon', 'cufon',
+    'parascope', 'anomalist', 'fortean', 'coast to coast', 'coasttocoast',
+    'virtuallystrange', 'ufo updates', 'friedman', 'earthfiles',
+    'crystalinks', 'black vault', 'erowid',
+  ];
+  const allSources = await getScannerSources();
+  const toEnable = allSources.filter((s) => {
+    if (s.enabled) return false;
+    if (s.risk_level === 'high' || s.risk_level === 'medium') return false;
+    const lc = s.name.toLowerCase();
+    return SAFE_NAME_FRAGMENTS.some((f) => lc.includes(f));
+  });
+  const enabled: string[] = [];
+  const errors: string[] = [];
+  for (const s of toEnable) {
+    const r = await toggleScannerSource(s.id, true);
+    if ('ok' in r) enabled.push(s.name);
+    else errors.push(`${s.name}: ${r.error}`);
+  }
+  return { enabled, errors };
+}
+
 // ---------------------------------------------------------------------------
 // Fetch session — iterates enabled sources, fetches one page each.
 //
@@ -1430,6 +1457,8 @@ export async function runFetchSessionAction(
     originBias?: boolean;
     /** Phase AA: unified scan mode — overrides chaosMode/originBias when set */
     scanMode?: ScanMode;
+    /** Phase AB: origin scan — raises wayback link cap, enables quality filter */
+    isOriginScan?: boolean;
   },
 ): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
@@ -1458,6 +1487,8 @@ export async function runFetchSessionAction(
   const effectiveOriginBias = mode === 'deep-archive' || options?.originBias === true;
   // Unseen-only: relax per-source caps so we dig deeper looking for fresh content
   const unseenOnlyMode = mode === 'unseen-only';
+  // Phase AB: origin scan — broader Wayback discovery + quality filter
+  const effectiveOriginScan = options?.isOriginScan === true;
 
   // One DB query to load all sources; avoids N round trips inside the loop.
   const allSources = await getScannerSources();
@@ -1479,8 +1510,9 @@ export async function runFetchSessionAction(
   const seenThisSession = new Set<string>();
 
   // Diversity cap: max PER_SOURCE_CANDIDATE_CAP results per source (excludes errors).
-  // Unseen-only mode raises the cap so we dig deeper through each source.
-  const effectivePerSourceCap = unseenOnlyMode ? PER_SOURCE_CANDIDATE_CAP + 3 : PER_SOURCE_CANDIDATE_CAP;
+  // Unseen-only mode and origin scan raise the cap so we dig deeper through each source.
+  const ARCHIVE_TYPES_SET = new Set(['wayback', 'bbs', 'archive', 'archive_forum']);
+  const effectivePerSourceCap = (unseenOnlyMode || effectiveOriginScan) ? PER_SOURCE_CANDIDATE_CAP + 3 : PER_SOURCE_CANDIDATE_CAP;
   const perSourceCount = new Map<string, number>();
 
   const results: SessionSourceResult[] = [];
@@ -1587,7 +1619,7 @@ export async function runFetchSessionAction(
       let waybackPassed  = 0;
       let waybackRejected = 0;
       const waybackRejectReasons: string[] = [];
-      for (const link of waybackDisc.links.slice(0, 25)) {
+      for (const link of waybackDisc.links.slice(0, effectiveOriginScan ? 40 : 25)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
         const fr = await fetchWaybackPagePreview(source, link.url, link.topicGroup, link.topicGroupName);
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
@@ -1941,6 +1973,19 @@ export async function runFetchSessionAction(
     }
   } catch {
     // Lineage processing must never block the return
+  }
+
+  // Phase AB: Origin quality filter — penalize short/thin content from archive sources.
+  // Short excerpts (<100 chars) from Wayback/BBS/archive indicate nav pages or stubs.
+  if (effectiveOriginScan) {
+    for (const r of results) {
+      if (r.status === 'error' || r.candidate.badCandidateReason) continue;
+      if (!ARCHIVE_TYPES_SET.has(r.candidate.sourceType ?? '')) continue;
+      const excerptLen = (r.candidate.summary ?? '').trim().length;
+      if (excerptLen < 100) {
+        r.candidate.badCandidateReason = `Archive stub — too short (${excerptLen} chars), likely navigation or index page`;
+      }
+    }
   }
 
   // Persist all URLs seen this session so future scans skip them automatically.
