@@ -11,8 +11,20 @@ import { useIdentity } from '@/lib/identity';
 import { createReplyAction } from '@/app/actions';
 import { ShareBar } from '@/components/ShareBar';
 import { parseThreadMeta, getEraClass } from '@/lib/thread-meta';
+import type { ThreadMeta, ThreadLineageData } from '@/lib/thread-meta';
 
 const SITE_BASE = 'https://www.sw1m.me';
+
+// Categories that warrant the "Internet Artifact — Not Verification" note
+const CONSPIRACY_CATEGORIES = new Set([
+  'UFOs', 'Paranormal', 'Conspiracy Theory', 'Hidden History', 'Censored History',
+  'Redacted Files', 'Whistleblower Files', 'Black Projects', 'Forbidden Tech',
+  'Shadow Systems', 'Surveillance State', 'Psyops', 'Dark Web Lore',
+  'Occult Archives', 'Internet Mysteries', 'Unsolved Events',
+]);
+
+// Source types that always get the disclaimer
+const ORIGIN_SOURCE_TYPES = new Set(['wayback', 'bbs', 'archive', 'mediawiki', 'forum', 'erowid']);
 
 function buildThreadShareText(thread: ThreadContent): string {
   const url = `${SITE_BASE}/threads/${thread.id}`;
@@ -21,22 +33,327 @@ function buildThreadShareText(thread: ThreadContent): string {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-components
+// TASK 1: Source-native artifact blocks
 // ---------------------------------------------------------------------------
 
-function RecoveredExcerptBlock({ excerpt, eraClass }: { excerpt: string; eraClass: string }) {
-  if (!excerpt) return null;
+function ArtifactHeader({
+  icon, badge, meta, right,
+}: {
+  icon: string;
+  badge: string;
+  meta?: string;
+  right?: string;
+}) {
+  return (
+    <div className="artifact-header">
+      <span className="artifact-source-badge">{icon} {badge}</span>
+      {meta && <span>{meta}</span>}
+      {right && <span style={{ marginLeft: 'auto' }}>{right}</span>}
+    </div>
+  );
+}
+
+function ArtifactFooter({ url, label }: { url: string | null; label: string }) {
+  return (
+    <div className="artifact-footer">
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer"
+          className="source-evidence-link">
+          {url.length > 70 ? url.slice(0, 70) + '…' : url}
+        </a>
+      ) : (
+        <span>{label}</span>
+      )}
+      <span style={{ marginLeft: 'auto', opacity: 0.5 }}>
+        internet artifact · unverified
+      </span>
+    </div>
+  );
+}
+
+// Reddit artifact
+function RedditArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--reddit">
+      <ArtifactHeader
+        icon="⬡"
+        badge={meta.subredditHint ? `Reddit · ${meta.subredditHint}` : 'Reddit'}
+        meta="community discussion"
+        right={meta.archiveYear ?? undefined}
+      />
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label={meta.sourceName ?? 'reddit source'} />
+    </div>
+  );
+}
+
+// Wayback archive artifact
+function WaybackArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--wayback">
+      <ArtifactHeader
+        icon="📦"
+        badge="Wayback Machine Archive"
+        meta={meta.originalDomain ?? 'archived page'}
+      />
+      {/* Year + domain hero */}
+      {(meta.archiveYear || meta.originalDomain) && (
+        <div style={{ padding: '12px 18px 0', display: 'flex', gap: '20px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          {meta.archiveYear && (
+            <div>
+              <div className="artifact-domain-line" style={{ fontSize: 9, letterSpacing: '0.26em' }}>CAPTURED</div>
+              <div className="artifact-year-hero">{meta.archiveYear}</div>
+            </div>
+          )}
+          {meta.originalDomain && (
+            <div>
+              <div className="artifact-domain-line" style={{ fontSize: 9, letterSpacing: '0.26em' }}>ORIGIN DOMAIN</div>
+              <div className="artifact-domain-line" style={{ fontSize: 14, fontWeight: 700 }}>{meta.originalDomain}</div>
+            </div>
+          )}
+          {meta.sourceEra && meta.sourceEra !== 'modern source' && (
+            <div>
+              <div className="artifact-domain-line" style={{ fontSize: 9, letterSpacing: '0.26em' }}>ARCHIVE ERA</div>
+              <div className="artifact-domain-line" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>{meta.sourceEra}</div>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label="wayback snapshot" />
+    </div>
+  );
+}
+
+// BBS / textfile artifact
+function BbsArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--bbs">
+      <ArtifactHeader
+        icon="⬡"
+        badge="BBS TEXT FILE ARCHIVE"
+        meta={meta.sourceName ?? 'bulletin board system'}
+      />
+      <div className="artifact-bbs-meta">
+        {meta.archiveYear && <span>DATE: {meta.archiveYear}</span>}
+        {meta.originalDomain && <span>BOARD: {meta.originalDomain}</span>}
+        {meta.sourceEra && <span>ERA: {meta.sourceEra.toUpperCase()}</span>}
+        <span>FORMAT: PLAIN TEXT</span>
+      </div>
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label="bbs archive · text file" />
+    </div>
+  );
+}
+
+// Erowid experience report
+function ErowidArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--erowid">
+      <ArtifactHeader
+        icon="◈"
+        badge="Erowid Experience Report"
+        meta="archived substance experience"
+      />
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label="erowid.org archive" />
+    </div>
+  );
+}
+
+// MediaWiki article
+function MediaWikiArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--mediawiki">
+      <ArtifactHeader
+        icon="⬡"
+        badge={meta.sourceName ?? 'MediaWiki Article'}
+        meta="wiki article excerpt"
+        right={meta.originalDomain ?? undefined}
+      />
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label="mediawiki source" />
+    </div>
+  );
+}
+
+// Generic forum thread
+function ForumArtifactBlock({ meta, excerpt }: { meta: ThreadMeta; excerpt: string }) {
+  return (
+    <div className="artifact-block artifact-block--forum">
+      <ArtifactHeader
+        icon="⬡"
+        badge={meta.sourceName ? `Forum · ${meta.sourceName}` : 'Forum Thread'}
+        meta={meta.archiveYear ? `archived ${meta.archiveYear}` : 'archived post'}
+      />
+      <div className="artifact-excerpt">{excerpt}</div>
+      <ArtifactFooter url={meta.sourceUrl} label="forum archive" />
+    </div>
+  );
+}
+
+// Generic / fallback
+function GenericArtifactBlock({ meta, excerpt, eraClass }: { meta: ThreadMeta; excerpt: string; eraClass: string }) {
   return (
     <div className="recovered-excerpt-wrap">
       <blockquote className={`recovered-excerpt-quote ${eraClass}`}>
         {excerpt}
       </blockquote>
       <p className="recovered-excerpt-caption">
-        ↯ Recovered from archived internet source.
+        ↯ Recovered from archived internet source.{meta.sourceName ? ` Source: ${meta.sourceName}.` : ''}
       </p>
     </div>
   );
 }
+
+// Dispatch based on source type
+function SourceArtifactBlock({
+  meta,
+  excerpt,
+  eraClass,
+}: {
+  meta: ThreadMeta;
+  excerpt: string;
+  eraClass: string;
+}) {
+  if (!excerpt) return null;
+  const t = meta.sourceType ?? '';
+
+  if (t === 'reddit') return <RedditArtifactBlock meta={meta} excerpt={excerpt} />;
+  if (t === 'wayback' || t === 'archive') return <WaybackArtifactBlock meta={meta} excerpt={excerpt} />;
+  if (t === 'bbs') return <BbsArtifactBlock meta={meta} excerpt={excerpt} />;
+  if (t === 'erowid' || (meta.sourceUrl ?? '').includes('erowid.org')) {
+    return <ErowidArtifactBlock meta={meta} excerpt={excerpt} />;
+  }
+  if (t === 'mediawiki') return <MediaWikiArtifactBlock meta={meta} excerpt={excerpt} />;
+  if (t === 'forum' || t === 'imageboard' || t === 'archive_forum') {
+    return <ForumArtifactBlock meta={meta} excerpt={excerpt} />;
+  }
+  return <GenericArtifactBlock meta={meta} excerpt={excerpt} eraClass={eraClass} />;
+}
+
+// ---------------------------------------------------------------------------
+// TASK 3: Source era hero — more prominent than before
+// ---------------------------------------------------------------------------
+
+function SourceEraHero({ meta }: { meta: ThreadMeta }) {
+  const hasEra   = meta.sourceEra && meta.sourceEra !== 'modern source';
+  const hasYear  = !!meta.archiveYear;
+  const hasType  = !!meta.sourceType;
+  const hasDomain = !!meta.originalDomain;
+
+  if (!hasEra && !hasYear && !hasType && !hasDomain) return null;
+
+  return (
+    <div className="source-era-hero">
+      {hasYear && (
+        <div className="source-era-hero-item">
+          <span className="source-era-hero-label">First Seen</span>
+          <span className="source-era-hero-year">{meta.archiveYear}</span>
+        </div>
+      )}
+      {hasEra && (
+        <div className="source-era-hero-item">
+          <span className="source-era-hero-label">Archive Era</span>
+          <span className="source-era-hero-value">{meta.sourceEra}</span>
+        </div>
+      )}
+      {hasType && (
+        <div className="source-era-hero-item">
+          <span className="source-era-hero-label">Source Type</span>
+          <span className="source-era-hero-value">{meta.sourceType}</span>
+        </div>
+      )}
+      {hasDomain && (
+        <div className="source-era-hero-item">
+          <span className="source-era-hero-label">Origin Domain</span>
+          <span className="source-era-hero-value" style={{ textTransform: 'none', letterSpacing: '0.06em' }}>
+            {meta.originalDomain}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TASK 2: Origin trail panel for public thread pages
+// ---------------------------------------------------------------------------
+
+function OriginTrailBlock({ lineage }: { lineage: ThreadLineageData }) {
+  if (!lineage.trail || lineage.trail.length === 0) return null;
+
+  return (
+    <div className="origin-trail-panel">
+      <div className="origin-trail-header">
+        <span>◈ Signal Lineage</span>
+        {lineage.earliestYear && (
+          <span style={{ color: 'rgba(215,168,92,0.55)', fontWeight: 700 }}>
+            first known archive: {lineage.earliestYear}
+          </span>
+        )}
+        {lineage.seenCount > 1 && (
+          <span className="origin-trail-seen-count">
+            {lineage.seenCount} appearances detected
+          </span>
+        )}
+      </div>
+      <div className="origin-trail-body">
+        {lineage.trail.map((entry, idx) => (
+          <div key={`${entry.domain}-${idx}`}>
+            <div className="origin-trail-entry">
+              <div className={`origin-trail-dot ${idx === 0 ? 'origin-trail-dot--current' : ''}`} />
+              <div>
+                <div className="origin-trail-label">{entry.label}</div>
+                <div className="origin-trail-type">{entry.sourceType}</div>
+              </div>
+            </div>
+            {idx < lineage.trail.length - 1 && (
+              <div style={{ paddingLeft: '3px' }}>
+                <div className="origin-trail-connector" />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="origin-trail-footer">
+        Internet mythology archaeology · appearance trail only · not a factual claim
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TASK 4: Internet Artifact disclaimer
+// ---------------------------------------------------------------------------
+
+function ArtifactDisclaimerNote({
+  category,
+  sourceType,
+}: {
+  category: string;
+  sourceType: string | null;
+}) {
+  const show =
+    CONSPIRACY_CATEGORIES.has(category) ||
+    (sourceType != null && ORIGIN_SOURCE_TYPES.has(sourceType));
+  if (!show) return null;
+
+  return (
+    <div className="artifact-disclaimer">
+      ◈ Internet Artifact — Not Verification
+      {' · '}
+      This signal was recovered from archived internet material.
+      Content is presented as an internet artifact and mythological signal only.
+      It does not represent a verified fact or endorsed claim.
+      SWIM is an internet archaeology archive, not a news source.
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Existing sub-components (unchanged)
+// ---------------------------------------------------------------------------
 
 function ScannerAnalysisPanel({ lines }: { lines: string[] }) {
   if (!lines.length) return null;
@@ -159,10 +476,11 @@ function ThreadFooter({
 // ---------------------------------------------------------------------------
 
 interface ThreadViewProps {
-  threadId: string;
+  threadId:       string;
   initialThread?: ThreadContent;
   initialReplies?: Reply[];
   relatedThreads?: ThreadContent[];
+  lineage?:        ThreadLineageData;  // Phase Z: server-resolved lineage data
 }
 
 export function ThreadView({
@@ -170,6 +488,7 @@ export function ThreadView({
   initialThread,
   initialReplies = [],
   relatedThreads = [],
+  lineage,
 }: ThreadViewProps) {
   const thread = useMemo(
     () => initialThread ?? mockDb.getThread(threadId),
@@ -293,11 +612,11 @@ export function ThreadView({
           <div className="border-b border-crt/12 px-4 py-4 md:px-5 md:py-5">
             <h1 className="thread-view-title">{thread.title}</h1>
 
-            {/* TASK 1 — Recovered signal hero metadata */}
+            {/* Recovered signal hero metadata */}
             {meta.isRecoveredSignal && (
               <div className="mt-3 flex flex-col gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  {meta.sourceEra && (
+                  {meta.sourceEra && meta.sourceEra !== 'modern source' && (
                     <span className="era-badge-inline">{meta.sourceEra.toUpperCase()}</span>
                   )}
                   {meta.archiveYear && (
@@ -306,6 +625,12 @@ export function ThreadView({
                   <span className="origin-signal-badge">ORIGIN SIGNAL</span>
                   {meta.sourceName && (
                     <span className="source-name-inline">↯ {meta.sourceName}</span>
+                  )}
+                  {/* Phase Z: source type badge */}
+                  {meta.sourceType && (
+                    <span className="source-name-inline" style={{ opacity: 0.7 }}>
+                      [{meta.sourceType.toUpperCase()}]
+                    </span>
                   )}
                 </div>
                 <p className="text-[12px] uppercase tracking-[0.20em] text-crt/42">
@@ -338,17 +663,35 @@ export function ThreadView({
             </div>
           </div>
 
-          {/* TASK 2 — Recovered excerpt block */}
-          {meta.isRecoveredSignal && meta.excerpt && (
-            <RecoveredExcerptBlock excerpt={meta.excerpt} eraClass={eraClass} />
+          {/* TASK 3: Source era hero — prominent metadata row */}
+          {meta.isRecoveredSignal && (
+            <SourceEraHero meta={meta} />
           )}
 
-          {/* TASK 3 — Scanner analysis panel */}
+          {/* TASK 1: Source-native artifact block (replaces generic excerpt) */}
+          {meta.isRecoveredSignal && meta.excerpt && (
+            <div style={{ marginTop: 20 }}>
+              <SourceArtifactBlock meta={meta} excerpt={meta.excerpt} eraClass={eraClass} />
+            </div>
+          )}
+
+          {/* TASK 4: Internet Artifact disclaimer */}
+          {meta.isRecoveredSignal && (
+            <ArtifactDisclaimerNote
+              category={thread.category}
+              sourceType={meta.sourceType}
+            />
+          )}
+
+          {/* TASK 2: Origin trail panel */}
+          {lineage && <OriginTrailBlock lineage={lineage} />}
+
+          {/* Scanner analysis panel */}
           {meta.isRecoveredSignal && (
             <ScannerAnalysisPanel lines={meta.scannerLines} />
           )}
 
-          {/* TASK 6 — Source evidence panel */}
+          {/* Source evidence panel */}
           {meta.isRecoveredSignal && (
             <SourceEvidencePanel
               sourceUrl={meta.sourceUrl}
@@ -447,12 +790,12 @@ export function ThreadView({
           </div>
         </div>
 
-        {/* TASK 4 — Related signals */}
+        {/* Related signals */}
         {relatedThreads.length > 0 && (
           <RelatedSignals threads={relatedThreads} />
         )}
 
-        {/* TASK 8 — Thread footer (recovered only) */}
+        {/* Thread footer (recovered only) */}
         {meta.isRecoveredSignal && (
           <ThreadFooter
             sourceEra={meta.sourceEra}

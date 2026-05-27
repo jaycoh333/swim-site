@@ -12,9 +12,31 @@ export interface ThreadMeta {
   sourceName: string | null;
   sourceUrl: string | null;
   sourceImageUrl: string | null;
+  sourceType: string | null;   // e.g. 'wayback' | 'bbs' | 'reddit' | 'mediawiki' | 'forum' | 'erowid' | 'other'
+  subredditHint: string | null; // e.g. 'r/UFOs', parsed from URL or attribution
+  originalDomain: string | null; // hostname stripped from Wayback URL
   scannerLines: string[];
   sourceLines: string[];
   captureLines: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Lineage data — serialisable shape passed from server to client.
+// Populated by reading data/signal-lineage.json at SSR time.
+// ---------------------------------------------------------------------------
+
+export interface ThreadLineageTrailEntry {
+  year:       number | null;
+  domain:     string;
+  sourceType: string;
+  label:      string;
+}
+
+export interface ThreadLineageData {
+  earliestYear: number | null;
+  earliestUrl:  string;
+  seenCount:    number;
+  trail:        ThreadLineageTrailEntry[];
 }
 
 const DIVIDER_RE = /^[─\-]{4,}$/;
@@ -76,6 +98,38 @@ export function parseThreadMeta(body: string): ThreadMeta {
     sourceEra = eraRaw.replace(/\s*\(\d{4}\)/, '').trim();
   }
 
+  // Source type from scanner lines (e.g. "Source type: wayback")
+  const rawSourceType = findKv(scannerLines, 'Source type');
+  // Normalise: if URL contains erowid.org, override to 'erowid'
+  let sourceType: string | null = rawSourceType ? rawSourceType.trim() : null;
+  if (!sourceType && sourceUrl?.includes('erowid.org')) sourceType = 'erowid';
+
+  // Subreddit hint — try source URL first, then attribution text
+  let subredditHint: string | null = null;
+  if (sourceUrl) {
+    const m = sourceUrl.match(/reddit\.com\/r\/([^/]+)/);
+    if (m) subredditHint = `r/${m[1]}`;
+  }
+  if (!subredditHint) {
+    // Fallback: look for "r/SubName" in any source attribution line
+    for (const l of sourceLines) {
+      const m = l.match(/\br\/([A-Za-z0-9_]+)/);
+      if (m) { subredditHint = `r/${m[1]}`; break; }
+    }
+  }
+
+  // Original domain — strip from Wayback URL (web.archive.org/web/YYYYMMDD.../domain/...)
+  let originalDomain: string | null = null;
+  if (sourceUrl) {
+    const wbMatch = sourceUrl.match(/web\.archive\.org\/web\/\d{14}[^/]*\/(?:https?:\/\/)?([^/?#]+)/);
+    if (wbMatch) {
+      originalDomain = wbMatch[1];
+    } else if (sourceType && ['wayback', 'bbs', 'archive', 'mediawiki'].includes(sourceType)) {
+      // Non-Wayback archived: just use the URL hostname
+      try { originalDomain = new URL(sourceUrl).hostname; } catch { /* skip */ }
+    }
+  }
+
   return {
     isRecoveredSignal,
     excerpt,
@@ -84,6 +138,9 @@ export function parseThreadMeta(body: string): ThreadMeta {
     sourceName,
     sourceUrl,
     sourceImageUrl,
+    sourceType,
+    subredditHint,
+    originalDomain,
     scannerLines,
     sourceLines,
     captureLines,
