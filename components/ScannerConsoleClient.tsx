@@ -549,6 +549,77 @@ function SourcePreviewCard({
 }
 
 // ---------------------------------------------------------------------------
+// OriginTrailPanel — Phase Y: TASK 3
+// Shows a chronological trail of appearances across the internet for a
+// candidate that has lineage data.  Framed as "internet mythology archaeology"
+// — no truth claims, no factual endorsement.
+// ---------------------------------------------------------------------------
+
+function OriginTrailPanel({ candidate }: { candidate: FetchedCandidate }) {
+  const trail = candidate.originTrail;
+  if (!trail || trail.length === 0) return null;
+
+  const statusLabel: Record<string, { label: string; cls: string }> = {
+    'possible-origin':  { label: '◈ POSSIBLE ORIGIN SIGNAL',  cls: 'border-amber-500/40 bg-amber-500/12 text-amber-300' },
+    'related-signal':   { label: '⟳ RELATED SIGNAL',          cls: 'border-violet-500/30 bg-violet-500/8 text-violet-300' },
+    'mirror':           { label: '⬡ MIRROR SIGNAL',            cls: 'border-sky-500/30 bg-sky-500/8 text-sky-300' },
+    'earlier-variant':  { label: '↯ EARLIER VARIANT FOUND',   cls: 'border-emerald-500/35 bg-emerald-500/8 text-emerald-300' },
+  };
+  const badge = candidate.originStatus ? statusLabel[candidate.originStatus] : null;
+
+  return (
+    <div className="mb-3 rounded-xl border border-amber-500/18 bg-amber-500/[0.04] overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/14 bg-amber-500/[0.07] px-4 py-2">
+        <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-500/70">Origin Trail</span>
+        {badge && (
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${badge.cls}`}>
+            {badge.label}
+          </span>
+        )}
+        {candidate.lineageConfidence != null && (
+          <span className="ml-auto text-[10px] text-slate-700">
+            {Math.round(candidate.lineageConfidence * 100)}% confidence
+          </span>
+        )}
+        {candidate.relatedSignalCount != null && candidate.relatedSignalCount > 0 && (
+          <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-600">
+            +{candidate.relatedSignalCount} related
+          </span>
+        )}
+      </div>
+      <div className="px-4 py-3 flex flex-col gap-1.5">
+        {trail.map((entry, idx) => (
+          <div key={`${entry.url}-${idx}`} className="flex items-start gap-2.5">
+            <div className="flex flex-col items-center gap-0.5 shrink-0 mt-0.5">
+              <div className={`h-2 w-2 rounded-full ${entry.isCurrentSession ? 'bg-amber-400/70' : 'bg-amber-600/40'}`} />
+              {idx < trail.length - 1 && (
+                <div className="w-px grow bg-amber-600/20" style={{ height: 12 }} />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className={`text-[13px] font-semibold leading-tight ${entry.isCurrentSession ? 'text-amber-200/80' : 'text-slate-500'}`}>
+                {entry.label}
+              </p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-slate-700">{entry.sourceType}</span>
+                {entry.isCurrentSession && (
+                  <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600/50">this scan</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-amber-500/12 px-4 py-1.5">
+        <p className="text-[9px] leading-relaxed text-slate-700">
+          Internet mythology archaeology · appearance trail only · not a factual claim
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // PostedCard — session-posted story with social copy buttons
 // ---------------------------------------------------------------------------
 
@@ -2381,6 +2452,17 @@ export function ScannerConsoleClient({
                                       ⚠ duplicate
                                     </span>
                                   )}
+                                  {/* Phase Y: compact lineage status in header */}
+                                  {result.candidate.originStatus === 'possible-origin' && (
+                                    <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-300/80">
+                                      ◈ origin
+                                    </span>
+                                  )}
+                                  {result.candidate.originStatus === 'earlier-variant' && (
+                                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/7 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400/70">
+                                      ↯ earlier
+                                    </span>
+                                  )}
                                   <div className="ml-auto flex items-center gap-1.5">
                                     {/* Score summary — tappable to open details */}
                                     <button
@@ -2417,6 +2499,27 @@ export function ScannerConsoleClient({
                                       clusterLabel || (result.candidate.corroborationScore ?? 0) > 0 ||
                                       result.candidate.originPriorityScore != null) && (
                                       <div className="mb-3 flex flex-wrap gap-1">
+                                        {/* Phase Y: lineage status badges */}
+                                        {result.candidate.originStatus === 'possible-origin' && (
+                                          <span className="rounded-full border border-amber-500/40 bg-amber-500/12 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-300">
+                                            ◈ POSSIBLE ORIGIN
+                                          </span>
+                                        )}
+                                        {result.candidate.originStatus === 'earlier-variant' && (
+                                          <span className="rounded-full border border-emerald-500/35 bg-emerald-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-300">
+                                            ↯ EARLIER VARIANT
+                                          </span>
+                                        )}
+                                        {result.candidate.originStatus === 'mirror' && (
+                                          <span className="rounded-full border border-sky-500/30 bg-sky-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-sky-300">
+                                            ⬡ MIRROR SIGNAL
+                                          </span>
+                                        )}
+                                        {result.candidate.originStatus === 'related-signal' && (
+                                          <span className="rounded-full border border-violet-500/30 bg-violet-500/8 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-violet-300">
+                                            ⟳ RELATED SIGNAL
+                                          </span>
+                                        )}
                                         {result.candidate.originPriorityScore != null && result.candidate.originPriorityScore > (result.candidate.storyScore ?? 0) && (
                                           <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-300">
                                             ◈ ORIGIN SIGNAL
@@ -2451,6 +2554,8 @@ export function ScannerConsoleClient({
                                       </div>
                                     )}
                                     <SignalAnalysisBlock analysis={analysis} />
+                                    {/* Phase Y: Origin trail — shown inside details */}
+                                    <OriginTrailPanel candidate={result.candidate} />
                                   </div>
                                 )}
                                 <div className="mb-3 rounded-xl border-l-2 border-emerald-500/25 bg-white/[0.025] px-4 py-3">
@@ -3195,8 +3300,33 @@ function ReadyCard({ signal, isOpen, isPublishing, onToggle, onPublish }: ReadyC
               />
             </div>
 
+            {/* Phase Y TASK 6: Internet origin context — shown for archaeological sources */}
+            {['wayback', 'bbs', 'archive', 'mediawiki'].includes(signal.source_type) && (
+              <div className="rounded-xl border border-amber-500/18 bg-amber-500/[0.04] px-4 py-3">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-amber-500/60">Internet Origin Context</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-2">
+                  <div>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-slate-700">Source Type</p>
+                    <p className="text-[13px] font-bold uppercase text-amber-400/80">{signal.source_type}</p>
+                  </div>
+                  {signal.attribution_text && (
+                    <div>
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-slate-700">Recovered From</p>
+                      <p className="text-[12px] text-slate-400">{signal.attribution_text}</p>
+                    </div>
+                  )}
+                </div>
+                {signal.source_capture_notes && (
+                  <p className="text-[12px] leading-relaxed text-slate-600">{signal.source_capture_notes}</p>
+                )}
+                <p className="mt-2 text-[9px] text-slate-700">
+                  Internet mythology archaeology · archived claim · not a verified fact
+                </p>
+              </div>
+            )}
+
             {/* Evidence / source attribution — read-only */}
-            {(signal.attribution_text || signal.source_url) && (
+            {(signal.attribution_text || signal.source_url) && !['wayback', 'bbs', 'archive', 'mediawiki'].includes(signal.source_type) && (
               <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
                 <p className="mb-1.5 text-[12px] font-bold uppercase tracking-widest text-slate-600">Source Attribution</p>
                 {signal.attribution_text && (

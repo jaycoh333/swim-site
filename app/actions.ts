@@ -55,6 +55,7 @@ import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 import { recordSourceResult } from '@/lib/source-health';
 import { loadSeenUrls, recordSeenUrls } from '@/lib/scan-memory';
 import { pickRandomTopicGroup } from '@/lib/origin-topic-seeds';
+import { generateSignalFingerprint, detectLineageRelationships, recordCandidateLineage } from '@/lib/signal-lineage';
 
 // ---------------------------------------------------------------------------
 // URL normalization — strip tracking params, normalize host, drop fragments.
@@ -1818,6 +1819,73 @@ export async function runFetchSessionAction(
     const success = diag.candidatesPassed > 0;
     try { recordSourceResult(diag.sourceId, diag.sourceName, success, diag.candidatesPassed); }
     catch { /* never block the return */ }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase Y: Signal lineage post-processing
+  //
+  // 1. Generate fingerprints on all non-error candidates.
+  // 2. Run detectLineageRelationships to find origin trails / mirrors.
+  // 3. Apply annotations back to each candidate in-place.
+  // 4. TASK 5 — Duplicate evolution: if a 'duplicate' result is actually
+  //    older or extends the origin trail, promote it to 'preview' so the
+  //    curator can review it as an earlier variant rather than suppressing it.
+  // 5. Persist fingerprints to the lineage cache (data/signal-lineage.json).
+  // ---------------------------------------------------------------------------
+  try {
+    // Stamp fingerprints in-place on all candidate results
+    for (const r of results) {
+      if (r.status === 'error') continue;
+      r.candidate.signalFingerprint = generateSignalFingerprint(r.candidate);
+    }
+
+    // Collect preview + duplicate candidates for relationship detection
+    const candidatesForLineage = results
+      .filter((r): r is Exclude<typeof r, { status: 'error' }> => r.status !== 'error')
+      .map((r) => r.candidate);
+
+    if (candidatesForLineage.length > 0) {
+      const annotations = detectLineageRelationships(candidatesForLineage);
+      const annotationMap = new Map(annotations.map((a) => [a.candidateUrl, a]));
+
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'error') continue;
+
+        const ann = annotationMap.get(r.candidate.sourceUrl);
+        if (!ann) continue;
+
+        // Apply lineage fields to the candidate
+        r.candidate.originStatus       = ann.originStatus ?? undefined;
+        r.candidate.originTrail        = ann.originTrail.length > 0 ? ann.originTrail : undefined;
+        r.candidate.lineageConfidence  = ann.lineageConfidence > 0 ? ann.lineageConfidence : undefined;
+        r.candidate.relatedSignalCount = ann.relatedSignalCount > 0 ? ann.relatedSignalCount : undefined;
+
+        // TASK 5: Duplicate evolution —
+        // Promote a 'duplicate' to 'preview' when it's an earlier variant or possible origin.
+        // The curator then sees "earlier variant found" rather than a suppressed duplicate.
+        if (
+          r.status === 'duplicate' &&
+          (ann.originStatus === 'possible-origin' || ann.originStatus === 'earlier-variant')
+        ) {
+          const candidateYear = r.candidate.firstSeenYear ?? r.candidate.archiveYear;
+          const hasOldContent = candidateYear != null && candidateYear < 2015;
+          if (hasOldContent) {
+            results[i] = {
+              sourceId:   r.sourceId,
+              sourceName: r.sourceName,
+              status:     'preview',
+              candidate:  r.candidate,
+            };
+          }
+        }
+
+        // Persist to lineage cache (fire-and-forget)
+        try { recordCandidateLineage(r.candidate); } catch { /* never block */ }
+      }
+    }
+  } catch {
+    // Lineage processing must never block the return
   }
 
   // Persist all URLs seen this session so future scans skip them automatically.

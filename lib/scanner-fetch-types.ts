@@ -52,6 +52,22 @@ export interface FetchedCandidate {
   topicGroup?:          string;    // topic group ID that surfaced this candidate (e.g. 'ufo-disclosure')
   topicGroupName?:      string;    // human-readable topic group name (e.g. 'UFO / Disclosure')
   firstSeenYear?:       number;    // earliest known year this content appeared online
+  // Phase Y lineage fields
+  signalFingerprint?:   string;    // content fingerprint for narrative lineage detection
+  originStatus?:        'possible-origin' | 'related-signal' | 'mirror' | 'earlier-variant'; // lineage role
+  originTrail?:         OriginTrailEntry[]; // chronological trail of appearances
+  lineageConfidence?:   number;    // 0–1 confidence that trail is real
+  relatedSignalCount?:  number;    // # related signals detected (current session + cache)
+}
+
+// A single entry in an origin trail timeline.
+export interface OriginTrailEntry {
+  year:              number | null;
+  domain:            string;
+  sourceType:        string;
+  url:               string;
+  label:             string;  // display: "1998 — geocities.com"
+  isCurrentSession?: boolean; // true for candidates found this scan
 }
 
 export interface SignalDuplicate {
