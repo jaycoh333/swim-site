@@ -51,6 +51,7 @@ import {
   scoreStoryHeuristics,
 } from '@/lib/story-intelligence';
 import { computeFinalPriorityScore } from '@/lib/discovery-engine';
+import { DEBUG_TEST_CANDIDATES } from '@/lib/debug-test-candidates';
 
 export async function createThreadAction(
   input: CreateThreadInput,
@@ -602,16 +603,19 @@ async function fetchRedditMultipleCandidates(
   source: DbScannerSource,
   includeRejected = false,
 ): Promise<{ candidates: FetchedCandidate[]; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } } | { error: string; rejected: RejectedPost[]; debugInfo: { subreddit: string; endpointsAttempted: string[]; postsFound: number; postsPassedQuality: number; rejectReasons: string[] } }> {
-  const urlMatch = (source.base_url ?? '').match(/\/r\/([A-Za-z0-9_]+)/i);
+  // Normalize: handle https://reddit.com/r/Sub/, r/Sub, /r/Sub
+  const rawUrl   = source.base_url ?? '';
+  const urlMatch = rawUrl.match(/(?:^|\/|\b)r\/([A-Za-z0-9_]+)/i);
   if (!urlMatch) {
     return { error: 'Could not parse subreddit — set base_url to reddit.com/r/SubredditName', rejected: [], debugInfo: { subreddit: '', endpointsAttempted: [], postsFound: 0, postsPassedQuality: 0, rejectReasons: ['invalid url'] } };
   }
   const subreddit = urlMatch[1];
 
   const endpoints = [
-    `https://www.reddit.com/r/${subreddit}/new.json?limit=25`,
-    `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=25`,
-    `https://www.reddit.com/r/${subreddit}/hot.json?limit=25`,
+    `https://www.reddit.com/r/${subreddit}/new.json?limit=50`,
+    `https://www.reddit.com/r/${subreddit}/hot.json?limit=50`,
+    `https://www.reddit.com/r/${subreddit}/top.json?t=week&limit=50`,
+    `https://old.reddit.com/r/${subreddit}/new.json?limit=50`,
   ];
 
   const debugEndpoints: string[] = [];
@@ -857,22 +861,43 @@ async function fetchMediaWikiSourcePreview(
 // MediaWiki multi-candidate — up to 10 articles from search results
 // ---------------------------------------------------------------------------
 
+// Search terms tried on Lost Media Wiki when category_focus isn't specific enough.
+const LOSTMEDIA_QUERIES = ['lost episode', 'partially found', 'lost media', 'unidentified broadcast', 'missing footage'];
+
 async function fetchMediaWikiMultipleCandidates(
   source: DbScannerSource,
 ): Promise<{ candidates: FetchedCandidate[]; debugInfo: { searchQuery: string; searchResultCount: number; articlesFetched: number } } | { error: string; debugInfo: { searchQuery: string; searchResultCount: number; articlesFetched: number } }> {
-  const baseUrl = (source.base_url ?? '').replace(/\/(api\.php|wiki\/?.*)$/, '');
-  const query   = source.category_focus.slice(0, 2).join(' ') || 'lost found mystery recovered';
-  const searchResult = await searchMediaWikiArticles(baseUrl, query, 10);
-  if ('error' in searchResult) return { ...searchResult, debugInfo: { searchQuery: query, searchResultCount: 0, articlesFetched: 0 } };
+  const baseUrl = (source.base_url ?? '').replace(/\/(api\.php|wiki\/?.*)$/, '').replace(/\/$/, '');
 
-  const wikiDebug = { searchQuery: query, searchResultCount: searchResult.results.length, articlesFetched: 0 };
+  // For Lost Media Wiki, try purpose-specific search terms; otherwise use category focus.
+  const isLostMedia = baseUrl.toLowerCase().includes('lostmediawiki');
+  const queries = isLostMedia
+    ? LOSTMEDIA_QUERIES
+    : [source.category_focus.slice(0, 2).join(' ') || 'lost found mystery recovered'];
 
-  if (!searchResult.results.length) {
-    return { error: `No MediaWiki articles found for "${query}" on ${source.name}`, debugInfo: wikiDebug };
+  // Collect unique search results across all queries.
+  const seenTitles = new Set<string>();
+  const allSearchResults: import('@/lib/discovery-apis').MediaWikiSearchResult[] = [];
+  let lastError = '';
+
+  for (const q of queries) {
+    const sr = await searchMediaWikiArticles(baseUrl, q, 10);
+    if ('error' in sr) { lastError = sr.error; continue; }
+    for (const r of sr.results) {
+      if (!seenTitles.has(r.title)) { seenTitles.add(r.title); allSearchResults.push(r); }
+    }
+    if (allSearchResults.length >= 12) break;
+  }
+
+  const primaryQuery = queries[0];
+  const wikiDebug = { searchQuery: queries.join(' | '), searchResultCount: allSearchResults.length, articlesFetched: 0 };
+
+  if (!allSearchResults.length) {
+    return { error: lastError || `No MediaWiki articles found for "${primaryQuery}" on ${source.name}`, debugInfo: wikiDebug };
   }
 
   const candidates: FetchedCandidate[] = [];
-  for (const searchItem of searchResult.results.slice(0, 10)) {
+  for (const searchItem of allSearchResults.slice(0, 12)) {
     const articleResult = await fetchMediaWikiArticle(baseUrl, searchItem.title);
     if ('error' in articleResult) continue;
 
@@ -1182,6 +1207,23 @@ export async function runFetchSessionAction(
   if (!sourceIds.length)    return { error: 'no source IDs provided' };
   if (sourceIds.length > 20) return { error: 'max 20 sources per session' };
 
+  // Debug test preset — returns static mock candidates without hitting live sources.
+  if (sourceIds.length === 1 && sourceIds[0] === '__debug_test__') {
+    const results: SessionSourceResult[] = DEBUG_TEST_CANDIDATES.map((c) => ({
+      sourceId:   '__debug_test__',
+      sourceName: '[DEBUG TEST SOURCE]',
+      status:     'preview' as const,
+      candidate:  c,
+    }));
+    const diag: SourceDiagnostic = {
+      sourceId: '__debug_test__', sourceName: '[DEBUG TEST SOURCE]', sourceType: 'debug',
+      enabled: true, baseUrl: 'internal', routeUsed: 'debug-static',
+      linksDiscovered: results.length, pagesFetched: results.length,
+      candidatesPassed: results.length, candidatesRejected: 0, rejectReasons: [],
+    };
+    return { results, diagnostics: [diag] };
+  }
+
   // One DB query to load all sources; avoids N round trips inside the loop.
   const allSources = await getScannerSources();
   const sourceMap  = new Map(allSources.map((s) => [s.id, s]));
@@ -1246,8 +1288,8 @@ export async function runFetchSessionAction(
       for (const link of erowidDisc.links.slice(0, 8)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchErowidExperiencePreview(source, link.url);
-        erowidFetched++;
         if ('error' in fr) { erowidRejected++; erowidRejectReasons.push(fr.error.slice(0, 80)); continue; }
+        erowidFetched++;
         const url = fr.candidate.sourceUrl;
         if (isAlreadyArchived(url)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });
@@ -1290,8 +1332,8 @@ export async function runFetchSessionAction(
       for (const link of waybackDisc.links.slice(0, 8)) {
         if ((perSourceCount.get(sourceId) ?? 0) >= 3) break;
         const fr = await fetchWaybackPagePreview(source, link.url);
-        waybackFetched++;
         if ('error' in fr) { waybackRejected++; waybackRejectReasons.push(fr.error.slice(0, 80)); continue; }
+        waybackFetched++;
         const url = fr.candidate.sourceUrl;
         if (isAlreadyArchived(url)) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...fr.candidate, badCandidateReason: 'Already in archive — already queued or published' } });

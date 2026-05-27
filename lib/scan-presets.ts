@@ -24,6 +24,12 @@ export interface ScanPreset {
   color:        string;         // Tailwind color token (emerald / sky / amber / violet)
 }
 
+/** "All enabled sources" pseudo-preset — the default behaviour. */
+export const PRESET_ALL = 'all';
+
+/** Debug test preset — returns static mock candidates to verify the pipeline. */
+export const PRESET_DEBUG = 'debug-test';
+
 export const SCAN_PRESETS: ScanPreset[] = [
   {
     id:           'weird-reddit',
@@ -69,7 +75,15 @@ export const SCAN_PRESETS: ScanPreset[] = [
     riskNote:     'Medium — forum index pages are common. Check each candidate before queueing.',
     color:        'violet',
   },
+  {
+    id:           PRESET_DEBUG,
+    name:         'Debug Test Feed',
+    tagline:      'Static mock candidates — test queue/review/publish pipeline',
+    description:  'Returns 5 hardcoded mock candidates. Use to verify the scanner UI pipeline works end-to-end without hitting live sources. Discard test entries after testing.',
+    sourceTypes:  [],
+    nameKeywords: [],
+    risk:         'low',
+    riskNote:     'No live fetches — static data only. Safe to run at any time.',
+    color:        'emerald',
+  },
 ];
-
-/** "All enabled sources" pseudo-preset — the default behaviour. */
-export const PRESET_ALL = 'all';

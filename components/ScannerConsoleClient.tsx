@@ -9,7 +9,7 @@ import {
   rebirthSignalAsThreadAction,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
-import { SCAN_PRESETS, PRESET_ALL, type ScanPreset } from '@/lib/scan-presets';
+import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, type ScanPreset } from '@/lib/scan-presets';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
@@ -278,22 +278,29 @@ export function ScannerConsoleClient({
   // ── Scan handlers ────────────────────────────────────────────────────────
 
   async function handleRunScan() {
-    if (!activeScanSources.length) return;
+    const isDebugRun = activePreset === PRESET_DEBUG;
+    if (!isDebugRun && !activeScanSources.length) return;
     setScanPhase('scanning');
     setScanError(null);
     setScanResults([]);
     setCandStates(new Map());
     setLowQualityOpen(false);
-    const res = await runFetchSessionAction(activeScanSources.map((s) => s.id), { includeRejected: showRejected });
+    setShowDiagnostics(false);
+    const sourceIdsToRun = isDebugRun
+      ? ['__debug_test__']
+      : activeScanSources.map((s) => s.id);
+    const res = await runFetchSessionAction(sourceIdsToRun, { includeRejected: showRejected });
     if ('error' in res) {
       setScanError(res.error);
       setScanPhase('idle');
       return;
     }
     setScanResults(res.results);
-    setDiagnostics(res.diagnostics ?? []);
+    const diags = res.diagnostics ?? [];
+    setDiagnostics(diags);
     setScanPhase('done');
-    // Health + cluster analysis
+    const totalFetched = diags.reduce((sum, d) => sum + d.pagesFetched, 0);
+    if (totalFetched === 0) setShowDiagnostics(true);
     setHealthMap(computeSourceHealthMap(res.results));
     const allCandidates = res.results
       .filter((r) => r.status !== 'error')
