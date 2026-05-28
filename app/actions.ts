@@ -2298,7 +2298,8 @@ export async function runFetchSessionAction(
           else if (parsedIaUrl.pathname.startsWith('/details/')) {
             const collectionId = parsedIaUrl.pathname.split('/').filter(Boolean)[1] ?? '';
             if (collectionId) {
-              const collApiUrl = `https://archive.org/advancedsearch.php?q=collection%3A${encodeURIComponent(collectionId)}&fl%5B%5D=identifier,title,description,subject,date,creator&sort%5B%5D=date+asc&rows=8&output=json`;
+              const collMediaFilter = sourceTax === 'document_archive' ? '+AND+mediatype%3Atexts' : '';
+              const collApiUrl = `https://archive.org/advancedsearch.php?q=collection%3A${encodeURIComponent(collectionId)}${collMediaFilter}&fl%5B%5D=identifier,title,description,subject,date,creator,mediatype&sort%5B%5D=date+asc&rows=8&output=json`;
               let iaColHandled = false;
               try {
                 const apiRes = await fetch(collApiUrl, {
@@ -2364,6 +2365,36 @@ export async function runFetchSessionAction(
       } catch { /* not a valid URL or not IA — fall through */ }
     }
 
+    // Phase AN TASK 3+4: Fringe/occult archive sources (sacred-texts, bibliotecapleyades,
+    // rexresearch, keelynet, etc.) — treat index pages as discovery, follow child doc links.
+    if (isFringeArchiveSource(source)) {
+      const fringeResult = await fetchOccultArchiveCandidates(source, effectiveDeepTruth);
+      if (fringeResult.error && fringeResult.candidates.length === 0) {
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'occult-archive-deepcrawl', linksDiscovered: fringeResult.debugInfo.linksFound, pagesFetched: fringeResult.debugInfo.pagesFetched, candidatesPassed: 0, candidatesRejected: fringeResult.debugInfo.pagesRejected, rejectReasons: fringeResult.debugInfo.rejectReasons.slice(0, 6), errorMessage: fringeResult.error });
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: fringeResult.error });
+      } else {
+        let fringePassed = 0;
+        for (const candidate of fringeResult.candidates) {
+          if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
+          const url = candidate.sourceUrl;
+          if (isAlreadyArchived(url)) {
+            trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: { ...candidate, badCandidateReason: 'Already in archive' } });
+          } else {
+            const dupes = await checkSignalDuplicates(url, candidate.title);
+            if (dupes.length > 0) {
+              trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            } else {
+              trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate });
+              fringePassed++;
+            }
+          }
+        }
+        diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'occult-archive-deepcrawl', linksDiscovered: fringeResult.debugInfo.linksFound, pagesFetched: fringeResult.debugInfo.pagesFetched, candidatesPassed: fringePassed, candidatesRejected: fringeResult.debugInfo.pagesRejected, rejectReasons: fringeResult.debugInfo.rejectReasons.slice(0, 6), rejectedCandidates: fringeResult.debugInfo.rejectReasons.slice(0, 4).map((r) => ({ title: r, rejectReason: r })) });
+        if (fringePassed === 0) results.push({ sourceId, sourceName: source.name, status: 'error', error: fringeResult.error ?? 'No occult archive candidates passed quality filters.' });
+      }
+      continue;
+    }
+
     // Phase AM TASK 5: old_web taxonomy — geocities/angelfire/tripod pages are defunct.
     // Skip the live fetch and go directly to Wayback CDX archive recovery.
     if (sourceTax === 'old_web') {
@@ -2426,6 +2457,9 @@ export async function runFetchSessionAction(
     const storyLinks: string[] = [];
 
     let htmlFetchCount = 0;
+    let htmlPassed = 0, htmlRejected = 0;
+    const htmlRejectReasons: string[] = [];
+    const htmlRejectedCandidates: Array<{ title: string; url?: string; rejectReason: string }> = [];
     for (const { href, text } of pageAnchors) {
       if (storyLinks.length >= 30) break;
       if (seenLinks.has(href)) continue;
@@ -2537,7 +2571,12 @@ export async function runFetchSessionAction(
         const quality    = useDtsQualityBar
           ? dtsArchivePassesMinimum(linkUrl, title, summary)
           : candidatePassesQuality(linkUrl, title, summary);
-        if (!quality.pass) continue;
+        if (!quality.pass) {
+          htmlRejected++;
+          if (htmlRejectReasons.length < 8) htmlRejectReasons.push(quality.reason.slice(0, 60));
+          if (htmlRejectedCandidates.length < 5) htmlRejectedCandidates.push({ title: title.slice(0, 60), url: linkUrl, rejectReason: quality.reason.slice(0, 80) });
+          continue;
+        }
 
         const conf       = scoreExtractionConfidence(title, summary);
         const bad        = detectBadCandidate(linkUrl, title, summary);
@@ -2558,7 +2597,10 @@ export async function runFetchSessionAction(
           sourceImageUrl:       extracted.imageUrl || undefined,
           mediaType:            extracted.imageUrl ? 'image' : 'webpage',
           attributionText:      `Recovered from ${source.name} · ${source.source_type} source`,
-          captureNotes:         `Discovered via homepage link scan of ${source.name}. Raw HTML not stored.`,
+          captureNotes:         [
+            `Discovered via homepage link scan of ${source.name}. Raw HTML not stored.`,
+            sourceTax === 'ufo_database' ? extractUfoReportMetadata(linkHtml) : '',
+          ].filter(Boolean).join(' '),
           storyScore:           heur.storyScore,
           storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
           finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad }),
@@ -2573,10 +2615,22 @@ export async function runFetchSessionAction(
         const linkDupes = await checkSignalDuplicates(linkUrl2, linkCand.title);
         if (linkDupes.length > 0) {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: linkCand, duplicates: linkDupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+          htmlPassed++;
         } else {
           trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: linkCand });
+          htmlPassed++;
         }
       }
+      diagnostics.push({
+        sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url,
+        routeUsed: storyLinks.length === 0 ? 'html-index-fallback' : 'html-link-scan',
+        linksDiscovered: storyLinks.length,
+        pagesFetched:    htmlFetchCount,
+        candidatesPassed:   htmlPassed,
+        candidatesRejected: htmlRejected,
+        rejectReasons:   htmlRejectReasons,
+        rejectedCandidates: htmlRejectedCandidates.length > 0 ? htmlRejectedCandidates : undefined,
+      });
     }
   }
 
@@ -3381,6 +3435,11 @@ async function discoverWaybackLinks(
     '/files/', '/file/', '/reports/', '/report/', '/archives/', '/archive/',
     '/text/', '/texts/', '/story/', '/stories/', '/article/', '/articles/',
     '/message/', '/messages/', '/doc/', '/docs/', '/research/',
+    // Phase AN TASK 7: additional deep archive / report paths
+    '/case/', '/cases/', '/sighting/', '/sightings/', '/incident/', '/incidents/',
+    '/encounter/', '/evidence/', '/classified/', '/documents/', '/transcript/',
+    '/investigation/', '/dossier/', '/testimony/', '/declaration/',
+    '/letter/', '/memo/', '/briefing/', '/disclosure/',
   ];
   // Junk paths to skip — logins, registrations, search, tag pages
   const JUNK_PATH_PATTERNS = [
@@ -3747,6 +3806,13 @@ const DTS_BBS_PRIORITY_CATS = [
 // These categories are off-topic for DTS; skip unless content has a topic match.
 const DTS_BBS_SKIP_CATS = ['phreak', 'hacker', 'anarchy', 'humor', 'music', 'piracy', 'sf', 'drugs', 'media'];
 
+// Phase AN TASK 2: BBS filenames that indicate index/readme/utility files — skip these
+const BBS_JUNK_FN_PREFIXES = [
+  'readme', 'index', 'license', 'install', 'setup', 'makefile',
+  'copying', 'changelog', 'changes', 'history', 'todo', 'manifest',
+  'authors', 'credits', '00index', 'aaaread',
+];
+
 async function fetchTextfilesMultipleCandidates(
   source: DbScannerSource,
   isOriginScan = false,
@@ -3805,6 +3871,8 @@ async function fetchTextfilesMultipleCandidates(
         if (!resolved.startsWith('https://www.textfiles.com/')) continue;
         if (resolved === dirUrl) continue;
         if (href.endsWith('.txt') || href.toLowerCase().endsWith('.txt')) {
+          const fn = resolved.split('/').pop()?.toLowerCase().replace(/\.txt$/, '') ?? '';
+          if (BBS_JUNK_FN_PREFIXES.some((p) => fn === p || fn.startsWith(p + '_') || fn.startsWith(p + '-'))) continue;
           if (!txtLinks.includes(resolved)) txtLinks.push(resolved);
         } else if (href.endsWith('/') && resolved !== 'https://www.textfiles.com/' && !subdirs.includes(resolved)) {
           subdirs.push(resolved);
@@ -4012,6 +4080,167 @@ const BBS_CATEGORY_TOPIC_NAME: Record<string, string> = {
   media:     'Lost Media',
   music:     'Lost Media',
 };
+
+// Phase AN TASK 5: Extract date and location metadata from UFO report pages.
+// Returns a short metadata string to append to captureNotes, or '' if nothing found.
+function extractUfoReportMetadata(html: string): string {
+  const text = html.slice(0, 80_000).replace(/<[^>]{0,500}>/g, ' ').replace(/\s{2,}/g, ' ');
+  const DATE_RE  = /(?:date of (?:incident|sighting|event|occurrence)|date reported|occurred|event date)\s*:?\s*([^\n<]{5,40})/i;
+  const LOC_RE   = /(?:location|city|state|country|near|reported from)\s*:?\s*([^\n<]{4,60})/i;
+  const SHAPE_RE = /(?:shape|object shape|ufo shape)\s*:?\s*([^\n<]{3,30})/i;
+  const dateM  = text.match(DATE_RE);
+  const locM   = text.match(LOC_RE);
+  const shapeM = text.match(SHAPE_RE);
+  const parts: string[] = [];
+  if (dateM)  parts.push(`Date: ${dateM[1].trim().slice(0, 40)}`);
+  if (locM)   parts.push(`Location: ${locM[1].trim().slice(0, 50)}`);
+  if (shapeM) parts.push(`Shape: ${shapeM[1].trim().slice(0, 25)}`);
+  return parts.length > 0 ? `[UFO Report · ${parts.join(' · ')}]` : '';
+}
+
+function isFringeArchiveSource(source: DbScannerSource): boolean {
+  if (isErowidSource(source)) return false;
+  const tax = classifySourceTaxonomy(source.source_type ?? '', source.name);
+  return tax === 'occult_archive';
+}
+
+// Phase AN TASK 3+4: Deep crawler for occult/fringe archive sources.
+// Treats the source base_url as a directory index — extracts child document links,
+// fetches each, and returns article/document candidates. Handles:
+//   sacred-texts.com, bibliotecapleyades.net, rexresearch.com, keelynet.com, etc.
+async function fetchOccultArchiveCandidates(
+  source: DbScannerSource,
+  isDeepTruth: boolean,
+): Promise<{
+  candidates:  FetchedCandidate[];
+  error?:      string;
+  debugInfo:   { linksFound: number; pagesFetched: number; pagesRejected: number; rejectReasons: string[] };
+}> {
+  const candidates: FetchedCandidate[] = [];
+  let linksFound = 0, pagesFetched = 0, pagesRejected = 0;
+  const rejectReasons: string[] = [];
+  const taxonomy = classifySourceTaxonomy(source.source_type ?? '', source.name);
+
+  const UA_HDR = {
+    'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
+    'Accept':     'text/html,application/xhtml+xml;q=0.9',
+  };
+
+  if (!source.base_url) return { candidates, error: 'no base URL', debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
+  let indexHtml: string;
+  try {
+    const res = await fetch(source.base_url, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(14_000) });
+    if (!res.ok) return { candidates, error: `HTTP ${res.status}`, debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
+    indexHtml = await res.text();
+  } catch (err) {
+    return { candidates, error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`, debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
+  }
+
+  let baseHostname: string;
+  try { baseHostname = new URL(source.base_url).hostname; }
+  catch { return { candidates, error: 'invalid base URL', debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } }; }
+
+  const pageAnchors = extractAnchors(indexHtml.slice(0, 200_000), source.base_url);
+
+  // Paths that indicate navigation/index/TOC pages — skip as candidates
+  const IDX_PATTERNS = [
+    'index.htm', 'index.html', '/index', 'toc.htm', 'toc.html', '/toc',
+    '/contents', '/readme', '/sitemap', '/search', '/about', '/contact',
+    '/links', '/news', '/welcome', '/intro', '/what', '/home',
+  ];
+  const isIdxPath  = (u: string) => IDX_PATTERNS.some((p) => u.toLowerCase().includes(p));
+  const isHomePath = (u: string) => { try { const pn = new URL(u).pathname; return pn === '/' || pn === ''; } catch { return false; } };
+  const DOC_EXTS   = ['.htm', '.html', '.txt', '.pdf'];
+  const hasDocExt  = (u: string) => DOC_EXTS.some((e) => u.toLowerCase().endsWith(e));
+  // Article-style paths — numeric IDs, word-slug docs, or subject dirs
+  const ARTICLE_PATH_RE = /\/(?:[a-z0-9_-]{3,60}\.(?:htm|html|txt)|[a-z0-9_-]{4,}\/[a-z0-9_-]{3,60}\.(?:htm|html|txt))$/i;
+
+  const seenLinks = new Set<string>([source.base_url, source.base_url + '/']);
+  const childLinks: string[] = [];
+
+  for (const { href } of pageAnchors) {
+    if (childLinks.length >= 30) break;
+    if (seenLinks.has(href)) continue;
+    seenLinks.add(href);
+    try { if (new URL(href).hostname !== baseHostname) continue; } catch { continue; }
+    if (isHomePath(href) || isIdxPath(href)) continue;
+    if (!hasDocExt(href) && !ARTICLE_PATH_RE.test(href)) continue;
+    childLinks.push(href);
+  }
+
+  linksFound = childLinks.length;
+  if (linksFound === 0) {
+    return { candidates, error: 'No child document links found on index page', debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
+  }
+
+  // Shuffle for sampling variety
+  for (let i = childLinks.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [childLinks[i], childLinks[j]] = [childLinks[j], childLinks[i]];
+  }
+
+  const cap = isDeepTruth ? 8 : 5;
+
+  for (const childUrl of childLinks.slice(0, cap * 2)) {
+    if (candidates.length >= cap) break;
+
+    let html: string;
+    try {
+      const res = await fetch(childUrl, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(12_000) });
+      if (!res.ok) { pagesRejected++; rejectReasons.push(`HTTP ${res.status} — ${childUrl.slice(-50)}`); continue; }
+      const ct = res.headers.get('content-type') ?? '';
+      if (!ct.includes('text/html') && !ct.includes('xhtml')) { pagesRejected++; rejectReasons.push(`non-html: ${ct.split(';')[0]}`); continue; }
+      html = await res.text();
+    } catch { pagesRejected++; rejectReasons.push(`fetch-error: ${childUrl.slice(-50)}`); continue; }
+
+    pagesFetched++;
+    const extracted = extractPageData(html, childUrl);
+    const title     = cleanTitle(extracted.title) || source.name;
+    const summary   = buildSummary(extracted.description, extracted.snippet);
+
+    const quality = dtsArchivePassesMinimum(childUrl, title, summary);
+    if (!quality.pass) { pagesRejected++; rejectReasons.push(`quality: ${quality.reason} — "${title.slice(0, 35)}"`); continue; }
+
+    const bad  = detectBadCandidate(childUrl, title, summary);
+    const conf = scoreExtractionConfidence(title, summary);
+    const heur = scoreStoryHeuristics(`${title} ${summary}`);
+    const docS = detectDocumentSignals(`${title} ${summary}`);
+    const fict = detectFictionOrLarp(`${title} ${summary}`);
+
+    const cand: FetchedCandidate = {
+      title:                title.slice(0, 200),
+      summary:              summary.slice(0, 2000),
+      sourceUrl:            extracted.canonicalUrl || childUrl,
+      category:             source.category_focus[0] ?? 'Internet Lore',
+      tags:                 ['scanner-source', 'archive', taxonomy.replace('_', '-'), 'deep-crawl'],
+      anomalyScore:         5,
+      categoryNote:         buildCategoryNote(source.category_focus, extracted.title, extracted.description),
+      extractionConfidence: conf.confidence,
+      extractionWarning:    conf.warning ?? 'Fringe archive content — internet artifact; unverified; curator review required',
+      passReason:           quality.reason,
+      badCandidateReason:   bad.bad ? bad.reason : undefined,
+      sourceImageUrl:       extracted.imageUrl || undefined,
+      mediaType:            extracted.imageUrl ? 'image' : 'webpage',
+      attributionText:      `${source.name} · ${taxonomy.replace(/_/g, ' ')}`,
+      captureNotes:         `Deep archive document from ${source.name}. Discovered via index-page link scan. Internet artifact — unverified archived claim.`,
+      storyScore:           heur.storyScore,
+      storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+      finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: bad.bad }),
+      sourceTaxonomy:       taxonomy,
+      documentSignalScore:  docS > 0 ? docS : undefined,
+      isFictionLarp:        fict.isFiction || undefined,
+      isArchived:           false,
+    };
+
+    candidates.push(cand);
+  }
+
+  return {
+    candidates,
+    error:     candidates.length === 0 ? 'No quality archive documents extracted from this source' : undefined,
+    debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Erowid Experience Vaults connector
