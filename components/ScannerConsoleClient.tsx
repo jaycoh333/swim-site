@@ -14,14 +14,14 @@ import {
   type ScanMode,
 } from '@/app/actions';
 import { getSourceRecommendation } from '@/lib/source-utils';
-import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, PRESET_DEEP_TRUTH, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
+import { SCAN_PRESETS, PRESET_ALL, PRESET_DEBUG, PRESET_DEEP_TRUTH, PRESET_LIVE_FEED, PRESET_DOCUMENTS, PRESET_BBS_WEB, MAX_PRESET_SOURCES, type ScanPreset } from '@/lib/scan-presets';
 import { isDeepSourceTarget, getTaxonomyMeta, type SourceTaxonomy } from '@/lib/source-taxonomy';
 import { formatTelegramPost, formatXPost } from '@/lib/social-formatters';
 import { CATEGORY_ORDER } from '@/lib/forum-types';
 import { computeSourceHealthMap, healthBadgeCls, HEALTH_LABELS, type SourceHealth } from '@/lib/discovery-engine';
 import { detectClusters, type ClusterResult } from '@/lib/cluster-detection';
 import type { DbScannerSource, DbRecoveredSignal } from '@/lib/supabase/types';
-import type { SessionSourceResult, FetchedCandidate, SourceDiagnostic } from '@/lib/scanner-fetch-types';
+import type { SessionSourceResult, FetchedCandidate, SourceDiagnostic, ScanTrace, ScanMemoryTrace } from '@/lib/scanner-fetch-types';
 import { generateSignalAnalysis, type SignalAnalysis } from '@/lib/story-intelligence';
 
 // ---------------------------------------------------------------------------
@@ -811,7 +811,7 @@ export function ScannerConsoleClient({
   const [showDiagnostics,  setShowDiagnostics]  = useState(false);
   const [showRejected,     setShowRejected]     = useState(false);
   // Preset state
-  const [activePreset,      setActivePreset]      = useState<string>(PRESET_ALL);
+  const [activePreset,      setActivePreset]      = useState<string>(PRESET_DEEP_TRUTH);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
   const [showPresetTest,    setShowPresetTest]    = useState<boolean>(false);
   const [activeTab,         setActiveTab]         = useState<'strong' | 'needs-review' | 'low-signal' | 'blocked' | 'lore-layer'>('strong');
@@ -861,7 +861,7 @@ export function ScannerConsoleClient({
   const activeScanSourcesRef = useRef<typeof enabledSources>([]);
 
   // Phase AA: scan mode selector (replaces chaosMode + originBias toggles)
-  const [scanMode, setScanMode] = useState<ScanMode>('fresh');
+  const [scanMode, setScanMode] = useState<ScanMode>('deep-archive');
 
   // Phase AI: batch scan progress
   const [batchProgress, setBatchProgress] = useState<{
@@ -875,11 +875,12 @@ export function ScannerConsoleClient({
   const [memDebugOpen,   setMemDebugOpen]   = useState(false);
   const [memStats,       setMemStats]       = useState<{ totalUrls: number; byType: { seen: number; skipped: number; posted: number }; oldestMs: number | null; newestMs: number | null } | null>(null);
   const [memLoading,     setMemLoading]     = useState(false);
+  // Phase AO: scan freshness trace history — last 3 scan traces for comparison
+  const [scanTraceHistory, setScanTraceHistory] = useState<ScanTrace[]>([]);
+  const [showFreshnessTrace, setShowFreshnessTrace] = useState(false);
 
   // Phase T: feed sort + filter + quick review
-  const [feedSort,    setFeedSort]    = useState<'best' | 'newest' | 'oldest' | 'weirdest' | 'unseen'>(
-    (activePreset === 'origin-scan' || activePreset === PRESET_DEEP_TRUTH) ? 'oldest' : 'best'
-  );
+  const [feedSort,    setFeedSort]    = useState<'best' | 'newest' | 'oldest' | 'weirdest' | 'unseen'>('oldest');
   const [feedFilters, setFeedFilters] = useState<Set<string>>(new Set());
   const [quickReview, setQuickReview] = useState(false);
 
@@ -1130,6 +1131,10 @@ export function ScannerConsoleClient({
     const isDebugRun = activePreset === PRESET_DEBUG;
     if (!isDebugRun && !activeScanSources.length) return;
 
+    // Phase AO TASK 3: capture memory stats BEFORE scan for freshness trace
+    let memBefore: { stats: { totalUrls: number; byType: { seen: number; skipped: number; posted: number }; oldestMs: number | null; newestMs: number | null }; isServerless: boolean; memoryPath: string } | null = null;
+    try { memBefore = await getScanMemoryStatsAction(); } catch { /* ignore */ }
+
     // Save current results as "previous" and move their URLs into the seen set
     if (scanPhase === 'done' && scanResults.length > 0) {
       setPrevScanResults(scanResults);
@@ -1201,27 +1206,27 @@ export function ScannerConsoleClient({
     setBatchProgress(null);
 
     // Sort merged results by combined score so highest-value items are first.
-    // Phase AK TASK 4: DTS sorts primarily by oldIntrigueScore (age+specificity+artifact quality).
+    // Phase AP TASK 4: DTS strict archive sort — archiveSignalScore → oldIntrigueScore → year (older first) → documentSignalScore → taxonomy depth.
     const isDTSSort = activePreset === PRESET_DEEP_TRUTH;
+    const SRC_TAX_BONUS: Record<string, number> = { bbs: 10, wayback: 8, archive_forum: 6, archive: 4, mediawiki: 3 };
+    function dtsCandidateScore(c: FetchedCandidate): number {
+      return (c.archiveSignalScore  ?? 0) * 3.0
+           + (c.oldIntrigueScore    ?? 0) * 2.5
+           + (c.archiveYear != null ? Math.max(0, 2020 - c.archiveYear) * 0.3 : 0)
+           + (c.documentSignalScore ?? 0) * 1.5
+           + (SRC_TAX_BONUS[c.sourceType ?? ''] ?? 0);
+    }
+    function liveCandidateScore(c: FetchedCandidate): number {
+      return (c.archiveSignalScore  ?? 0) * 1.5
+           + (c.originPriorityScore ?? 0) * 1.2
+           + (c.finalPriorityScore  ?? 0)
+           + (c.storyScore          ?? 0) * 0.5;
+    }
     const sortedResults = [...allResults].sort((a, b) => {
       if (a.status === 'error') return 1;
       if (b.status === 'error') return -1;
-      const scoreA = isDTSSort
-        ? (a.candidate.oldIntrigueScore   ?? 0) * 3.0
-        + (a.candidate.documentSignalScore ?? 0) * 2.0
-        + (a.candidate.archiveSignalScore  ?? 0) * 0.5
-        : (a.candidate.archiveSignalScore  ?? 0) * 1.5
-        + (a.candidate.originPriorityScore ?? 0) * 1.2
-        + (a.candidate.finalPriorityScore  ?? 0)
-        + (a.candidate.storyScore          ?? 0) * 0.5;
-      const scoreB = isDTSSort
-        ? (b.candidate.oldIntrigueScore   ?? 0) * 3.0
-        + (b.candidate.documentSignalScore ?? 0) * 2.0
-        + (b.candidate.archiveSignalScore  ?? 0) * 0.5
-        : (b.candidate.archiveSignalScore  ?? 0) * 1.5
-        + (b.candidate.originPriorityScore ?? 0) * 1.2
-        + (b.candidate.finalPriorityScore  ?? 0)
-        + (b.candidate.storyScore          ?? 0) * 0.5;
+      const scoreA = isDTSSort ? dtsCandidateScore(a.candidate) : liveCandidateScore(a.candidate);
+      const scoreB = isDTSSort ? dtsCandidateScore(b.candidate) : liveCandidateScore(b.candidate);
       return scoreB - scoreA;
     });
 
@@ -1237,6 +1242,44 @@ export function ScannerConsoleClient({
       .filter((r) => r.status !== 'error')
       .map((r) => r.candidate);
     setClusterList(detectClusters(allCandidates));
+
+    // Phase AO TASK 1-3: build scan trace for freshness comparison
+    try {
+      let memAfter: typeof memBefore = null;
+      try { memAfter = await getScanMemoryStatsAction(); } catch { /* ignore */ }
+      const resultUrls = sortedResults
+        .filter((r) => r.status !== 'error')
+        .map((r) => r.candidate.sourceUrl);
+      const memStats: ScanMemoryTrace = {
+        seenBefore:    memBefore?.stats.byType.seen    ?? 0,
+        skippedBefore: memBefore?.stats.byType.skipped ?? 0,
+        postedBefore:  memBefore?.stats.byType.posted  ?? 0,
+        seenAfter:     memAfter?.stats.byType.seen    ?? 0,
+        skippedAfter:  memAfter?.stats.byType.skipped ?? 0,
+        postedAfter:   memAfter?.stats.byType.posted  ?? 0,
+        isServerless:  memAfter?.isServerless ?? false,
+        memoryPath:    memAfter?.memoryPath ?? 'unknown',
+      };
+      const newTrace: ScanTrace = {
+        scanId:          scanId + 1,
+        timestamp:       new Date().toISOString(),
+        preset:          activePreset,
+        scanMode,
+        sourceIds:       sourceIdsToRun,
+        sourceNames:     sourceIdsToRun.map((id) => {
+          const d = allDiagnostics.find((x) => x.sourceId === id);
+          return d?.sourceName ?? id;
+        }),
+        sourceCount:     sourceIdsToRun.length,
+        enabledCount:    activeScanSources.length,
+        excludedUrlCount: excludeUrls.length,
+        memStats,
+        diagnostics:     allDiagnostics,
+        resultUrls,
+        topUrls:         resultUrls.slice(0, 5),
+      };
+      setScanTraceHistory((prev) => [newTrace, ...prev].slice(0, 3));
+    } catch { /* never block on trace */ }
   }
 
   async function handleQueueCandidate(result: SessionSourceResult) {
@@ -1588,30 +1631,28 @@ export function ScannerConsoleClient({
           <div className="flex flex-1 flex-col gap-3 p-5">
 
             {/* ── Preset picker ── */}
-            <div className="flex flex-col gap-2">
-              <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">Choose a preset</p>
-
-              {SCAN_PRESETS.map((preset) => {
+            {(() => {
+              const colorMap: Record<string, string> = {
+                emerald: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+                sky:     'border-sky-500/40     bg-sky-500/10     text-sky-300',
+                amber:   'border-amber-500/40   bg-amber-500/10   text-amber-300',
+                violet:  'border-violet-500/40  bg-violet-500/10  text-violet-300',
+              };
+              const colorDim: Record<string, string> = {
+                emerald: 'text-emerald-400/60',
+                sky:     'text-sky-400/60',
+                amber:   'text-amber-400/60',
+                violet:  'text-violet-400/60',
+              };
+              function PresetButton({ preset }: { preset: ScanPreset }) {
                 const matchCount = sourcesForPreset(preset.id).length;
                 const isActive   = activePreset === preset.id;
-                const colorMap: Record<string, string> = {
-                  emerald: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-                  sky:     'border-sky-500/40     bg-sky-500/10     text-sky-300',
-                  amber:   'border-amber-500/40   bg-amber-500/10   text-amber-300',
-                  violet:  'border-violet-500/40  bg-violet-500/10  text-violet-300',
-                };
-                const colorDim: Record<string, string> = {
-                  emerald: 'text-emerald-400/60',
-                  sky:     'text-sky-400/60',
-                  amber:   'text-amber-400/60',
-                  violet:  'text-violet-400/60',
-                };
                 const activeCls  = isActive ? colorMap[preset.color]  : 'border-white/8 bg-white/[0.02] text-slate-300';
                 const taglineCls = isActive ? colorDim[preset.color]   : 'text-slate-600';
                 return (
                   <button
                     key={preset.id}
-                    onClick={() => setActivePreset(isActive ? PRESET_ALL : preset.id)}
+                    onClick={() => setActivePreset(isActive ? PRESET_DEEP_TRUTH : preset.id)}
                     className={`w-full rounded-xl border px-4 py-3 text-left transition-all hover:border-white/15 hover:bg-white/[0.04] ${activeCls}`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1628,22 +1669,58 @@ export function ScannerConsoleClient({
                     )}
                   </button>
                 );
-              })}
+              }
+              const primaryPresets   = SCAN_PRESETS.filter((p) => p.group === 'primary');
+              const secondaryPresets = SCAN_PRESETS.filter((p) => p.group === 'secondary');
+              const activePresetDef  = SCAN_PRESETS.find((p) => p.id === activePreset);
+              return (
+                <div className="flex flex-col gap-3">
+                  {/* Mode explanation banner */}
+                  {activePresetDef && (
+                    <div className={`rounded-xl border px-4 py-3 ${colorMap[activePresetDef.color] ?? 'border-white/10 bg-white/[0.03] text-slate-300'}`}>
+                      <p className={`text-[11px] font-bold uppercase tracking-widest mb-1 ${colorDim[activePresetDef.color] ?? 'text-slate-500'}`}>
+                        {activePresetDef.name}
+                      </p>
+                      <p className={`text-[12px] leading-snug ${colorDim[activePresetDef.color] ?? 'text-slate-400'}`}>
+                        {activePresetDef.modeExplanation}
+                      </p>
+                    </div>
+                  )}
+                  {activePreset === PRESET_ALL && (
+                    <div className="rounded-xl border border-red-500/25 bg-red-500/[0.05] px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-widest text-red-400/60 mb-1">Mixed Debug Scan</p>
+                      <p className="text-[12px] leading-snug text-red-400/50">Mixed Debug Scan includes modern sources and is not the Deep Truth mode.</p>
+                    </div>
+                  )}
 
-              {/* All sources option */}
-              <button
-                onClick={() => setActivePreset(PRESET_ALL)}
-                className={`w-full rounded-xl border px-4 py-3 text-left transition-all hover:border-white/15 hover:bg-white/[0.04] ${activePreset === PRESET_ALL ? 'border-white/20 bg-white/[0.05] text-white' : 'border-white/8 bg-white/[0.02] text-slate-400'}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[14px] font-bold">All Sources</span>
-                  <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[12px] font-semibold text-slate-500">
-                    {enabledSources.length} enabled
-                  </span>
+                  {/* Primary modes */}
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-600">Primary Modes</p>
+                    {primaryPresets.map((preset) => <PresetButton key={preset.id} preset={preset} />)}
+                  </div>
+
+                  {/* Secondary / Debug */}
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-700">Secondary / Debug</p>
+                    {secondaryPresets.map((preset) => <PresetButton key={preset.id} preset={preset} />)}
+
+                    {/* Mixed Debug Scan — demoted, shown last */}
+                    <button
+                      onClick={() => setActivePreset(PRESET_ALL)}
+                      className={`w-full rounded-xl border px-4 py-3 text-left transition-all hover:border-white/15 hover:bg-white/[0.04] ${activePreset === PRESET_ALL ? 'border-red-500/30 bg-red-500/[0.06] text-red-300' : 'border-white/6 bg-white/[0.01] text-slate-600'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[13px] font-bold">Mixed Debug Scan</span>
+                        <span className="shrink-0 rounded-full border border-white/8 bg-white/4 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                          {enabledSources.length} enabled
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-slate-700">Scans every enabled source including modern. Not a Deep Truth scan.</p>
+                    </button>
+                  </div>
                 </div>
-                <p className="mt-0.5 text-[12px] text-slate-600">Scan every enabled source — use if you manage sources manually.</p>
-              </button>
-            </div>
+              );
+            })()}
 
             {/* ── Active sources for selected preset ── */}
             {activePreset !== PRESET_ALL && (
@@ -2319,29 +2396,46 @@ export function ScannerConsoleClient({
 
                   {/* ── Scan results header ── */}
                   {(() => {
-                    const isDTS = activePreset === PRESET_DEEP_TRUTH;
-                    const artifactWord  = isDTS ? 'artifact' : 'signal';
-                    const artifactsWord = isDTS ? 'artifacts' : 'signals';
+                    const isDTS      = activePreset === PRESET_DEEP_TRUTH;
+                    const isLiveFeed = activePreset === PRESET_LIVE_FEED || activePreset === 'weird-reddit' || activePreset === 'encounters' || activePreset === 'ufo-entities';
+                    // Mode-specific copy
+                    const modeLabel   = isDTS ? 'Deep Truth Scanner' : isLiveFeed ? 'Live Anomaly Feed' : `Scan #${scanId}`;
+                    const fetchedWord = isDTS ? 'archive signals' : isLiveFeed ? 'current reports' : 'fetched';
+                    const strongWord  = isDTS ? 'artifacts'       : isLiveFeed ? 'recent signals'  : 'strong';
+                    const titleWord   = isDTS ? 'recovered artifacts'       : isLiveFeed ? 'current reports'          : 'signals';
+                    const titleWords  = isDTS ? 'recovered artifacts'       : isLiveFeed ? 'current reports'          : 'signals';
+                    const noResultMsg = isDTS
+                      ? (candidatesFetched > 0 ? 'Not enough archive artifacts found — enable more origin sources.' : 'No archive artifacts recovered')
+                      : isLiveFeed
+                      ? (candidatesFetched > 0 ? `${candidatesFetched} found — no strong current reports` : 'Scan complete')
+                      : (candidatesFetched > 0 ? `${candidatesFetched} fetched — no strong candidates`   : 'Scan complete');
+                    const borderCls = isDTS
+                      ? 'border-violet-500/20 bg-violet-500/[0.04]'
+                      : isLiveFeed
+                      ? 'border-emerald-500/20 bg-emerald-500/[0.03]'
+                      : 'border-white/14 bg-white/[0.05]';
+                    const labelCls = isDTS ? 'text-violet-400/60' : isLiveFeed ? 'text-emerald-500/70' : 'text-emerald-600/70';
+                    const fetchedBadgeCls = isDTS
+                      ? 'border-violet-500/30 bg-violet-500/10 text-violet-300'
+                      : isLiveFeed
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-sky-500/30 bg-sky-500/10 text-sky-300';
                     return (
-                  <div className={`rounded-2xl border px-5 py-5 ${isDTS ? 'border-violet-500/20 bg-violet-500/[0.04]' : 'border-white/14 bg-white/[0.05]'}`}>
-                    <p className={`mb-1 text-[11px] font-bold uppercase tracking-[0.25em] ${isDTS ? 'text-violet-400/60' : 'text-emerald-600/70'}`}>
-                      {isDTS ? 'Deep Truth Scanner' : `Scan #${scanId}`} · {candidatesFetched} {isDTS ? 'archive signals' : 'found'}{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
+                  <div className={`rounded-2xl border px-5 py-5 ${borderCls}`}>
+                    <p className={`mb-1 text-[11px] font-bold uppercase tracking-[0.25em] ${labelCls}`}>
+                      {modeLabel} · {candidatesFetched} {fetchedWord}{simHiddenCount > 0 ? ` · ${simHiddenCount} similar hidden` : ''}
                     </p>
                     <h2 className="mb-3 text-[28px] font-bold tracking-tight text-white">
                       {filteredGoodResults.length > 0
-                        ? `${filteredGoodResults.length} recovered internet ${filteredGoodResults.length !== 1 ? artifactsWord : artifactWord}`
-                        : candidatesFetched > 0
-                          ? isDTS
-                            ? 'Not enough archive artifacts found — enable more origin sources.'
-                            : `${candidatesFetched} fetched — no strong candidates`
-                          : isDTS ? 'No archive artifacts recovered' : 'Scan complete'}
+                        ? `${filteredGoodResults.length} ${filteredGoodResults.length !== 1 ? titleWords : titleWord}`
+                        : noResultMsg}
                     </h2>
                     <div className="flex flex-wrap gap-2">
-                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${isDTS ? 'border-violet-500/30 bg-violet-500/10 text-violet-300' : 'border-sky-500/30 bg-sky-500/10 text-sky-300'}`}>
-                        {candidatesFetched} {isDTS ? 'archive signals' : 'fetched'}
+                      <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${fetchedBadgeCls}`}>
+                        {candidatesFetched} {fetchedWord}
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${filteredGoodResults.length > 0 ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
-                        {filteredGoodResults.length} {isDTS ? 'artifacts' : 'strong'}
+                        {filteredGoodResults.length} {strongWord}
                       </span>
                       <span className={`rounded-full border px-3 py-1 text-[14px] font-bold tabular-nums ${needsReview.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-white/10 bg-white/[0.02] text-slate-600'}`}>
                         {needsReview.length} needs review
@@ -3574,6 +3668,148 @@ export function ScannerConsoleClient({
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* ── Phase AO: Freshness Trace ── */}
+                  {scanTraceHistory.length > 0 && (
+                    <div className="rounded-xl border border-white/6 bg-white/[0.018]">
+                      <button
+                        className="flex w-full items-center justify-between px-4 py-3 text-left"
+                        onClick={() => setShowFreshnessTrace((v) => !v)}
+                      >
+                        <span className="text-[13px] font-semibold uppercase tracking-widest text-slate-600">
+                          Freshness Trace · {scanTraceHistory.length} scan{scanTraceHistory.length !== 1 ? 's' : ''}
+                        </span>
+                        <span className="text-[12px] text-slate-700">{showFreshnessTrace ? '▲ hide' : '▼ show'}</span>
+                      </button>
+                      {showFreshnessTrace && (() => {
+                        const latest = scanTraceHistory[0];
+                        const prev1  = scanTraceHistory[1];
+                        const prev2  = scanTraceHistory[2];
+
+                        function urlOverlap(a: ScanTrace, b: ScanTrace) {
+                          const setB = new Set(b.resultUrls);
+                          const n = a.resultUrls.filter((u) => setB.has(u)).length;
+                          return { count: n, pct: a.resultUrls.length > 0 ? Math.round(100 * n / a.resultUrls.length) : 0 };
+                        }
+                        function srcOverlap(a: ScanTrace, b: ScanTrace) {
+                          const setB = new Set(b.sourceIds);
+                          const n = a.sourceIds.filter((id) => setB.has(id)).length;
+                          return { count: n, pct: a.sourceIds.length > 0 ? Math.round(100 * n / a.sourceIds.length) : 0 };
+                        }
+
+                        const causes: string[] = [];
+                        if (latest.memStats.isServerless && latest.memStats.seenBefore === 0 && latest.memStats.seenAfter > 0) {
+                          causes.push('SERVERLESS: scan memory resets between function invocations. URLs from prior scans are NOT excluded. Fix: move seen-URL tracking to Supabase or external KV store.');
+                        } else if (latest.memStats.seenBefore === 0 && latest.memStats.seenAfter > 0 && !latest.memStats.isServerless) {
+                          causes.push('Memory was empty before this scan — first run or memory was cleared.');
+                        }
+                        if (latest.memStats.seenAfter === latest.memStats.seenBefore && latest.resultUrls.length > 0) {
+                          causes.push('Memory did not grow after scan — recordSeenUrls may not be persisting.');
+                        }
+                        if (prev1) {
+                          const ov = urlOverlap(latest, prev1);
+                          if (ov.pct >= 60) causes.push(`HIGH OVERLAP with previous scan (${ov.pct}% of URLs are the same). Sources may be returning the same top results every run.`);
+                          else if (ov.pct >= 30) causes.push(`MODERATE OVERLAP with previous scan (${ov.pct}% URL match). Some sources are repeating.`);
+                        }
+
+                        return (
+                          <div className="border-t border-white/6 px-4 pb-4 pt-3 space-y-4">
+
+                            {/* Memory trace */}
+                            <div>
+                              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">Memory System</p>
+                              <div className="rounded-lg bg-white/[0.02] border border-white/5 px-3 py-2.5 text-[12px] space-y-1">
+                                <div className="flex items-center gap-2">
+                                  {latest.memStats.isServerless
+                                    ? <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-orange-400 font-mono text-[11px]">SERVERLESS</span>
+                                    : <span className="rounded bg-emerald-500/12 px-1.5 py-0.5 text-emerald-400 font-mono text-[11px]">LOCAL FS</span>
+                                  }
+                                  <span className="text-slate-600 font-mono">{latest.memStats.memoryPath}</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                  {(['seen','skipped','posted'] as const).map((t) => {
+                                    const before = t === 'seen' ? latest.memStats.seenBefore : t === 'skipped' ? latest.memStats.skippedBefore : latest.memStats.postedBefore;
+                                    const after  = t === 'seen' ? latest.memStats.seenAfter  : t === 'skipped' ? latest.memStats.skippedAfter  : latest.memStats.postedAfter;
+                                    const grew   = after > before;
+                                    return (
+                                      <div key={t} className="rounded border border-white/5 bg-white/[0.01] px-2 py-1.5 text-center">
+                                        <div className={`font-mono text-[16px] font-bold ${grew ? 'text-emerald-400' : 'text-slate-500'}`}>{before} → {after}</div>
+                                        <div className="text-[11px] uppercase tracking-wide text-slate-700">{t}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                {latest.memStats.isServerless && (
+                                  <p className="mt-1.5 text-[11px] text-orange-400/70">Vercel: memory is per-invocation only. Seen URLs from prior batches/runs are lost on each new cold start.</p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Scan overlap comparison */}
+                            {(prev1 || prev2) && (
+                              <div>
+                                <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-600">Scan Overlap (URL dedup analysis)</p>
+                                <div className="space-y-2">
+                                  {([prev1, prev2].filter(Boolean) as ScanTrace[]).map((prev, idx) => {
+                                    const uov = urlOverlap(latest, prev);
+                                    const sov = srcOverlap(latest, prev);
+                                    const label = idx === 0 ? 'vs Scan −1' : 'vs Scan −2';
+                                    const urgency = uov.pct >= 60 ? 'text-red-400' : uov.pct >= 30 ? 'text-orange-400' : 'text-emerald-400';
+                                    return (
+                                      <div key={idx} className="rounded-lg bg-white/[0.02] border border-white/5 px-3 py-2.5 text-[12px]">
+                                        <div className="flex items-center gap-3 mb-1.5">
+                                          <span className="text-slate-500 font-mono text-[11px]">{label}</span>
+                                          <span className="text-slate-600 text-[11px]">{prev.timestamp.slice(0,19).replace('T',' ')}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <div className="text-center rounded border border-white/5 py-1.5">
+                                            <div className={`font-mono text-[18px] font-bold ${urgency}`}>{uov.pct}%</div>
+                                            <div className="text-[11px] text-slate-700 uppercase tracking-wide">URL overlap ({uov.count}/{latest.resultUrls.length})</div>
+                                          </div>
+                                          <div className="text-center rounded border border-white/5 py-1.5">
+                                            <div className={`font-mono text-[18px] font-bold ${sov.pct >= 80 ? 'text-amber-400' : 'text-slate-500'}`}>{sov.pct}%</div>
+                                            <div className="text-[11px] text-slate-700 uppercase tracking-wide">source overlap ({sov.count}/{latest.sourceIds.length})</div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Excluded URLs */}
+                            <div className="text-[12px] text-slate-600">
+                              Excluded this scan: <span className="font-mono text-slate-400">{latest.excludedUrlCount}</span> client-side seen URLs ·
+                              Memory excluded: <span className="font-mono text-slate-400">{latest.memStats.seenBefore + latest.memStats.skippedBefore + latest.memStats.postedBefore}</span> persisted URLs
+                            </div>
+
+                            {/* Suspected cause */}
+                            {causes.length > 0 && (
+                              <div className="rounded-lg bg-amber-500/8 border border-amber-500/20 px-3 py-2.5">
+                                <p className="mb-1 text-[12px] font-bold text-amber-400">Suspected Stale Cause</p>
+                                {causes.map((c, i) => (
+                                  <p key={i} className="text-[12px] text-amber-300/80">{c}</p>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Latest trace metadata */}
+                            <details className="text-[11px] text-slate-700">
+                              <summary className="cursor-pointer hover:text-slate-500">Scan #{latest.scanId} metadata</summary>
+                              <div className="mt-1.5 space-y-0.5 pl-2 font-mono">
+                                <div>preset: {latest.preset} · mode: {latest.scanMode}</div>
+                                <div>sources: {latest.sourceCount} selected · {latest.enabledCount} enabled</div>
+                                <div>candidates found: {latest.resultUrls.length}</div>
+                                <div>top URLs: {latest.topUrls.slice(0,3).map(u => u.slice(0,60)).join(' | ')}</div>
+                              </div>
+                            </details>
+
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 

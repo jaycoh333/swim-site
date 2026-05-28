@@ -59,6 +59,7 @@ import {
   detectDocumentSignals,
   isDeepSourceTarget,
 } from '@/lib/source-taxonomy';
+import path from 'path';
 import { loadSeenUrls, recordSeenUrls, getScanMemoryStats, clearScanMemory } from '@/lib/scan-memory';
 import type { ScanMemoryStats } from '@/lib/scan-memory';
 import { pickRandomTopicGroup } from '@/lib/origin-topic-seeds';
@@ -1701,8 +1702,10 @@ export async function queueFetchedCandidateAction(input: {
 // Phase AA: Scan memory server actions
 // ---------------------------------------------------------------------------
 
-export async function getScanMemoryStatsAction(): Promise<{ stats: ScanMemoryStats }> {
-  return { stats: getScanMemoryStats() };
+export async function getScanMemoryStatsAction(): Promise<{ stats: ScanMemoryStats; isServerless: boolean; memoryPath: string }> {
+  const isServerless = !!(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
+  const memoryPath   = path.join(process.cwd(), 'data', 'scan-memory.json');
+  return { stats: getScanMemoryStats(), isServerless, memoryPath };
 }
 
 export async function clearScanMemoryAction(): Promise<{ ok: boolean }> {

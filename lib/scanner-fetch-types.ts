@@ -146,4 +146,40 @@ export interface SourceDiagnostic {
   fallbackSnapshotsFound?:     number;  // CDX snapshots discovered for the domain
   fallbackCandidatesPassed?:   number;  // candidates recovered from fallback
   fallbackCandidatesRejected?: number;  // fallback candidates that failed quality checks
+  // Phase AO: freshness trace fields
+  firstCandidateUrls?: string[];  // first 5 candidate URLs found (for overlap analysis)
+  yearWindowFrom?:     number;    // CDX era window start year used for this scan
+  yearWindowTo?:       number;    // CDX era window end year used for this scan
+  cdxQueryUrl?:        string;    // raw CDX API URL requested (for replay)
+}
+
+// ---------------------------------------------------------------------------
+// Phase AO: Scan-level freshness trace
+// ---------------------------------------------------------------------------
+
+export interface ScanMemoryTrace {
+  seenBefore:    number;   // 'seen' type URLs in memory before the scan
+  skippedBefore: number;   // 'skipped' type URLs in memory before the scan
+  postedBefore:  number;   // 'posted' type URLs in memory before the scan
+  seenAfter:     number;   // after all batches finished
+  skippedAfter:  number;
+  postedAfter:   number;
+  isServerless:  boolean;  // true on Vercel — memory does NOT persist between invocations
+  memoryPath:    string;   // filesystem path of scan-memory.json
+}
+
+export interface ScanTrace {
+  scanId:          number;   // incremental counter from client
+  timestamp:       string;   // ISO date
+  preset:          string;   // activePreset value
+  scanMode:        string;   // scanMode value
+  sourceIds:       string[]; // all source IDs submitted this scan
+  sourceNames:     string[]; // corresponding source names
+  sourceCount:     number;
+  enabledCount:    number;   // sources that were enabled at scan time
+  excludedUrlCount: number;  // URLs excluded via client seenUrlsThisSession
+  memStats:        ScanMemoryTrace;
+  diagnostics:     SourceDiagnostic[]; // full per-source trace
+  resultUrls:      string[];  // all candidate URLs found (for overlap comparison)
+  topUrls:         string[];  // first 5 by sort order (quick at-a-glance)
 }
