@@ -250,8 +250,8 @@ function ScannerStatsBlock({ stats }: { stats: ScannerStats }) {
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
         {items.map(({ label, value }) => (
           <div key={label}>
-            <div className="mb-1 text-[11px] uppercase tracking-[0.20em] text-crt/30">{label}</div>
-            <div className="font-mono text-[1.6rem] tracking-[0.04em] text-crt/80 md:text-[1.8rem]">
+            <div className="mb-1 text-[13px] uppercase tracking-[0.20em] text-crt/32">{label}</div>
+            <div className="font-mono text-[1.8rem] tracking-[0.04em] text-crt/80 md:text-[2rem]">
               {value}
             </div>
           </div>
@@ -366,37 +366,71 @@ function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string })
         </div>
       )}
 
-      <div className="px-5 py-5 md:px-6 md:py-6">
+      <div className="px-5 py-6 md:px-6 md:py-7">
+
+        {/* Era + recovered badges */}
+        {(() => {
+          const eraMap: Record<string, string> = {
+            bbs:       'scanner-era-badge--bbs',
+            wayback:   'scanner-era-badge--wayback',
+            archive:   'scanner-era-badge--archive',
+            mediawiki: 'scanner-era-badge--mediawiki',
+          };
+          const eraLabel: Record<string, string> = {
+            bbs:       'BBS Archive',
+            wayback:   'Wayback',
+            archive:   'Archive.org',
+            mediawiki: 'MediaWiki',
+            forum:     'Forum Archive',
+            reddit:    'Reddit',
+            imageboard:'Imageboard',
+            pastebin:  'Pastebin',
+            irc:       'IRC Log',
+          };
+          const showEra = ['bbs','wayback','archive','mediawiki','forum','archive_forum'].includes(sig.sourceType);
+          return (
+            <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+              <span className={`scanner-recovered-badge ${sig.isReborn ? 'scanner-reborn-badge' : ''}`}>
+                ◈ {sig.isReborn ? 'Reborn' : 'Recovered'}
+              </span>
+              {showEra && (
+                <span className={`scanner-era-badge ${eraMap[sig.sourceType] ?? ''}`}>
+                  {eraLabel[sig.sourceType] ?? sig.sourceType}
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Meta row: category + signal ID */}
-        <div className="mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 scanner-signal-meta">
           <span
-            className="text-[12px] uppercase tracking-[0.16em]"
+            className="uppercase tracking-[0.16em]"
             style={{ color: `${sig.categoryColor}99` }}
           >
             {sig.category}
           </span>
           <span className="text-crt/18">·</span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-crt/30">
+          <span className="font-mono uppercase tracking-[0.14em] text-crt/30">
             {sig.id}
           </span>
           <span className="text-crt/18">·</span>
-          <span className="text-[11px] uppercase tracking-[0.12em] text-crt/28">
+          <span className="uppercase tracking-[0.12em] text-crt/28">
             {sig.source}
           </span>
         </div>
 
         {/* Title */}
-        <p className="mb-3 text-[1.45rem] font-bold leading-snug tracking-[0.02em] text-crt/92 md:text-[1.6rem]">
+        <p className="mb-4 scanner-signal-title">
           {sig.title}
         </p>
 
         {/* Quote-style excerpt */}
         <div
-          className="mb-3 border-l-2 pl-3"
+          className="mb-4 border-l-2 pl-4"
           style={{ borderColor: `${sig.categoryColor}30` }}
         >
-          <p className="text-[18px] leading-[1.65] tracking-[0.02em] text-crt/62 md:text-[19px]">
+          <p className="scanner-signal-excerpt">
             {sig.summary}
           </p>
         </div>
@@ -519,35 +553,49 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
   return (
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-20" />
+      {/* Archive depth atmospheric layer — falls back gracefully when image absent */}
+      <div aria-hidden className="aq-archive-bg" />
 
       <div className="relative z-10 mx-auto max-w-4xl px-4 py-4 md:px-6 md:py-6">
         <div className="forum-shell overflow-hidden">
 
           {/* ── Page header ── */}
-          <div className="border-b border-crt/12 px-6 py-8 md:px-10 md:py-10">
-            <div className="mb-2 text-[11px] uppercase tracking-[0.30em] text-crt/40">
-              swim · recovered signals terminal
+          <div className="aq-scan-sweep border-b border-crt/12 px-6 py-10 md:px-10 md:py-12">
+            <div className="relative z-10">
+              <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.30em] text-crt/40">
+                <span className="h-1.5 w-1.5 bg-crt/40 animate-pulse-glow" aria-hidden />
+                swim · recovered signals terminal
+              </div>
+              <h1 className="aq-heading-live text-[2.8rem] tracking-[0.10em] text-crt md:text-[3.6rem]">
+                SCANNER
+              </h1>
+              <p className="mt-4 max-w-2xl text-[1.25rem] leading-relaxed tracking-[0.04em] text-crt/62 md:text-[1.4rem]">
+                Monitoring forgotten internet edges — archived threads, dead sites,
+                BBS records, and early-web artifacts — for signals worth preserving.
+              </p>
             </div>
-            <h1 className="text-[2.2rem] tracking-[0.10em] text-crt md:text-[2.8rem]">
-              SCANNER
-            </h1>
-            <p className="mt-3 max-w-2xl text-[1.2rem] leading-relaxed tracking-[0.04em] text-crt/62 md:text-[1.3rem]">
-              Monitoring forgotten internet edges for signals worth preserving.
-            </p>
           </div>
 
           {/* ── Scanner stats ── */}
           <ScannerStatsBlock stats={displayStats} />
 
           {/* ── SWIM AI Terminal ── */}
-          <div className="border-b border-crt/10 px-6 py-8 md:px-10">
-            <div className="mb-5 flex items-center gap-3">
-              <span className="h-1.5 w-1.5 animate-pulse-glow bg-crt/55" aria-hidden="true" />
-              <span className="text-[11px] uppercase tracking-[0.28em] text-crt/48">
-                live signal feed
-              </span>
+          <div className="aq-scan-sweep relative border-b border-crt/10 px-6 py-8 md:px-10">
+            {/* Radar rings behind terminal */}
+            <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+              <div className="aq-radar-ring   absolute h-[340px] w-[340px] rounded-full border border-crt/[0.035]" />
+              <div className="aq-radar-ring-2 absolute h-[520px] w-[520px] rounded-full border border-crt/[0.025]" />
+              <div className="aq-radar-ring-3 absolute h-[700px] w-[700px] rounded-full border border-crt/[0.015]" />
             </div>
-            <SwimAiTerminal entries={terminalFeed} stats={terminalStats} />
+            <div className="relative z-10">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="h-1.5 w-1.5 animate-pulse-glow bg-crt/55" aria-hidden="true" />
+                <span className="text-[12px] uppercase tracking-[0.28em] text-crt/48">
+                  live signal feed
+                </span>
+              </div>
+              <SwimAiTerminal entries={terminalFeed} stats={terminalStats} />
+            </div>
           </div>
 
           {/* ── Activity timeline ── */}
@@ -574,8 +622,8 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
               {PROCESS_STEPS.map(({ step, label, desc }) => (
                 <div key={step} className="panel px-5 py-5">
                   <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-crt/35">{step}</div>
-                  <div className="mb-2 text-[1.05rem] tracking-[0.14em] text-crt/85">{label}</div>
-                  <p className="text-[14px] leading-relaxed tracking-[0.04em] text-crt/50">{desc}</p>
+                  <div className="mb-2 process-step-label tracking-[0.14em] text-crt/85">{label}</div>
+                  <p className="process-step-desc">{desc}</p>
                 </div>
               ))}
             </div>

@@ -66,7 +66,7 @@ export function Navigation() {
             height={64}
             className="nav-sigil flex-shrink-0"
           />
-          <span className="font-mono text-[1.15rem] tracking-[0.14em] md:text-[1.75rem] md:tracking-[0.20em]">$SWIM</span>
+          <span className="hidden sm:inline font-mono text-[1.15rem] tracking-[0.14em] md:text-[1.75rem] md:tracking-[0.20em]">$SWIM</span>
         </Link>
 
         {/* Desktop nav links */}

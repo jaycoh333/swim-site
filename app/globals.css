@@ -3185,3 +3185,189 @@ body::after {
   color: rgba(134, 212, 110, 0.22);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Phase AQ — Living Archive Atmosphere
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Radar pulse rings ─────────────────────────────────────── */
+@keyframes aq-radar-pulse {
+  0%, 100% { opacity: 0.48; transform: scale(0.88); }
+  50%       { opacity: 0.06; transform: scale(1.28); }
+}
+.aq-radar-ring   { animation: aq-radar-pulse 4.2s ease-in-out infinite; }
+.aq-radar-ring-2 { animation: aq-radar-pulse 4.2s ease-in-out infinite; animation-delay: -1.4s; }
+.aq-radar-ring-3 { animation: aq-radar-pulse 4.2s ease-in-out infinite; animation-delay: -2.8s; }
+
+/* ── Floating signal particles ─────────────────────────────── */
+@keyframes aq-float-particle {
+  0%   { opacity: 0;    transform: translateY(0)     translateX(0); }
+  12%  { opacity: 0.48; }
+  88%  { opacity: 0.28; }
+  100% { opacity: 0;    transform: translateY(-32px) translateX(6px); }
+}
+.aq-particle   { animation: aq-float-particle 4.8s ease-in-out infinite; }
+.aq-particle-2 { animation: aq-float-particle 4.8s ease-in-out infinite; animation-delay: -1.6s; }
+.aq-particle-3 { animation: aq-float-particle 4.8s ease-in-out infinite; animation-delay: -3.2s; }
+
+/* ── Heading live glitch — very restrained ─────────────────── */
+@keyframes aq-heading-glitch {
+  0%, 87%, 91%, 100% { opacity: 1; }
+  88% { opacity: 0.84;
+        text-shadow: 2px 0 0 rgba(255,0,60,0.16), -2px 0 0 rgba(0,220,200,0.14), 0 0 10px rgba(134,212,110,0.12); }
+  90% { opacity: 0.96; text-shadow: 0 0 10px rgba(134,212,110,0.14); }
+}
+.aq-heading-live { animation: aq-heading-glitch 13s infinite; }
+
+/* ── Scan sweep overlay ─────────────────────────────────────── */
+@keyframes aq-scan-down {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(300%); }
+}
+.aq-scan-sweep { position: relative; }
+.aq-scan-sweep::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  height: 35%;
+  background: linear-gradient(to bottom, transparent, rgba(134,212,110,0.020) 50%, transparent);
+  animation: aq-scan-down 18s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Terminal card enhanced hover glow ─────────────────────── */
+.terminal-card:hover {
+  box-shadow: 0 0 32px rgba(134,212,110,0.08),
+              0 0 0 1px rgba(134,212,110,0.052),
+              inset 0 0 24px rgba(134,212,110,0.022) !important;
+}
+
+/* ── Archive-depth atmospheric background layer ────────────── */
+.aq-archive-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: url('/images/swim/archive-depth-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.06;
+  mix-blend-mode: screen;
+}
+.aq-scanner-core-bg {
+  background-image: url('/images/swim/deep-scanner-core-bg.jpg');
+}
+
+/* ── Terminal window frame (thread artifact block) ─────────── */
+.aq-terminal-window {
+  border: 1px solid rgba(134,212,110,0.16);
+  background: rgba(2,5,3,0.97);
+  box-shadow: 0 0 0 1px rgba(134,212,110,0.032),
+              inset 0 0 28px rgba(134,212,110,0.016);
+}
+.aq-terminal-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  background: rgba(134,212,110,0.030);
+  border-bottom: 1px solid rgba(134,212,110,0.09);
+  font-size: 10px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: rgba(134,212,110,0.35);
+}
+.aq-terminal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Source-era badges on scanner cards ────────────────────── */
+.scanner-era-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  border: 1px solid rgba(215,168,92,0.26);
+  background: rgba(215,168,92,0.055);
+  color: rgba(215,168,92,0.70);
+}
+.scanner-era-badge--bbs {
+  border-color: rgba(180,130,60,0.28);
+  color: rgba(200,165,90,0.78);
+  background: rgba(180,130,60,0.065);
+}
+.scanner-era-badge--wayback {
+  border-color: rgba(150,100,220,0.28);
+  color: rgba(175,135,235,0.78);
+  background: rgba(120,80,200,0.065);
+}
+.scanner-era-badge--archive {
+  border-color: rgba(100,160,220,0.28);
+  color: rgba(135,185,238,0.78);
+  background: rgba(80,130,200,0.065);
+}
+.scanner-era-badge--mediawiki {
+  border-color: rgba(90,150,210,0.25);
+  color: rgba(130,180,230,0.75);
+  background: rgba(70,120,190,0.060);
+}
+
+/* ── Recovered / reborn badge on scanner cards ─────────────── */
+.scanner-recovered-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  border: 1px solid rgba(134,212,110,0.22);
+  background: rgba(134,212,110,0.055);
+  color: rgba(134,212,110,0.72);
+}
+.scanner-reborn-badge {
+  border-color: rgba(215,168,92,0.26);
+  background: rgba(215,168,92,0.06);
+  color: rgba(215,168,92,0.78);
+}
+
+/* ── Readability pass — scanner signal card text ───────────── */
+.scanner-signal-title {
+  font-size: clamp(1.45rem, 3vw, 1.7rem);
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: 0.025em;
+  color: rgba(134,212,110,0.92);
+}
+.scanner-signal-excerpt {
+  font-size: 19px;
+  line-height: 1.70;
+  letter-spacing: 0.025em;
+  color: rgba(134,212,110,0.62);
+}
+.scanner-signal-meta {
+  font-size: 14px;
+  letter-spacing: 0.15em;
+}
+
+/* ── Mobile nav — $SWIM wordmark ───────────────────────────── */
+/* Controlled via Tailwind hidden/sm:inline in Navigation.tsx  */
+
+/* ── Process step cards larger text ────────────────────────── */
+.process-step-label {
+  font-size: 1.15rem;
+  letter-spacing: 0.14em;
+}
+.process-step-desc {
+  font-size: 15px;
+  line-height: 1.65;
+  letter-spacing: 0.03em;
+  color: rgba(134,212,110,0.52);
+}
+

@@ -164,10 +164,20 @@ export function HomeClient({
             </div>
 
             {/* ── SWIM AI Terminal ── */}
-            <div className="border-t border-crt/10 px-4 pb-12 pt-10 md:px-6 md:pb-16 md:pt-14">
+            <div className="aq-scan-sweep relative border-t border-crt/10 px-4 pb-12 pt-10 md:px-6 md:pb-16 md:pt-14">
+              {/* Radar rings atmospheric layer */}
+              <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+                <div className="aq-radar-ring   absolute h-[280px] w-[280px] rounded-full border border-crt/[0.04]" />
+                <div className="aq-radar-ring-2 absolute h-[460px] w-[460px] rounded-full border border-crt/[0.028]" />
+                <div className="aq-radar-ring-3 absolute h-[640px] w-[640px] rounded-full border border-crt/[0.016]" />
+                {/* Floating particles */}
+                <div className="aq-particle   absolute h-1 w-1 rounded-full bg-crt/30" style={{ top: '35%', left: '22%' }} />
+                <div className="aq-particle-2 absolute h-1 w-1 rounded-full bg-crt/20" style={{ top: '60%', left: '72%' }} />
+                <div className="aq-particle-3 absolute h-0.5 w-0.5 rounded-full bg-crt/25" style={{ top: '48%', left: '45%' }} />
+              </div>
 
               {/* Section header */}
-              <div className="mb-8 text-center">
+              <div className="relative z-10 mb-8 text-center">
                 <div className="mb-2 flex items-center justify-center gap-2.5">
                   <span className="h-px w-8 bg-crt/15" aria-hidden="true" />
                   <span className="text-[10px] uppercase tracking-[0.36em] text-crt/35">
@@ -175,17 +185,19 @@ export function HomeClient({
                   </span>
                   <span className="h-px w-8 bg-crt/15" aria-hidden="true" />
                 </div>
-                <h2 className="mb-3 text-[1.7rem] tracking-[0.12em] text-crt/92 md:text-[2.1rem]">
+                <h2 className="aq-heading-live mb-3 text-[1.85rem] tracking-[0.12em] text-crt/92 md:text-[2.3rem]">
                   SWIM AI SIGNAL MONITOR
                 </h2>
-                <p className="mx-auto max-w-md text-[1.1rem] leading-relaxed tracking-[0.04em] text-crt/48 md:text-[1.2rem]">
+                <p className="mx-auto max-w-md text-[1.15rem] leading-relaxed tracking-[0.04em] text-crt/48 md:text-[1.25rem]">
                   Recovering strange artifacts from forgotten internet edges.
                 </p>
               </div>
 
-              <SwimAiTerminal entries={feed} stats={terminalStats} />
+              <div className="relative z-10">
+                <SwimAiTerminal entries={feed} stats={terminalStats} />
+              </div>
 
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <div className="relative z-10 mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
                 <Link href="/scanner" className="homepage-cta-primary">
                   [ VIEW SCANNER ]
                 </Link>

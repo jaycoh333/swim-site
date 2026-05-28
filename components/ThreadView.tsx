@@ -609,8 +609,8 @@ export function ThreadView({
         <div className={`forum-shell overflow-hidden ${eraClass}`}>
 
           {/* ── Thread header ── */}
-          <div className="border-b border-crt/12 px-4 py-4 md:px-5 md:py-5">
-            <h1 className="thread-view-title">{thread.title}</h1>
+          <div className="aq-scan-sweep border-b border-crt/12 px-4 py-5 md:px-5 md:py-6">
+            <h1 className="thread-view-title aq-heading-live">{thread.title}</h1>
 
             {/* Recovered signal hero metadata */}
             {meta.isRecoveredSignal && (
@@ -668,9 +668,25 @@ export function ThreadView({
             <SourceEraHero meta={meta} />
           )}
 
-          {/* TASK 1: Source-native artifact block (replaces generic excerpt) */}
+          {/* TASK 1: Source-native artifact block — wrapped in terminal window frame */}
           {meta.isRecoveredSignal && meta.excerpt && (
-            <div style={{ marginTop: 20 }}>
+            <div style={{ margin: '18px 20px 0' }} className="aq-terminal-window">
+              <div className="aq-terminal-titlebar">
+                <div className="aq-terminal-dot" style={{ background: 'rgba(215,168,92,0.45)' }} />
+                <div className="aq-terminal-dot" style={{ background: 'rgba(134,212,110,0.30)' }} />
+                <div className="aq-terminal-dot" style={{ background: 'rgba(134,212,110,0.18)' }} />
+                <span>source artifact</span>
+                {meta.archiveYear && (
+                  <span style={{ marginLeft: 'auto', color: 'rgba(215,168,92,0.52)' }}>
+                    {meta.archiveYear}
+                  </span>
+                )}
+                {meta.sourceType && (
+                  <span style={{ color: 'rgba(134,212,110,0.28)', marginLeft: meta.archiveYear ? 10 : 'auto' }}>
+                    [{meta.sourceType.toUpperCase()}]
+                  </span>
+                )}
+              </div>
               <SourceArtifactBlock meta={meta} excerpt={meta.excerpt} eraClass={eraClass} />
             </div>
           )}
