@@ -1948,6 +1948,80 @@ export async function runFetchSessionAction(
     return results.filter((r) => r.status !== 'error').length;
   }
 
+  // Phase AL: Wayback CDX fallback — called when live fetch is blocked or returns only index/weak content.
+  // Runs discoverWaybackLinks against the source domain, then fetches each snapshot.
+  // Pushes its own diagnostic entry so health recording picks up the candidate count correctly.
+  // Returns { passed, snapshots } so the caller can decide whether to push an error result too.
+  async function runWaybackFallback(
+    src:              DbScannerSource,
+    srcId:            string,
+    liveFailReason:   string,
+    trigger:          'live-blocked' | 'live-weak-index',
+  ): Promise<{ passed: number; snapshots: number }> {
+    let fbPassed = 0, fbRejected = 0;
+    try {
+      const wbDisc = await discoverWaybackLinks(src, true, effectiveDeepTruth);
+      if ('error' in wbDisc) {
+        diagnostics.push({
+          sourceId: srcId, sourceName: src.name, sourceType: src.source_type,
+          enabled: true, baseUrl: src.base_url ?? '',
+          routeUsed:   `${trigger} → wayback-fallback (CDX error)`,
+          linksDiscovered: 0, pagesFetched: 0,
+          candidatesPassed: 0, candidatesRejected: 0, rejectReasons: [wbDisc.error],
+          errorMessage: liveFailReason,
+          liveFailReason, fallbackAttempted: true, fallbackSnapshotsFound: 0,
+          fallbackCandidatesPassed: 0, fallbackCandidatesRejected: 0,
+        });
+        return { passed: 0, snapshots: 0 };
+      }
+      const snaps    = wbDisc.links.length;
+      const linkCap  = effectiveDeepTruth ? 20 : 12;
+      for (const link of wbDisc.links.slice(0, linkCap)) {
+        if ((perSourceCount.get(srcId) ?? 0) >= effectivePerSourceCap) break;
+        const fr = await fetchWaybackPagePreview(src, link.url, link.topicGroup, link.topicGroupName);
+        if ('error' in fr) { fbRejected++; continue; }
+        const fbCand: FetchedCandidate = {
+          ...fr.candidate,
+          tags:         [...(fr.candidate.tags ?? []), 'live-blocked-fallback'],
+          captureNotes: `Live: ${liveFailReason.slice(0, 120)}. Recovered via Wayback CDX fallback. ${fr.candidate.captureNotes ?? ''}`.trim(),
+        };
+        const url = fbCand.sourceUrl;
+        if (isAlreadyArchived(url)) {
+          trackResult(srcId, { sourceId: srcId, sourceName: src.name, status: 'preview', candidate: { ...fbCand, badCandidateReason: 'Already in archive' } });
+          fbRejected++;
+        } else {
+          const dupes = await checkSignalDuplicates(url, fbCand.title);
+          if (dupes.length > 0) {
+            trackResult(srcId, { sourceId: srcId, sourceName: src.name, status: 'duplicate', candidate: fbCand, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+            fbPassed++;
+          } else {
+            trackResult(srcId, { sourceId: srcId, sourceName: src.name, status: 'preview', candidate: fbCand });
+            fbPassed++;
+          }
+        }
+      }
+      const routeSuffix = fbPassed > 0 ? '' : ' (0 usable snapshots)';
+      diagnostics.push({
+        sourceId: srcId, sourceName: src.name, sourceType: src.source_type,
+        enabled: true, baseUrl: src.base_url ?? '',
+        routeUsed:   `${trigger} → wayback-fallback${routeSuffix}`,
+        linksDiscovered:  snaps,
+        pagesFetched:     fbPassed + fbRejected,
+        candidatesPassed: fbPassed,
+        candidatesRejected: fbRejected,
+        rejectReasons:    [],
+        errorMessage:     fbPassed === 0 ? liveFailReason : undefined,
+        liveFailReason,   fallbackAttempted: true,
+        fallbackSnapshotsFound:    snaps,
+        fallbackCandidatesPassed:  fbPassed,
+        fallbackCandidatesRejected: fbRejected,
+      });
+      return { passed: fbPassed, snapshots: snaps };
+    } catch {
+      return { passed: 0, snapshots: 0 };
+    }
+  }
+
   for (const sourceId of sourceIds) {
     // Stop fetching if we have hit the session total candidate cap.
     if (totalCandidates() >= SESSION_TOTAL_CANDIDATE_CAP) break;
@@ -2118,7 +2192,7 @@ export async function runFetchSessionAction(
 
     // BBS / Textfiles.com connector — Phase O origin scan
     if (isTextfilesSource(source)) {
-      const bbsResult = await fetchTextfilesMultipleCandidates(source, effectiveOriginScan || effectiveDeepTruth);
+      const bbsResult = await fetchTextfilesMultipleCandidates(source, effectiveOriginScan || effectiveDeepTruth, effectiveDeepTruth);
       if (bbsResult.error && bbsResult.candidates.length === 0) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'bbs-textfiles', linksDiscovered: 0, pagesFetched: bbsResult.debugInfo.filesFetched, candidatesPassed: 0, candidatesRejected: bbsResult.debugInfo.filesFetched, rejectReasons: [bbsResult.error.slice(0, 100)], errorMessage: bbsResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: bbsResult.error });
@@ -2145,6 +2219,79 @@ export async function runFetchSessionAction(
       continue;
     }
 
+    // Phase AJ TASK 4: Internet Archive search API — for DTS mode, use IA Advanced Search
+    // instead of HTML scraping for archive.org/search?query=... sources.
+    if (effectiveDeepTruth) {
+      try {
+        const parsedIaUrl = new URL(source.base_url);
+        if (parsedIaUrl.hostname === 'archive.org' && parsedIaUrl.pathname === '/search') {
+          const iaQuery = parsedIaUrl.searchParams.get('query') ?? '';
+          if (iaQuery) {
+            const apiUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(iaQuery)}&fl[]=identifier,title,description,subject,date,creator&rows=8&output=json&page=1`;
+            let iaHandled = false;
+            try {
+              const apiRes = await fetch(apiUrl, {
+                cache:   'no-store',
+                headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
+                signal:  AbortSignal.timeout(12_000),
+              });
+              if (apiRes.ok) {
+                const json = await apiRes.json() as {
+                  response?: { docs?: Array<{ identifier?: string; title?: string; description?: string; subject?: string | string[]; date?: string; creator?: string }> };
+                };
+                const docs = json?.response?.docs ?? [];
+                let iaPassed = 0;
+                for (const doc of docs) {
+                  if (!doc.identifier || !doc.title) continue;
+                  if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
+                  const itemUrl = `https://archive.org/details/${doc.identifier}`;
+                  if (isAlreadyArchived(itemUrl)) continue;
+                  const title   = cleanTitle(doc.title) || source.name;
+                  const subjArr = Array.isArray(doc.subject) ? doc.subject : (doc.subject ? [doc.subject] : []);
+                  const summary = [doc.description, subjArr.join(', ')].filter(Boolean).join(' — ').trim().slice(0, 2000)
+                                  || 'Internet Archive item — no description available.';
+                  if (!dtsArchivePassesMinimum(itemUrl, title, summary).pass) continue;
+                  const archiveYear = doc.date ? (parseInt(doc.date.slice(0, 4), 10) || undefined) : undefined;
+                  const heur = scoreStoryHeuristics(`${title} ${summary}`);
+                  const conf = scoreExtractionConfidence(title, summary);
+                  const iaCand: FetchedCandidate = {
+                    title:                title.slice(0, 200),
+                    summary,
+                    sourceUrl:            itemUrl,
+                    category:             source.category_focus[0] ?? 'Internet Lore',
+                    tags:                 ['scanner-source', 'archive', 'internet-archive', 'dts-artifact'],
+                    anomalyScore:         6,
+                    archiveYear,
+                    isArchived:           true,
+                    attributionText:      `Internet Archive · ${source.name}`,
+                    captureNotes:         `IA Advanced Search: "${iaQuery}". Item: ${doc.identifier}`,
+                    categoryNote:         buildCategoryNote(source.category_focus, title, doc.description ?? ''),
+                    extractionConfidence: conf.confidence,
+                    extractionWarning:    conf.warning ?? undefined,
+                    storyScore:           heur.storyScore,
+                    storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+                    finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: false }),
+                    sourceTaxonomy:       classifySourceTaxonomy('archive', source.name),
+                    documentSignalScore:  detectDocumentSignals(`${title} ${summary}`) || undefined,
+                  };
+                  const dupes = await checkSignalDuplicates(itemUrl, iaCand.title);
+                  if (dupes.length > 0) {
+                    trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: iaCand, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+                  } else {
+                    trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: iaCand });
+                    iaPassed++;
+                  }
+                }
+                diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'ia-advanced-search', linksDiscovered: docs.length, pagesFetched: 1, candidatesPassed: iaPassed, candidatesRejected: docs.length - iaPassed, rejectReasons: [] });
+                iaHandled = true;
+              }
+            } catch { /* fall through to generic HTML */ }
+            if (iaHandled) continue;
+          }
+        }
+      } catch { /* not a valid URL or not IA search — fall through */ }
+    }
+
     // Generic HTML sources — discovery-first: extract story links from index, fetch each
     let baseHostname: string;
     try { baseHostname = new URL(source.base_url).hostname; }
@@ -2165,7 +2312,13 @@ export async function runFetchSessionAction(
       });
       if (!response.ok) {
         const isBlocked = response.status === 403 || response.status === 401 || response.status === 429;
-        results.push({ sourceId, sourceName: source.name, status: 'error', error: isBlocked ? blockedFetchError(response.status) : `HTTP ${response.status} — ${response.statusText}` });
+        const liveFailReason = isBlocked ? blockedFetchError(response.status) : `HTTP ${response.status} — ${response.statusText}`;
+        // Phase AL TASK 1: blocked live source → try Wayback CDX fallback
+        const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked');
+        if (fb.passed === 0) {
+          const suffix = fb.snapshots > 0 ? ` (Wayback: ${fb.snapshots} snapshots found, none usable)` : ' (Wayback fallback also found nothing)';
+          results.push({ sourceId, sourceName: source.name, status: 'error', error: `${liveFailReason}${suffix}` });
+        }
         continue;
       }
       const ct = response.headers.get('content-type') ?? '';
@@ -2176,7 +2329,12 @@ export async function runFetchSessionAction(
       indexHtml = await response.text();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      results.push({ sourceId, sourceName: source.name, status: 'error', error: `network — ${msg}` });
+      // Phase AL TASK 1: network failure → try Wayback CDX fallback
+      const liveFailReason = `network — ${msg}`;
+      const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked');
+      if (fb.passed === 0) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: liveFailReason });
+      }
       continue;
     }
 
@@ -2194,6 +2352,30 @@ export async function runFetchSessionAction(
       try { if (new URL(href).hostname !== baseHostname) continue; } catch { continue; }
       if (!discoveryKeywordMatch(href, text)) continue;
       storyLinks.push(href);
+    }
+
+    // Phase AJ TASK 3: Archive stub recovery — DTS second-pass with broader path hints
+    // when keyword scan found nothing. Captures archive sites with opaque URL slugs.
+    if (effectiveDeepTruth && storyLinks.length === 0) {
+      for (const { href } of pageAnchors) {
+        if (storyLinks.length >= 5) break;
+        if (seenLinks.has(href)) continue;
+        seenLinks.add(href);
+        if (SKIP_EXTENSIONS.test(href)) continue;
+        try { if (new URL(href).hostname !== baseHostname) continue; } catch { continue; }
+        const hrefLower = href.toLowerCase();
+        if (DTS_ARCHIVE_LINK_HINTS.some((h) => hrefLower.includes(h))) {
+          storyLinks.push(href);
+        }
+      }
+    }
+
+    // Phase AL TASK 2: weak index fallback — for DTS/Origin scan, try Wayback CDX when
+    // no story links were extracted from the index page (index-only or stub site).
+    if (storyLinks.length === 0 && (effectiveDeepTruth || effectiveOriginScan)) {
+      const fb = await runWaybackFallback(source, sourceId, 'live index page — no story links extracted', 'live-weak-index');
+      if (fb.passed > 0) continue;  // Wayback found candidates — skip index page fallback
+      // else: fall through to single index-page metadata candidate
     }
 
     if (storyLinks.length === 0) {
@@ -2263,7 +2445,10 @@ export async function runFetchSessionAction(
         const extracted  = extractPageData(linkHtml, linkUrl);
         const title      = cleanTitle(extracted.title) || source.name;
         const summary    = buildSummary(extracted.description, extracted.snippet);
-        const quality    = candidatePassesQuality(linkUrl, title, summary);
+        // Phase AJ TASK 6: DTS uses a lower bar — title + 80-char excerpt is enough.
+        const quality    = effectiveDeepTruth
+          ? dtsArchivePassesMinimum(linkUrl, title, summary)
+          : candidatePassesQuality(linkUrl, title, summary);
         if (!quality.pass) continue;
 
         const conf       = scoreExtractionConfidence(title, summary);
@@ -2395,7 +2580,8 @@ export async function runFetchSessionAction(
     }
   }
 
-  // Phase AD: Deep Truth Scanner — hard-reject modern, Reddit, or undated content.
+  // Phase AD / Phase AK: Deep Truth Scanner — hard-reject modern, Reddit, index pages,
+  // non-topic content. Require dual topic+artifact match. Compute oldIntrigueScore.
   if (effectiveDeepTruth) {
     const DREAM_JUNK = [
       'dream meaning', 'dream interpretation', 'what does it mean to dream',
@@ -2408,14 +2594,26 @@ export async function runFetchSessionAction(
     ];
     for (const r of results) {
       if (r.status === 'error' || r.candidate.badCandidateReason) continue;
-      const st = r.candidate.sourceType ?? '';
-      const lc = (`${r.candidate.title} ${r.candidate.summary}`).toLowerCase();
+      const st  = r.candidate.sourceType ?? '';
+      const lc  = (`${r.candidate.title} ${r.candidate.summary}`).toLowerCase();
 
-      // Hard-reject Reddit regardless of how it slipped through
+      // TASK 7: Hard-reject Reddit — zero tolerance, first check
       if (st === 'reddit') {
-        r.candidate.badCandidateReason = 'Deep Truth: Reddit excluded from this mode';
+        r.candidate.badCandidateReason = 'Deep Truth: Reddit excluded from Deep Truth Scanner';
         continue;
       }
+
+      // TASK 1: Hard-reject homepage/index/collection pages unless strong document/text signal
+      if (isDTSIndexOrCollectionPage(r.candidate)) {
+        const hasDocSignal   = (r.candidate.documentSignalScore ?? 0) > 0;
+        const hasLongform    = (r.candidate.summary ?? '').trim().length > 500;
+        const hasTextArtifact = (r.candidate.tags ?? []).some((t) => ['text-artifact', 'bbs-header', 'internet-archive'].includes(t));
+        if (!hasDocSignal && !hasLongform && !hasTextArtifact) {
+          r.candidate.badCandidateReason = 'Deep Truth: homepage/index page — not a story artifact';
+          continue;
+        }
+      }
+
       // Hard-reject candidates with no archive year from non-BBS sources
       if (st !== 'bbs' && !r.candidate.archiveYear && !r.candidate.isArchived) {
         r.candidate.badCandidateReason = 'Deep Truth: no archive provenance — undated content excluded';
@@ -2446,6 +2644,21 @@ export async function runFetchSessionAction(
         r.candidate.badCandidateReason = 'Deep Truth: modern forum source — excluded from archive mode';
         continue;
       }
+
+      // TASK 3: Dual topic+artifact match — reject candidates with no DTS topic signal
+      const dualMatch = dtsCandidatePassesDualMatch(
+        r.candidate.title, r.candidate.summary, r.candidate.sourceUrl, st,
+      );
+      if (!dualMatch.pass) {
+        r.candidate.badCandidateReason = dualMatch.reason;
+        continue;
+      }
+    }
+
+    // TASK 4: Compute oldIntrigueScore on all surviving DTS candidates
+    for (const r of results) {
+      if (r.status === 'error' || r.candidate.badCandidateReason) continue;
+      r.candidate.oldIntrigueScore = computeOldIntrigueScore(r.candidate);
     }
   }
 
@@ -2489,6 +2702,17 @@ const DISCOVERY_KEYWORDS = [
   'alien', 'conspiracy', 'occult', 'haunted', 'signal', 'mind control',
   'black project', 'time travel', 'mandela', 'underground', 'ritual',
   'prophecy', 'forbidden', 'classified', 'suppressed', 'coverup',
+];
+
+// Phase AJ TASK 3 / Phase AK TASK 2: DTS archive stub recovery — broader URL path hints.
+const DTS_ARCHIVE_LINK_HINTS = [
+  '/article', '/articles', '/files', '/file', '/doc', '/docs', '/document', '/documents',
+  '/research', '/text', '/texts', '/paper', '/papers', '/report', '/reports',
+  '/case', '/cases', '/special', '/interview', '/feature', '/features',
+  '/item', '/items', '/news/', '/data/', '/sighting', '/sightings', '/witness',
+  '/testimony', '/transcript', '/newsletter', '/thread', '/forum', '/post/',
+  '/story', '/stories', '/essay', '/essays', '/library', '/archive/',
+  '.htm', '.html', '.txt',
 ];
 
 function extractAnchors(html: string, baseUrl: string): Array<{ href: string; text: string }> {
@@ -2691,6 +2915,160 @@ function candidatePassesQuality(url: string, title: string, summary: string): { 
   return { pass: true, reason };
 }
 
+// Phase AJ TASK 6: DTS minimum quality bar — lower than candidatePassesQuality.
+// Archive artifacts don't need story keywords; title + 80-char excerpt is enough.
+function dtsArchivePassesMinimum(url: string, title: string, summary: string): { pass: boolean; reason: string } {
+  const path = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return '/'; } })();
+  if (/^\/(tag|tags|category|categories|topics?|search|login|register|about|contact|privacy|terms)\b/.test(path)) {
+    return { pass: false, reason: 'navigation or index page' };
+  }
+  if (title.trim().length < 10) return { pass: false, reason: 'title too short' };
+  if (summary.trim().length < 80) return { pass: false, reason: 'DTS: excerpt too short — need 80+ chars for archive artifact' };
+  return { pass: true, reason: 'DTS archive minimum — title + excerpt present' };
+}
+
+// ---------------------------------------------------------------------------
+// Phase AK: DTS dual-match + oldIntrigueScore
+// ---------------------------------------------------------------------------
+
+// Topic terms — at least one must appear in title+summary for a DTS candidate to pass.
+const DTS_TOPIC_TERMS = [
+  'ufo', 'uap', 'disclosure', 'roswell', 'area 51', 'area51', 'majestic', 'mj-12',
+  'mkultra', 'mk-ultra', 'mind control', 'manchurian', 'monarch', 'artichoke', 'paperclip',
+  'black project', 'blackproject', 'classified', 'dark fleet', 'special access',
+  'underground base', 'deep underground', 'haarp', 'chemtrail', 'chem trail',
+  'occult', 'ritual', 'esoteric', 'illuminati', 'freemason', 'crowley', 'satanic',
+  'ancient', 'atlantis', 'annunaki', 'anunnaki', 'sumerian', 'lost civilization',
+  'paranormal', 'fortean', 'cryptid', 'bigfoot', 'mothman', 'chupacabra',
+  'ghost', 'poltergeist', 'haunted', 'apparition', 'specter',
+  'free energy', 'zero point', 'scalar', 'suppressed technology',
+  'conspiracy', 'coverup', 'cover-up', 'whistleblower', 'cia', 'nsa', 'dod',
+  'missing person', 'vanished', 'disappeared', 'abduction', 'abducted',
+  'reptilian', 'nwo', 'new world order', 'shadow government', 'deep state',
+  'alien', 'extraterrestrial', 'et contact', 'saucer', 'flying saucer',
+  'cattle mutilation', 'crop circle', 'triangle ufo', 'orb', 'sphere',
+];
+
+// Artifact-type terms — at least one must appear in title+summary+URL for DTS candidates
+// from non-archive sources. BBS files are exempt (they ARE the artifact).
+const DTS_ARTIFACT_TERMS = [
+  'report', 'reports', 'case', 'cases', 'document', 'documents', 'dossier',
+  'file', 'files', 'newsletter', 'bulletin', 'journal', 'diary', 'log',
+  'transcript', 'testimony', 'deposition', 'affidavit', 'declaration',
+  'investigation', 'inquiry', 'study', 'analysis', 'research', 'survey',
+  'sighting', 'sightings', 'encounter', 'incidents', 'evidence', 'record',
+  'thread', 'forum', 'post', 'letter', 'memo', 'release', 'foia',
+];
+
+// Check that a DTS candidate passes the dual topic+artifact match.
+// BBS files are inherently artifacts — only require topic match.
+function dtsCandidatePassesDualMatch(
+  title: string, summary: string, url: string, sourceType: string,
+): { pass: boolean; reason: string } {
+  const lc = `${title} ${summary} ${url}`.toLowerCase();
+
+  const hasTopicMatch = DTS_TOPIC_TERMS.some((t) => lc.includes(t));
+  if (!hasTopicMatch) return { pass: false, reason: 'DTS dual-match: no topic signal detected' };
+
+  // BBS files are inherently artifacts — topic match alone is sufficient.
+  if (sourceType === 'bbs') return { pass: true, reason: 'DTS BBS artifact — topic match confirmed' };
+  // Wayback/archive sources: CDX already filtered for topic — artifact match optional.
+  if (sourceType === 'wayback' || sourceType === 'archive') return { pass: true, reason: 'DTS archive source — topic match confirmed' };
+
+  const hasArtifactMatch = DTS_ARTIFACT_TERMS.some((t) => lc.includes(t));
+  if (!hasArtifactMatch) return { pass: false, reason: 'DTS dual-match: no artifact-type signal (report/case/document/thread/etc.)' };
+
+  return { pass: true, reason: 'DTS dual-match: topic + artifact confirmed' };
+}
+
+// Detect homepage / index / collection pages that should not surface as DTS story candidates.
+function isDTSIndexOrCollectionPage(c: FetchedCandidate): boolean {
+  if (c.isIndexPage) return true;
+  try {
+    const u = new URL(c.sourceUrl);
+    const path = u.pathname.toLowerCase();
+    if (path === '/' || path === '') return true;
+    if (path.startsWith('/search')) return true;
+    if (/^\/(category|categories|tag|tags|topics?|directory|collection)\b/.test(path)) return true;
+    if (/\/index\.(html?|php|asp|cfm)(\?|$)/i.test(path)) return true;
+  } catch { /* ignore */ }
+  const lcTitle = (c.title ?? '').toLowerCase();
+  return (
+    lcTitle === 'home' || lcTitle === 'index' || lcTitle === 'welcome' ||
+    lcTitle.startsWith('welcome to ') || lcTitle.startsWith('index of ') ||
+    lcTitle.startsWith('directory of ') ||
+    lcTitle.includes('search results') || lcTitle.includes('collection:')
+  );
+}
+
+// Phase AK TASK 4: oldIntrigueScore — composite 0-100 score for DTS story hunting.
+// Prioritises old, specific, longform, source-typed archive artifacts.
+function computeOldIntrigueScore(c: FetchedCandidate): number {
+  let score = 0;
+
+  // Age / archive year — older = higher
+  const yr = c.archiveYear ?? c.firstSeenYear;
+  if (yr) {
+    if      (yr <= 1998) score += 30;
+    else if (yr <= 2002) score += 25;
+    else if (yr <= 2006) score += 20;
+    else if (yr <= 2010) score += 15;
+    else if (yr <= 2015) score += 8;
+    else                 score += 2;
+  }
+
+  // Source type
+  if      (c.sourceType === 'bbs')     score += 20;
+  else if (c.sourceType === 'wayback') score += 12;
+  else if (c.isArchived)               score += 8;
+
+  // Source taxonomy
+  const tax = c.sourceTaxonomy ?? '';
+  if      (tax === 'bbs_archive')       score += 15;
+  else if (tax === 'ufo_database')      score += 12;
+  else if (tax === 'document_archive')  score += 10;
+  else if (tax === 'conspiracy_archive' || tax === 'occult_archive')   score += 8;
+  else if (tax === 'forum_archive'      || tax === 'usenet_archive')   score += 8;
+
+  // Document signal (FOIA/case/report language)
+  score += Math.min((c.documentSignalScore ?? 0) * 3, 18);
+
+  // Longform excerpt
+  const excerptLen = (c.summary ?? '').trim().length;
+  if      (excerptLen > 800) score += 18;
+  else if (excerptLen > 400) score += 12;
+  else if (excerptLen > 200) score += 6;
+  else if (excerptLen > 80)  score += 2;
+
+  // Deep URL (not homepage)
+  if (!c.isIndexPage) {
+    try {
+      const depth = (new URL(c.sourceUrl).pathname.match(/\//g) ?? []).length;
+      if      (depth >= 4) score += 12;
+      else if (depth >= 3) score += 8;
+      else if (depth >= 2) score += 4;
+    } catch { /* ignore */ }
+  }
+
+  // Artifact-type terms in title
+  const lcTitle = (c.title ?? '').toLowerCase();
+  const ARTIFACT_TITLE = ['report', 'case', 'document', 'file', 'testimony', 'transcript', 'witness', 'sighting', 'encounter', 'investigation', 'evidence', 'foia'];
+  if (ARTIFACT_TITLE.some((t) => lcTitle.includes(t))) score += 10;
+
+  // Strong topic signal in title
+  const TOPIC_TITLE = ['ufo', 'mkultra', 'roswell', 'area 51', 'disclosure', 'mind control', 'majestic', 'occult', 'classified', 'alien', 'paranormal', 'conspiracy', 'coverup'];
+  if (TOPIC_TITLE.some((t) => lcTitle.includes(t))) score += 8;
+
+  // Archive + origin scores as secondary signals
+  score += Math.min((c.archiveSignalScore   ?? 0) * 0.2, 8);
+  score += Math.min((c.originPriorityScore  ?? 0) * 0.12, 6);
+
+  // BBS header confirmed (verified BBS artifact)
+  if ((c.tags ?? []).includes('bbs-header')) score += 8;
+
+  return Math.min(Math.round(score), 100);
+}
+
 // ---------------------------------------------------------------------------
 // Origin priority scoring — Phase O Deep Archive scoring
 //
@@ -2828,13 +3206,20 @@ const WAYBACK_ERA_WINDOWS: Array<[number, number]> = [
 ];
 
 // Phase AD: topic path fragments rotated during Deep Truth Scanner Wayback scans.
+// Phase AK TASK 2: expanded to include artifact path fragments for deeper story discovery.
 const DTS_TOPIC_PATH_HINTS = [
+  // Topic-specific
   'ufo', 'roswell', 'area51', 'area-51', 'majestic', 'mkultra', 'mk-ultra',
   'montauk', 'haarp', 'underground', 'blackproject', 'black-project',
   'mindcontrol', 'mind-control', 'occult', 'prophecy', 'annunaki', 'anunnaki',
-  'atlantis', 'cattle', 'disclosure', 'ritual', 'forbidden', 'files', 'archive',
+  'atlantis', 'cattle', 'disclosure', 'ritual', 'forbidden', 'archive',
   'conspiracy', 'alien', 'reptilian', 'illuminati', 'nwo', 'chemtrail',
   'coverup', 'cover-up', 'secret', 'classified', 'whistleblower',
+  // Artifact path fragments — story/case/report-type URLs score higher
+  'report', 'reports', 'case', 'cases', 'document', 'documents', 'files',
+  'article', 'articles', 'essay', 'essays', 'story', 'stories',
+  'thread', 'forum', 'post', 'sighting', 'sightings', 'witness',
+  'testimony', 'transcript', 'library', 'newsletter',
 ];
 
 async function discoverWaybackLinks(
@@ -3255,9 +3640,19 @@ function isTextfilesSource(source: DbScannerSource): boolean {
   return source.source_type === 'bbs' || (source.base_url ?? '').toLowerCase().includes('textfiles.com');
 }
 
+// Phase AK TASK 5: DTS prioritises these BBS categories — directly relevant to DTS topics.
+const DTS_BBS_PRIORITY_CATS = [
+  'ufo', 'aliens', 'conspiracy', 'occult', 'paranormal', 'hauntings',
+  'cia', 'underground', 'cult', 'religion', 'hypnosis', 'reports',
+  'history', 'politics', 'security', 'survival',
+];
+// These categories are off-topic for DTS; skip unless content has a topic match.
+const DTS_BBS_SKIP_CATS = ['phreak', 'hacker', 'anarchy', 'humor', 'music', 'piracy', 'sf', 'drugs', 'media'];
+
 async function fetchTextfilesMultipleCandidates(
   source: DbScannerSource,
   isOriginScan = false,
+  isDeepTruth  = false,
 ): Promise<{
   candidates: FetchedCandidate[];
   error?: string;
@@ -3272,12 +3667,19 @@ async function fetchTextfilesMultipleCandidates(
     'Accept':     'text/plain, text/html;q=0.9',
   };
 
-  // Shuffle categories so successive scans hit different areas
+  // Shuffle categories; for DTS put priority cats first, skip cats last
   const shuffledCats = [...TEXTFILES_CATEGORIES];
   for (let i = shuffledCats.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffledCats[i], shuffledCats[j]] = [shuffledCats[j], shuffledCats[i]];
   }
+  const orderedCats = isDeepTruth
+    ? [
+        ...DTS_BBS_PRIORITY_CATS.filter((c) => shuffledCats.includes(c)),
+        ...shuffledCats.filter((c) => !DTS_BBS_PRIORITY_CATS.includes(c) && !DTS_BBS_SKIP_CATS.includes(c)),
+        ...shuffledCats.filter((c) => DTS_BBS_SKIP_CATS.includes(c)),
+      ]
+    : shuffledCats;
 
   // Helper — collect .txt links and one level of subdirectory .txt links from a directory URL.
   async function collectTxtLinksFromDir(dirUrl: string): Promise<string[]> {
@@ -3339,10 +3741,12 @@ async function fetchTextfilesMultipleCandidates(
   }
 
   // Phase AC: origin scan fetches more BBS files per run for archive saturation
-  const bbsCap      = isOriginScan ? 12 : 6;
-  const bbsPerCatCap = isOriginScan ? 4  : 2;
+  // Phase AK TASK 5: DTS raises caps and excerpt minimum for story-quality hunting
+  const bbsCap       = isDeepTruth ? 15 : (isOriginScan ? 12 : 6);
+  const bbsPerCatCap = isDeepTruth ? 5  : (isOriginScan ? 4  : 2);
+  const minExcerptLen = isDeepTruth ? 200 : 60;
 
-  for (const category of shuffledCats) {
+  for (const category of orderedCats) {
     if (candidates.length >= bbsCap) break;
 
     const dirUrl = `https://www.textfiles.com/${category}/`;
@@ -3379,9 +3783,15 @@ async function fetchTextfilesMultipleCandidates(
 
       // Skip index/directory files and files that are too short
       if (bbsArtifact.isIndexFile) continue;
-      if (bbsArtifact.excerpt.length < 60) continue;
+      if (bbsArtifact.excerpt.length < minExcerptLen) continue;
 
       const { title, excerpt } = bbsArtifact;
+
+      // Phase AK TASK 5: for DTS, skip off-topic categories unless content has DTS topic signal
+      if (isDeepTruth && DTS_BBS_SKIP_CATS.includes(category)) {
+        const hasTopicMatch = DTS_TOPIC_TERMS.some((t) => `${title} ${excerpt}`.toLowerCase().includes(t));
+        if (!hasTopicMatch) continue;
+      }
 
       const heuristics     = scoreStoryHeuristics(`${title} ${excerpt}`);
       const langBonus      = computePreSocialLanguageBonus(`${title} ${excerpt}`);

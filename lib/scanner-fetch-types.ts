@@ -60,6 +60,7 @@ export interface FetchedCandidate {
   sourceTaxonomy?:      string;    // SourceTaxonomy — computed from source_type + name
   isFictionLarp?:       boolean;   // true when fiction/LARP patterns detected in content
   documentSignalScore?: number;    // 0–20 FOIA/case report/transcript signal boost
+  oldIntrigueScore?:    number;    // 0–100 DTS: age + specificity + artifact quality composite
   // Phase Y lineage fields
   signalFingerprint?:   string;    // content fingerprint for narrative lineage detection
   originStatus?:        'possible-origin' | 'related-signal' | 'mirror' | 'earlier-variant'; // lineage role
@@ -139,4 +140,10 @@ export interface SourceDiagnostic {
   endpointsAttempted?: string[];
   endpointResults?:    EndpointResult[];
   errorMessage?:       string;
+  // Phase AL: archive fallback diagnostics
+  liveFailReason?:             string;  // why the live fetch failed
+  fallbackAttempted?:          boolean; // whether a Wayback CDX fallback was tried
+  fallbackSnapshotsFound?:     number;  // CDX snapshots discovered for the domain
+  fallbackCandidatesPassed?:   number;  // candidates recovered from fallback
+  fallbackCandidatesRejected?: number;  // fallback candidates that failed quality checks
 }

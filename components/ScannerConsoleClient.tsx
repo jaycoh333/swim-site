@@ -1042,10 +1042,11 @@ export function ScannerConsoleClient({
         return preset.sourceTypes.includes(s.source_type);
       });
     })();
-    const nonHomepage = pool.filter((s) => !isHomepageSource(s));
+    // Phase AJ: DTS includes homepage-URL sources — many archive root URLs ARE content portals.
+    // The generic fetch path handles index pages by doing link extraction anyway.
+    const nonHomepage = isDeepTruthPreset ? pool : pool.filter((s) => !isHomepageSource(s));
 
-    // For preset runs (not All Sources), cap at MAX_PRESET_SOURCES.
-    // Prefer sources with recent successful health records over blocked/unknown ones.
+    // For all-sources preset: return everything
     if (presetId === PRESET_ALL) return nonHomepage;
 
     // Fisher-Yates shuffle before health sort so equal-ranked sources rotate between runs.
@@ -1086,8 +1087,12 @@ export function ScannerConsoleClient({
         })
       : fairSorted;
 
-    // Origin/DTS scan gets a higher cap (20) to surface more archive sources
-    const presetCap = (isOriginPreset || isDeepTruthPreset) ? 20 : MAX_PRESET_SOURCES;
+    // Phase AJ: DTS has no source cap — Phase AI batching handles large lists.
+    // All matching archive sources should be eligible, including weak/blocked health ones.
+    if (isDeepTruthPreset) return originSorted;
+
+    // Origin scan gets a higher cap (20) to surface more archive sources
+    const presetCap = isOriginPreset ? 20 : MAX_PRESET_SOURCES;
     const sliced = originSorted.slice(0, presetCap);
     // Deep Archive mode: cap Reddit to 2 sources so old-web sources dominate
     if (scanMode === 'deep-archive') {
@@ -1145,6 +1150,8 @@ export function ScannerConsoleClient({
     setLowQualityOpen(false);
     setShowDiagnostics(false);
     setShowAllResults(false);
+    // Phase AJ TASK 8: clear stale approved/edit cards from previous scan session.
+    setReadySignals([]);
 
     const sourceIdsToRun = isDebugRun
       ? ['__debug_test__']
@@ -1193,18 +1200,28 @@ export function ScannerConsoleClient({
 
     setBatchProgress(null);
 
-    // Sort merged results by combined score so highest-value items are first
+    // Sort merged results by combined score so highest-value items are first.
+    // Phase AK TASK 4: DTS sorts primarily by oldIntrigueScore (age+specificity+artifact quality).
+    const isDTSSort = activePreset === PRESET_DEEP_TRUTH;
     const sortedResults = [...allResults].sort((a, b) => {
       if (a.status === 'error') return 1;
       if (b.status === 'error') return -1;
-      const scoreA = (a.candidate.archiveSignalScore  ?? 0) * 1.5
-                   + (a.candidate.originPriorityScore ?? 0) * 1.2
-                   + (a.candidate.finalPriorityScore  ?? 0)
-                   + (a.candidate.storyScore          ?? 0) * 0.5;
-      const scoreB = (b.candidate.archiveSignalScore  ?? 0) * 1.5
-                   + (b.candidate.originPriorityScore ?? 0) * 1.2
-                   + (b.candidate.finalPriorityScore  ?? 0)
-                   + (b.candidate.storyScore          ?? 0) * 0.5;
+      const scoreA = isDTSSort
+        ? (a.candidate.oldIntrigueScore   ?? 0) * 3.0
+        + (a.candidate.documentSignalScore ?? 0) * 2.0
+        + (a.candidate.archiveSignalScore  ?? 0) * 0.5
+        : (a.candidate.archiveSignalScore  ?? 0) * 1.5
+        + (a.candidate.originPriorityScore ?? 0) * 1.2
+        + (a.candidate.finalPriorityScore  ?? 0)
+        + (a.candidate.storyScore          ?? 0) * 0.5;
+      const scoreB = isDTSSort
+        ? (b.candidate.oldIntrigueScore   ?? 0) * 3.0
+        + (b.candidate.documentSignalScore ?? 0) * 2.0
+        + (b.candidate.archiveSignalScore  ?? 0) * 0.5
+        : (b.candidate.archiveSignalScore  ?? 0) * 1.5
+        + (b.candidate.originPriorityScore ?? 0) * 1.2
+        + (b.candidate.finalPriorityScore  ?? 0)
+        + (b.candidate.storyScore          ?? 0) * 0.5;
       return scoreB - scoreA;
     });
 
@@ -1637,7 +1654,9 @@ export function ScannerConsoleClient({
                   </p>
                   {activeScanSources.length > 0 && (
                     <span className="text-[11px] text-slate-700">
-                      max {MAX_PRESET_SOURCES} · 5 per source
+                      {activePreset === PRESET_DEEP_TRUTH
+                        ? `${activeScanSources.length} archive sources · batched`
+                        : `max ${MAX_PRESET_SOURCES} · 5 per source`}
                     </span>
                   )}
                 </div>
@@ -1784,9 +1803,11 @@ export function ScannerConsoleClient({
                 {showPresetTest && presetEnabledMatched.length > 0 && (
                   <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-emerald-500/12 bg-emerald-500/[0.03] px-3 py-2.5">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-emerald-400/50">
-                      Sources that will run · {Math.min(presetEnabledMatched.length, MAX_PRESET_SOURCES)} of {presetEnabledMatched.length} enabled
+                      {activePreset === PRESET_DEEP_TRUTH
+                        ? `${activeScanSources.length} archive sources will run · ${presetEnabledMatched.length} total enabled`
+                        : `Sources that will run · ${Math.min(presetEnabledMatched.length, MAX_PRESET_SOURCES)} of ${presetEnabledMatched.length} enabled`}
                     </p>
-                    {presetEnabledMatched.slice(0, MAX_PRESET_SOURCES).map((s) => {
+                    {(activePreset === PRESET_DEEP_TRUTH ? activeScanSources : presetEnabledMatched.slice(0, MAX_PRESET_SOURCES)).map((s) => {
                       const health = healthMap.get(s.id);
                       return (
                         <div key={s.id} className="flex items-center gap-2">
@@ -1801,9 +1822,14 @@ export function ScannerConsoleClient({
                         </div>
                       );
                     })}
-                    {presetEnabledMatched.length > MAX_PRESET_SOURCES && (
+                    {activePreset !== PRESET_DEEP_TRUTH && presetEnabledMatched.length > MAX_PRESET_SOURCES && (
                       <p className="text-[11px] text-slate-600">
                         +{presetEnabledMatched.length - MAX_PRESET_SOURCES} more enabled but capped — rotate via health score
+                      </p>
+                    )}
+                    {activePreset === PRESET_DEEP_TRUTH && activeScanSources.length > 10 && (
+                      <p className="text-[11px] text-slate-600">
+                        {Math.ceil(activeScanSources.length / 10)} batches of 10 · all archive sources included
                       </p>
                     )}
                     <p className="mt-1 text-[10px] text-slate-700">
@@ -2246,8 +2272,8 @@ export function ScannerConsoleClient({
 
               // Tab data
               const TABS = [
-                { id: 'strong'       as const, label: isDeepTruthScan ? 'Recovered Artifacts' : 'Strong Candidates', count: filteredGoodResults.length,      color: 'emerald' },
-                { id: 'needs-review' as const, label: 'Needs Review',      count: needsReview.length,      color: 'amber'   },
+                { id: 'strong'       as const, label: isDeepTruthScan ? 'Recovered Artifacts'  : 'Strong Candidates', count: filteredGoodResults.length, color: 'emerald' },
+                { id: 'needs-review' as const, label: isDeepTruthScan ? 'Possible Artifacts'   : 'Needs Review',      count: needsReview.length,         color: 'amber'   },
                 { id: 'low-signal'   as const, label: 'Low Signal',        count: lowSignalResults.length, color: 'slate'   },
                 ...(fictionResults.length > 0 ? [{ id: 'lore-layer' as const, label: 'Lore Layer', count: fictionResults.length, color: 'pink' }] : []),
                 { id: 'blocked'      as const, label: 'Blocked / Failed',  count: errorResults.length,     color: 'red'     },
@@ -2274,8 +2300,8 @@ export function ScannerConsoleClient({
                 pink:    'bg-pink-500/28    text-pink-200',
               };
               const TAB_DESC: Record<string, string> = {
-                'strong':       'Best scanner finds. Queue these first.',
-                'needs-review': 'Possible stories. Human check recommended.',
+                'strong':       isDeepTruthScan ? 'Recovered archive artifacts — old, specific, longform. Queue these first.' : 'Best scanner finds. Queue these first.',
+                'needs-review': isDeepTruthScan ? 'Possible archive artifacts — topic matched but weaker signal. Inspect before queuing.' : 'Possible stories. Human check recommended.',
                 'low-signal':   'Weak or generic results. Usually skip.',
                 'lore-layer':   'SCP, creepypasta, ARG, and fictional lore detected. Review before queuing.',
                 'blocked':      'Sources that failed, timed out, or were blocked.',
@@ -2832,6 +2858,12 @@ export function ScannerConsoleClient({
                                   {(result.candidate.documentSignalScore ?? 0) > 0 && (
                                     <span className="rounded-full border border-emerald-500/30 bg-emerald-500/8 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-emerald-300/70">
                                       DOC SIGNAL
+                                    </span>
+                                  )}
+                                  {/* Phase AL TASK 5: live-blocked archive fallback badge */}
+                                  {(result.candidate.tags ?? []).includes('live-blocked-fallback') && (
+                                    <span className="rounded-full border border-orange-500/35 bg-orange-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-orange-300/80">
+                                      LIVE BLOCKED · ARCHIVE RECOVERED
                                     </span>
                                   )}
                                   {/* Phase AF: fiction/LARP flag */}
@@ -3476,7 +3508,25 @@ export function ScannerConsoleClient({
                                     </div>
                                   ))}
                                 </div>
-                                {d.errorMessage && (
+                                {d.liveFailReason && (
+                                  <p className="mb-1 rounded bg-orange-500/6 px-2 py-1.5 text-[12px] text-orange-400/80">
+                                    <span className="font-bold">Live fail:</span> {d.liveFailReason.slice(0, 120)}
+                                  </p>
+                                )}
+                                {d.fallbackAttempted && (
+                                  <div className="mb-1 flex flex-wrap items-center gap-2 rounded bg-sky-500/5 px-2 py-1.5 text-[12px] text-sky-400/80">
+                                    <span className="font-bold">Wayback fallback:</span>
+                                    <span>{d.fallbackSnapshotsFound ?? 0} snapshots found</span>
+                                    {(d.fallbackCandidatesPassed ?? 0) > 0
+                                      ? <span className="text-emerald-400">{d.fallbackCandidatesPassed} recovered</span>
+                                      : <span className="text-slate-500">0 recovered</span>
+                                    }
+                                    {(d.fallbackCandidatesRejected ?? 0) > 0 && (
+                                      <span className="text-slate-600">{d.fallbackCandidatesRejected} rejected</span>
+                                    )}
+                                  </div>
+                                )}
+                                {!d.liveFailReason && d.errorMessage && (
                                   <p className="mb-1.5 rounded bg-red-500/5 px-2 py-1.5 text-[13px] leading-relaxed text-red-400/80">{d.errorMessage}</p>
                                 )}
                                 {d.rejectReasons.length > 0 && (
