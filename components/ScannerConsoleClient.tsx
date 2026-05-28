@@ -812,6 +812,7 @@ export function ScannerConsoleClient({
   const [showRejected,     setShowRejected]     = useState(false);
   const [isPartialScan,    setIsPartialScan]    = useState(false);
   const [scanStartMs,      setScanStartMs]      = useState<number>(0);
+  const [showSourceList,   setShowSourceList]   = useState(false); // Phase AT: collapsed by default
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_DEEP_TRUTH);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
@@ -861,6 +862,7 @@ export function ScannerConsoleClient({
   const [liveScanningSourceType, setLiveScanningSourceType] = useState('');
   const [newPostedSlug,          setNewPostedSlug]          = useState<string | null>(null);
   const activeScanSourcesRef = useRef<typeof enabledSources>([]);
+  const stopScanRef          = useRef(false); // Phase AS: set to true to cancel remaining batches
 
   // Phase AA: scan mode selector (replaces chaosMode + originBias toggles)
   const [scanMode, setScanMode] = useState<ScanMode>('deep-archive');
@@ -1166,8 +1168,8 @@ export function ScannerConsoleClient({
       ? ['__debug_test__']
       : activeScanSources.map((s) => s.id);
 
-    // Phase AI: batch into groups of 10, scan sequentially
-    const BATCH_SIZE = 10;
+    // Phase AS TASK 3: smaller batches reduce server action timeout risk on mobile.
+    const BATCH_SIZE = 5;
     const batches: string[][] = [];
     for (let i = 0; i < sourceIdsToRun.length; i += BATCH_SIZE) {
       batches.push(sourceIdsToRun.slice(i, i + BATCH_SIZE));
@@ -1178,7 +1180,18 @@ export function ScannerConsoleClient({
     const excludeUrls = [...seenUrlsThisSession];
     let batchPartial = false;
 
-    // Phase AR: sort helpers hoisted so we can flush results incrementally after each batch.
+    // Phase AS TASK 1: client-side per-batch timeout — 55s max, never get stuck.
+    const BATCH_TIMEOUT_MS = 55_000;
+    function withBatchTimeout<T>(p: Promise<T>): Promise<T | { error: string }> {
+      return Promise.race([
+        p,
+        new Promise<{ error: string }>((resolve) =>
+          setTimeout(() => resolve({ error: 'batch timed out after 55s — partial results kept' }), BATCH_TIMEOUT_MS),
+        ),
+      ]);
+    }
+
+    // Sort helpers hoisted so we can flush results incrementally after each batch.
     const isDTSSort = activePreset === PRESET_DEEP_TRUTH;
     const SRC_TAX_BONUS: Record<string, number> = { bbs: 10, wayback: 8, archive_forum: 6, archive: 4, mediawiki: 3 };
     function dtsCandidateScore(c: FetchedCandidate): number {
@@ -1204,96 +1217,114 @@ export function ScannerConsoleClient({
       });
     }
 
-    for (let bi = 0; bi < batches.length; bi++) {
-      const batch = batches[bi];
-      setBatchProgress({
-        current:        bi + 1,
-        total:          batches.length,
-        sourcesScanned: bi * BATCH_SIZE,
-        candidatesFound: allResults.filter((r) => r.status !== 'error').length,
-        errors:          allResults.filter((r) => r.status === 'error').length,
-      });
+    // Phase AS TASK 4: reset cancel flag at scan start.
+    stopScanRef.current = false;
 
-      const res = await runFetchSessionAction(batch, {
-        includeRejected: showRejected,
-        excludeUrls,
-        scanMode,
-        isOriginScan: activePreset === 'origin-scan',
-        isDeepTruth:  activePreset === PRESET_DEEP_TRUTH,
-      });
-
-      if ('error' in res) {
-        // Batch-level error (e.g. server error) — record errors for each source and continue
-        for (const id of batch) {
-          allResults.push({ sourceId: id, sourceName: id, status: 'error', error: res.error });
-        }
-      } else {
-        allResults.push(...res.results);
-        allDiagnostics.push(...(res.diagnostics ?? []));
-        if (res.partialScan) batchPartial = true;
-      }
-
-      // Phase AR TASK 6: flush results after every batch so the UI shows progress live.
-      const intermediate = sortResults(allResults);
-      setScanResults(intermediate);
-      setDiagnostics([...allDiagnostics]);
-    }
-
-    setBatchProgress(null);
-    setIsPartialScan(batchPartial);
-
-    const sortedResults = sortResults(allResults);
-
-    setScanResults(sortedResults);
-    setScanId((n) => n + 1);
-    setLastScanSrcIds(new Set(sourceIdsToRun));
-    setDiagnostics(allDiagnostics);
-    setScanPhase('done');
-    const totalFetched = allDiagnostics.reduce((sum, d) => sum + d.pagesFetched, 0);
-    if (totalFetched === 0) setShowDiagnostics(true);
-    setHealthMap(computeSourceHealthMap(sortedResults));
-    const allCandidates = sortedResults
-      .filter((r) => r.status !== 'error')
-      .map((r) => r.candidate);
-    setClusterList(detectClusters(allCandidates));
-
-    // Phase AO TASK 1-3: build scan trace for freshness comparison
+    // Phase AS TASK 2: try/finally guarantees the scanner never stays stuck in 'scanning' state.
     try {
-      let memAfter: typeof memBefore = null;
-      try { memAfter = await getScanMemoryStatsAction(); } catch { /* ignore */ }
-      const resultUrls = sortedResults
+      for (let bi = 0; bi < batches.length; bi++) {
+        // Phase AS TASK 4: check cancel flag before each batch.
+        if (stopScanRef.current) { batchPartial = true; break; }
+
+        const batch = batches[bi];
+        setBatchProgress({
+          current:         bi + 1,
+          total:           batches.length,
+          sourcesScanned:  bi * BATCH_SIZE,
+          candidatesFound: allResults.filter((r) => r.status !== 'error').length,
+          errors:          allResults.filter((r) => r.status === 'error').length,
+        });
+
+        // Phase AS TASK 1: wrap with 55s client timeout so a hanging batch never blocks indefinitely.
+        const res = await withBatchTimeout(
+          runFetchSessionAction(batch, {
+            includeRejected: showRejected,
+            excludeUrls,
+            scanMode,
+            isOriginScan: activePreset === 'origin-scan',
+            isDeepTruth:  activePreset === PRESET_DEEP_TRUTH,
+          }),
+        );
+
+        if ('error' in res) {
+          batchPartial = true;
+          for (const id of batch) {
+            allResults.push({ sourceId: id, sourceName: id, status: 'error', error: (res as { error: string }).error });
+          }
+        } else {
+          allResults.push(...res.results);
+          allDiagnostics.push(...(res.diagnostics ?? []));
+          if (res.partialScan) batchPartial = true;
+        }
+
+        // Flush results after every batch so the UI shows progress live.
+        setScanResults(sortResults(allResults));
+        setDiagnostics([...allDiagnostics]);
+      }
+    } catch {
+      batchPartial = true;
+    } finally {
+      // Phase AS TASK 2: always finalize — scanner cannot stay stuck.
+      setBatchProgress(null);
+      setIsPartialScan(batchPartial || stopScanRef.current);
+
+      const sortedResults = sortResults(allResults);
+      setScanResults(sortedResults);
+      setScanId((n) => n + 1);
+      setLastScanSrcIds(new Set(sourceIdsToRun));
+      setDiagnostics(allDiagnostics);
+      setScanPhase('done');
+
+      const totalFetched = allDiagnostics.reduce((sum, d) => sum + d.pagesFetched, 0);
+      if (totalFetched === 0) setShowDiagnostics(true);
+      setHealthMap(computeSourceHealthMap(sortedResults));
+      const allCandidates = sortedResults
         .filter((r) => r.status !== 'error')
-        .map((r) => r.candidate.sourceUrl);
-      const memStats: ScanMemoryTrace = {
-        seenBefore:    memBefore?.stats.byType.seen    ?? 0,
-        skippedBefore: memBefore?.stats.byType.skipped ?? 0,
-        postedBefore:  memBefore?.stats.byType.posted  ?? 0,
-        seenAfter:     memAfter?.stats.byType.seen    ?? 0,
-        skippedAfter:  memAfter?.stats.byType.skipped ?? 0,
-        postedAfter:   memAfter?.stats.byType.posted  ?? 0,
-        isServerless:  memAfter?.isServerless ?? false,
-        memoryPath:    memAfter?.memoryPath ?? 'unknown',
-      };
-      const newTrace: ScanTrace = {
-        scanId:          scanId + 1,
-        timestamp:       new Date().toISOString(),
-        preset:          activePreset,
-        scanMode,
-        sourceIds:       sourceIdsToRun,
-        sourceNames:     sourceIdsToRun.map((id) => {
-          const d = allDiagnostics.find((x) => x.sourceId === id);
-          return d?.sourceName ?? id;
-        }),
-        sourceCount:     sourceIdsToRun.length,
-        enabledCount:    activeScanSources.length,
-        excludedUrlCount: excludeUrls.length,
-        memStats,
-        diagnostics:     allDiagnostics,
-        resultUrls,
-        topUrls:         resultUrls.slice(0, 5),
-      };
-      setScanTraceHistory((prev) => [newTrace, ...prev].slice(0, 3));
-    } catch { /* never block on trace */ }
+        .map((r) => r.candidate);
+      setClusterList(detectClusters(allCandidates));
+
+      // Phase AO TASK 1-3: build scan trace for freshness comparison
+      try {
+        let memAfter: typeof memBefore = null;
+        try { memAfter = await getScanMemoryStatsAction(); } catch { /* ignore */ }
+        const resultUrls = sortedResults
+          .filter((r) => r.status !== 'error')
+          .map((r) => r.candidate.sourceUrl);
+        const memStats: ScanMemoryTrace = {
+          seenBefore:    memBefore?.stats.byType.seen    ?? 0,
+          skippedBefore: memBefore?.stats.byType.skipped ?? 0,
+          postedBefore:  memBefore?.stats.byType.posted  ?? 0,
+          seenAfter:     memAfter?.stats.byType.seen    ?? 0,
+          skippedAfter:  memAfter?.stats.byType.skipped ?? 0,
+          postedAfter:   memAfter?.stats.byType.posted  ?? 0,
+          isServerless:  memAfter?.isServerless ?? false,
+          memoryPath:    memAfter?.memoryPath ?? 'unknown',
+        };
+        const newTrace: ScanTrace = {
+          scanId:          scanId + 1,
+          timestamp:       new Date().toISOString(),
+          preset:          activePreset,
+          scanMode,
+          sourceIds:       sourceIdsToRun,
+          sourceNames:     sourceIdsToRun.map((id) => {
+            const d = allDiagnostics.find((x) => x.sourceId === id);
+            return d?.sourceName ?? id;
+          }),
+          sourceCount:     sourceIdsToRun.length,
+          enabledCount:    activeScanSources.length,
+          excludedUrlCount: excludeUrls.length,
+          memStats,
+          diagnostics:     allDiagnostics,
+          resultUrls,
+          topUrls:         resultUrls.slice(0, 5),
+        };
+        setScanTraceHistory((prev) => [newTrace, ...prev].slice(0, 3));
+      } catch { /* never block on trace */ }
+    }
+  }
+
+  function handleStopScan() {
+    stopScanRef.current = true;
   }
 
   async function handleQueueCandidate(result: SessionSourceResult) {
@@ -1736,212 +1767,7 @@ export function ScannerConsoleClient({
               );
             })()}
 
-            {/* ── Active sources for selected preset ── */}
-            {activePreset !== PRESET_ALL && (
-              <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-[12px] font-semibold uppercase tracking-widest text-slate-600">
-                    Sources in this preset
-                  </p>
-                  {activeScanSources.length > 0 && (
-                    <span className="text-[11px] text-slate-700">
-                      {activePreset === PRESET_DEEP_TRUTH
-                        ? `${activeScanSources.length} archive sources · batched`
-                        : `max ${MAX_PRESET_SOURCES} · 5 per source`}
-                    </span>
-                  )}
-                </div>
-                {activeScanSources.length === 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-[13px] text-slate-500">No enabled sources match this preset.</p>
-                    {activePreset === PRESET_DEEP_TRUTH && (
-                      <button
-                        onClick={async () => {
-                          const r = await autoEnableDeepTruthSourcesAction();
-                          if (r.enabled.length > 0) window.location.reload();
-                        }}
-                        className="w-full rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-[12px] font-bold uppercase tracking-wider text-sky-400 transition-colors hover:bg-sky-500/12"
-                      >
-                        Enable Deep Truth Sources
-                      </button>
-                    )}
-                    <a href="/scanner/sources" className="inline-block text-[12px] text-emerald-400/70 underline-offset-2 hover:text-emerald-400 hover:underline">
-                      Manage sources →
-                    </a>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1.5">
-                    {activeScanSources.map((s) => {
-                      const rec    = getSourceRecommendation(s);
-                      const health = healthMap.get(s.id);
-                      const isWeak = health?.status === 'weak' || health?.status === 'blocked';
-                      return (
-                        <div key={s.id}>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                              {s.source_type}
-                            </span>
-                            <span className={`text-[13px] ${isWeak ? 'text-slate-500' : 'text-slate-300'}`}>
-                              {s.name}
-                            </span>
-                            {health && health.status !== 'unknown' && (
-                              <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(health.status)}`}>
-                                {HEALTH_LABELS[health.status]}
-                              </span>
-                            )}
-                          </div>
-                          {isWeak && (
-                            <p className="mt-0.5 text-[11px] text-amber-500/45">
-                              low yield last session — deprioritised
-                            </p>
-                          )}
-                          {rec && !isWeak && (
-                            <p className="mt-0.5 text-[11px] leading-relaxed text-amber-400/55">{rec}</p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* All sources list (when All Sources selected) */}
-            {activePreset === PRESET_ALL && enabledSources.length > 0 && (
-              <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                <p className="mb-2 text-[12px] font-semibold uppercase tracking-widest text-slate-600">
-                  All enabled sources
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  {enabledSources.slice(0, 6).map((s) => (
-                    <div key={s.id} className="flex items-center gap-2">
-                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        {s.source_type}
-                      </span>
-                      <span className="text-[13px] text-slate-400">{s.name}</span>
-                    </div>
-                  ))}
-                  {enabledSources.length > 6 && (
-                    <span className="text-[12px] text-slate-600">+{enabledSources.length - 6} more</span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* DTS low-source shortcut */}
-            {activePreset === PRESET_DEEP_TRUTH && activeScanSources.length > 0 && activeScanSources.length < 5 && (
-              <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] px-4 py-3">
-                <p className="mb-2 text-[12px] text-sky-400/70">
-                  Only {activeScanSources.length} DTS source{activeScanSources.length !== 1 ? 's' : ''} enabled — enable more for better coverage.
-                </p>
-                <button
-                  onClick={async () => {
-                    const r = await autoEnableDeepTruthSourcesAction();
-                    if (r.enabled.length > 0) window.location.reload();
-                  }}
-                  className="w-full rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-[12px] font-bold uppercase tracking-wider text-sky-400 transition-colors hover:bg-sky-500/12"
-                >
-                  Enable Deep Truth Sources
-                </button>
-              </div>
-            )}
-
-            {/* ── Source coverage panel (TASK 3) ── */}
-            {activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG && (
-              <div className={`rounded-xl border px-4 py-3 ${
-                presetEnabledMatched.length === 0
-                  ? 'border-red-500/25 bg-red-500/[0.04]'
-                  : 'border-white/8 bg-white/[0.02]'
-              }`}>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-widest text-slate-600">
-                    Source coverage
-                  </span>
-                  <span className="ml-auto flex items-center gap-2 text-[12px]">
-                    <span className="text-slate-600">
-                      {presetAllMatched.length} matched
-                    </span>
-                    <span className={`font-bold ${presetEnabledMatched.length > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {presetEnabledMatched.length} enabled
-                    </span>
-                  </span>
-                </div>
-
-                {presetEnabledMatched.length === 0 && (
-                  <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
-                    <p className="text-[12px] font-semibold text-red-400">
-                      No enabled sources for this preset
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-red-400/60">
-                      Run <code className="font-mono">seed:scanner-sources:update</code> then enable sources at{' '}
-                      <a href="/scanner/sources" className="underline underline-offset-2 hover:text-red-300">
-                        /scanner/sources
-                      </a>
-                    </p>
-                  </div>
-                )}
-
-                {/* Test Preset Sources button (TASK 4) */}
-                {presetEnabledMatched.length > 0 && (
-                  <button
-                    onClick={() => setShowPresetTest((v) => !v)}
-                    className="mt-2 w-full rounded-lg border border-white/8 bg-white/[0.025] px-3 py-1.5 text-left text-[12px] text-slate-500 transition-colors hover:bg-white/[0.045] hover:text-slate-300"
-                  >
-                    {showPresetTest ? '▲ hide source list' : '▼ test preset sources'}
-                  </button>
-                )}
-
-                {showPresetTest && presetEnabledMatched.length > 0 && (
-                  <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-emerald-500/12 bg-emerald-500/[0.03] px-3 py-2.5">
-                    <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-emerald-400/50">
-                      {activePreset === PRESET_DEEP_TRUTH
-                        ? `${activeScanSources.length} archive sources will run · ${presetEnabledMatched.length} total enabled`
-                        : `Sources that will run · ${Math.min(presetEnabledMatched.length, MAX_PRESET_SOURCES)} of ${presetEnabledMatched.length} enabled`}
-                    </p>
-                    {(activePreset === PRESET_DEEP_TRUTH ? activeScanSources : presetEnabledMatched.slice(0, MAX_PRESET_SOURCES)).map((s) => {
-                      const health = healthMap.get(s.id);
-                      return (
-                        <div key={s.id} className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-emerald-500/50" />
-                          <span className="text-[12px] text-slate-300">{s.name}</span>
-                          <span className="text-[10px] text-slate-600">{s.source_type}</span>
-                          {health && health.status !== 'unknown' && (
-                            <span className={`ml-auto rounded-full border px-1 py-0.5 text-[9px] font-bold ${healthBadgeCls(health.status)}`}>
-                              {HEALTH_LABELS[health.status]}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {activePreset !== PRESET_DEEP_TRUTH && presetEnabledMatched.length > MAX_PRESET_SOURCES && (
-                      <p className="text-[11px] text-slate-600">
-                        +{presetEnabledMatched.length - MAX_PRESET_SOURCES} more enabled but capped — rotate via health score
-                      </p>
-                    )}
-                    {activePreset === PRESET_DEEP_TRUTH && activeScanSources.length > 10 && (
-                      <p className="text-[11px] text-slate-600">
-                        {Math.ceil(activeScanSources.length / 10)} batches of 10 · all archive sources included
-                      </p>
-                    )}
-                    <p className="mt-1 text-[10px] text-slate-700">
-                      No pages fetched — click Run Scan to begin.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* No sources at all */}
-            {enabledSources.length === 0 && (
-              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-6 text-center">
-                <p className="mb-4 text-[16px] text-slate-400">No sources are enabled yet.</p>
-                <a href="/scanner/sources" className={BTN_GHOST}>
-                  Manage Sources →
-                </a>
-              </div>
-            )}
-
-            {/* Scan mode selector (Phase AA) */}
+            {/* ── Scan mode selector (Phase AA) — moved up for mobile accessibility ── */}
             {(enabledSources.length > 0 || activeScanSources.length > 0) && (() => {
               const MODES: { id: ScanMode; label: string; icon: string; desc: string; activeCls: string }[] = [
                 { id: 'fresh',        label: 'Fresh Scan',   icon: '◌', desc: 'Default balanced scan',           activeCls: 'border-emerald-500/40 bg-emerald-500/[0.07] text-emerald-300' },
@@ -1971,7 +1797,7 @@ export function ScannerConsoleClient({
               );
             })()}
 
-            {/* Run scan button */}
+            {/* ── Run scan button — directly after mode selector ── */}
             {(enabledSources.length > 0 || activeScanSources.length > 0 || activePreset === PRESET_DEBUG) && (
               <div className="flex flex-col gap-2">
                 <button
@@ -1982,7 +1808,7 @@ export function ScannerConsoleClient({
                   {(() => {
                     if (scanPhase === 'scanning') return <><Spinner /> {batchProgress && batchProgress.total > 1 ? `Batch ${batchProgress.current}/${batchProgress.total}…` : 'Scanning…'}</>;
                     const count = activeScanSources.length;
-                    const batchCount = count > 0 ? Math.ceil(count / 10) : 0;
+                    const batchCount = count > 0 ? Math.ceil(count / 5) : 0;
                     const countLabel = activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG
                       ? ` · ${count} source${count !== 1 ? 's' : ''}${batchCount > 1 ? ` · ${batchCount} batches` : ''}`
                       : '';
@@ -1993,6 +1819,12 @@ export function ScannerConsoleClient({
                 </button>
                 {scanPhase === 'scanning' && (
                   <div className="flex flex-col gap-1.5">
+                    <button
+                      onClick={handleStopScan}
+                      className="w-full rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-[13px] font-semibold uppercase tracking-[0.14em] text-red-400/80 transition-colors hover:border-red-500/45 hover:text-red-400"
+                    >
+                      ✕ Stop Scan
+                    </button>
                     {batchProgress && batchProgress.total > 1 ? (
                       <>
                         <div className="flex items-center justify-between gap-2">
@@ -2007,7 +1839,6 @@ export function ScannerConsoleClient({
                             {batchProgress.errors > 0 && ` · ${batchProgress.errors} err`}
                           </span>
                         </div>
-                        {/* Progress bar */}
                         <div className="h-1 w-full overflow-hidden rounded-full bg-white/8">
                           <div
                             className="h-full bg-emerald-400/60 transition-all duration-300"
@@ -2042,6 +1873,167 @@ export function ScannerConsoleClient({
                 )}
               </div>
             )}
+
+            {/* ── No sources at all ── */}
+            {enabledSources.length === 0 && (
+              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-6 text-center">
+                <p className="mb-4 text-[16px] text-slate-400">No sources are enabled yet.</p>
+                <a href="/scanner/sources" className={BTN_GHOST}>
+                  Manage Sources →
+                </a>
+              </div>
+            )}
+
+            {/* ── DTS low-source shortcut (actionable — always visible) ── */}
+            {activePreset === PRESET_DEEP_TRUTH && activeScanSources.length > 0 && activeScanSources.length < 5 && (
+              <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] px-4 py-3">
+                <p className="mb-2 text-[12px] text-sky-400/70">
+                  Only {activeScanSources.length} DTS source{activeScanSources.length !== 1 ? 's' : ''} enabled — enable more for better coverage.
+                </p>
+                <button
+                  onClick={async () => {
+                    const r = await autoEnableDeepTruthSourcesAction();
+                    if (r.enabled.length > 0) window.location.reload();
+                  }}
+                  className="w-full rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2 text-[12px] font-bold uppercase tracking-wider text-sky-400 transition-colors hover:bg-sky-500/12"
+                >
+                  Enable Deep Truth Sources
+                </button>
+              </div>
+            )}
+
+            {/* ── Phase AT: collapsed source list — compact summary with show/hide toggle ── */}
+            {(activeScanSources.length > 0 || (activePreset === PRESET_ALL && enabledSources.length > 0)) && (() => {
+              const srcList    = activePreset === PRESET_ALL ? enabledSources : activeScanSources;
+              const strongCnt  = srcList.filter((s) => healthMap.get(s.id)?.status === 'high-yield').length;
+              const weakCnt    = srcList.filter((s) => healthMap.get(s.id)?.status === 'weak').length;
+              const blockedCnt = srcList.filter((s) => healthMap.get(s.id)?.status === 'blocked').length;
+              const parts: string[] = [`${srcList.length} source${srcList.length !== 1 ? 's' : ''}`];
+              if (strongCnt  > 0) parts.push(`${strongCnt} high`);
+              if (weakCnt    > 0) parts.push(`${weakCnt} weak`);
+              if (blockedCnt > 0) parts.push(`${blockedCnt} blocked`);
+              const summary = parts.join(' · ');
+              return (
+                <div className="rounded-xl border border-white/8 bg-white/[0.018]">
+                  <button
+                    onClick={() => setShowSourceList((v) => !v)}
+                    className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+                  >
+                    <span className="text-[12px] text-slate-500">{summary}</span>
+                    <span className="text-[11px] text-slate-700 hover:text-slate-400">
+                      {showSourceList ? '▲ hide sources' : '▼ show sources'}
+                    </span>
+                  </button>
+
+                  {showSourceList && (
+                    <div className="border-t border-white/6 px-4 pb-3 pt-2">
+                      {/* Active sources for selected preset */}
+                      {activePreset !== PRESET_ALL && activeScanSources.length > 0 && (
+                        <div className="mb-3">
+                          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-widest text-slate-700">
+                            {activePreset === PRESET_DEEP_TRUTH
+                              ? `${activeScanSources.length} archive sources · batched`
+                              : `Running · max ${MAX_PRESET_SOURCES} · 5 per source`}
+                          </p>
+                          <div className="flex flex-col gap-1.5">
+                            {activeScanSources.map((s) => {
+                              const rec    = getSourceRecommendation(s);
+                              const health = healthMap.get(s.id);
+                              const isWeak = health?.status === 'weak' || health?.status === 'blocked';
+                              return (
+                                <div key={s.id}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                      {s.source_type}
+                                    </span>
+                                    <span className={`text-[12px] ${isWeak ? 'text-slate-500' : 'text-slate-300'}`}>
+                                      {s.name}
+                                    </span>
+                                    {health && health.status !== 'unknown' && (
+                                      <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest ${healthBadgeCls(health.status)}`}>
+                                        {HEALTH_LABELS[health.status]}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {rec && !isWeak && (
+                                    <p className="mt-0.5 text-[10px] leading-relaxed text-amber-400/50">{rec}</p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* All sources list (PRESET_ALL) */}
+                      {activePreset === PRESET_ALL && enabledSources.length > 0 && (
+                        <div className="flex flex-col gap-1.5">
+                          {enabledSources.slice(0, 8).map((s) => (
+                            <div key={s.id} className="flex items-center gap-2">
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                {s.source_type}
+                              </span>
+                              <span className="text-[12px] text-slate-400">{s.name}</span>
+                            </div>
+                          ))}
+                          {enabledSources.length > 8 && (
+                            <span className="text-[11px] text-slate-600">+{enabledSources.length - 8} more</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Source coverage / preset test */}
+                      {activePreset !== PRESET_ALL && activePreset !== PRESET_DEBUG && (
+                        <div className={`mt-2 rounded-lg border px-3 py-2 ${presetEnabledMatched.length === 0 ? 'border-red-500/25 bg-red-500/[0.04]' : 'border-white/6 bg-white/[0.01]'}`}>
+                          <div className="flex items-center gap-2 text-[11px]">
+                            <span className="text-slate-700">Coverage:</span>
+                            <span className="text-slate-600">{presetAllMatched.length} matched</span>
+                            <span className={`font-bold ${presetEnabledMatched.length > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {presetEnabledMatched.length} enabled
+                            </span>
+                          </div>
+                          {presetEnabledMatched.length === 0 && (
+                            <p className="mt-1 text-[11px] text-red-400/60">
+                              No enabled sources — <a href="/scanner/sources" className="underline underline-offset-2 hover:text-red-300">manage sources</a>
+                            </p>
+                          )}
+                          {presetEnabledMatched.length > 0 && (
+                            <button
+                              onClick={() => setShowPresetTest((v) => !v)}
+                              className="mt-1.5 text-[11px] text-slate-600 hover:text-slate-300"
+                            >
+                              {showPresetTest ? '▲ hide list' : '▼ full source list'}
+                            </button>
+                          )}
+                          {showPresetTest && presetEnabledMatched.length > 0 && (
+                            <div className="mt-2 flex flex-col gap-1">
+                              {(activePreset === PRESET_DEEP_TRUTH ? activeScanSources : presetEnabledMatched.slice(0, MAX_PRESET_SOURCES)).map((s) => {
+                                const health = healthMap.get(s.id);
+                                return (
+                                  <div key={s.id} className="flex items-center gap-2">
+                                    <span className="w-1 h-1 shrink-0 rounded-full bg-emerald-500/40" />
+                                    <span className="text-[11px] text-slate-400">{s.name}</span>
+                                    <span className="text-[10px] text-slate-700">{s.source_type}</span>
+                                    {health && health.status !== 'unknown' && (
+                                      <span className={`ml-auto rounded-full border px-1 py-0.5 text-[9px] font-bold ${healthBadgeCls(health.status)}`}>
+                                        {HEALTH_LABELS[health.status]}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                              {activePreset !== PRESET_DEEP_TRUTH && presetEnabledMatched.length > MAX_PRESET_SOURCES && (
+                                <p className="text-[10px] text-slate-700">+{presetEnabledMatched.length - MAX_PRESET_SOURCES} more (capped)</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <a href="/scanner/sources" className={BTN_GHOST}>
               Manage Sources
