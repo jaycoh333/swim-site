@@ -164,10 +164,15 @@ export async function getThread(id: string): Promise<ThreadContent | undefined> 
     .eq('slug', id)
     .single();
 
-  if (error || !data) {
-    console.error('[repository] getThread:', error?.message);
+  if (error) {
+    if (error.code !== 'PGRST116') {
+      // Not a "no rows" result — real error (RLS block, network failure, bad key, etc.)
+      // Check SUPABASE_SERVICE_ROLE_KEY is set in Vercel env vars.
+      console.error('[repository] getThread SUPABASE ERROR — code:', error.code, '| hint:', error.hint, '| message:', error.message);
+    }
     return mockDb.getThread(id);
   }
+  if (!data) return mockDb.getThread(id);
   return dbThreadToContent(data);
 }
 

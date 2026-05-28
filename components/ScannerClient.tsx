@@ -7,6 +7,7 @@ import { AmbientGrid } from '@/components/AmbientGrid';
 import { NetworkFooter } from '@/components/NetworkFooter';
 import { ShareBar } from '@/components/ShareBar';
 import { SwimAiTerminal } from '@/components/SwimAiTerminal';
+import { ArchiveTerminalModal, type ArchiveModalData } from '@/components/ArchiveTerminalModal';
 import { signalsToTerminalFeed, MOCK_TERMINAL_FEED } from '@/lib/terminal-feed';
 import { CATEGORY_COLORS } from '@/lib/forum-types';
 import type { DbRecoveredSignal } from '@/lib/supabase/types';
@@ -328,11 +329,32 @@ function ActivityTimeline({ events, now }: { events: ActivityEvent[]; now: numbe
 // Signal card
 // ---------------------------------------------------------------------------
 
-function SignalCard({ sig, shareText }: { sig: SignalEntry; shareText: string }) {
+function SignalCard({ sig, shareText, onOpenModal }: { sig: SignalEntry; shareText: string; onOpenModal: (data: ArchiveModalData) => void }) {
+  function handleCardClick(e: React.MouseEvent) {
+    if ((e.target as HTMLElement).closest('a, button')) return;
+    onOpenModal({
+      type:          sig.isReborn ? 'THREAD REBORN' : 'SIGNAL RECOVERED',
+      title:         sig.title,
+      excerpt:       sig.summary,
+      source:        sig.source,
+      sourceType:    sig.sourceType,
+      category:      sig.category,
+      categoryColor: sig.categoryColor,
+      timestamp:     sig.recovered,
+      isReborn:      sig.isReborn,
+      tags:          sig.tags,
+    });
+  }
+
   return (
     <div
-      className="terminal-card overflow-hidden"
+      className="terminal-card overflow-hidden cursor-pointer"
       style={{ borderLeftColor: `${sig.categoryColor}40` }}
+      onClick={handleCardClick}
+      role="button"
+      tabIndex={0}
+      aria-label={`View details: ${sig.title}`}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(e as unknown as React.MouseEvent); } }}
     >
       {/* Visual header */}
       {sig.sourceImageUrl ? (
@@ -512,6 +534,7 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
   const router = useRouter();
 
   const [now, setNow] = useState<number>(0);
+  const [modalData, setModalData] = useState<ArchiveModalData | null>(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -650,6 +673,7 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
                   key={sig.id}
                   sig={sig}
                   shareText={buildSignalShareText(sig)}
+                  onOpenModal={setModalData}
                 />
               ))}
             </div>
@@ -674,6 +698,8 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
           <NetworkFooter />
         </div>
       </div>
+
+      <ArchiveTerminalModal data={modalData} onClose={() => setModalData(null)} />
     </div>
   );
 }

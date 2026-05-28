@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import type { TerminalEntry } from '@/lib/terminal-feed';
+import { ArchiveTerminalModal, type ArchiveModalData } from '@/components/ArchiveTerminalModal';
 
 // ---------------------------------------------------------------------------
 // Entry-type → color scheme
@@ -127,6 +128,7 @@ export function SwimAiTerminal({
   const [phraseFading,   setPhraseFading]   = useState(false);
   const [analyzeIdx,     setAnalyzeIdx]     = useState(0);
   const [analyzeFading,  setAnalyzeFading]  = useState(false);
+  const [modalData,      setModalData]      = useState<ArchiveModalData | null>(null);
 
   // Blinking cursor
   useEffect(() => {
@@ -352,10 +354,22 @@ export function SwimAiTerminal({
               const style       = TYPE_STYLE[entry.type] ?? TYPE_STYLE['SIGNAL RECOVERED'];
               const isHighlight = entry.severity === 'highlight';
               const isWarning   = entry.severity === 'warning';
+              function openModal(e: React.MouseEvent) {
+                if ((e.target as HTMLElement).closest('a')) return; // let links navigate
+                setModalData({
+                  type:      entry.type,
+                  title:     entry.title,
+                  source:    entry.source,
+                  category:  entry.category,
+                  timestamp: entry.timestamp,
+                  severity:  entry.severity,
+                  threadUrl: entry.url,
+                });
+              }
               return (
                 <div
                   key={entry.id}
-                  className="border-b border-crt/[0.055] px-4 py-4 transition-all duration-300 sm:px-5 sm:py-5"
+                  className="border-b border-crt/[0.055] px-4 py-4 transition-all duration-300 sm:px-5 sm:py-5 cursor-pointer"
                   style={{
                     borderLeft: `3px solid ${style.border}`,
                     background: style.bg,
@@ -363,6 +377,11 @@ export function SwimAiTerminal({
                       ? `inset 0 0 20px ${style.glow}`
                       : 'none',
                   }}
+                  onClick={openModal}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View artifact: ${entry.title}`}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModal(e as unknown as React.MouseEvent); }}
                 >
                   {/* Badge row: type + category + timestamp */}
                   <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -468,6 +487,9 @@ export function SwimAiTerminal({
         )}
 
       </div>{/* /relative content wrapper */}
+
+      {/* Phase AU: artifact detail modal */}
+      <ArchiveTerminalModal data={modalData} onClose={() => setModalData(null)} />
     </div>
   );
 }

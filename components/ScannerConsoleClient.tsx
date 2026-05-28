@@ -666,13 +666,19 @@ function PostedCard({ result, isNew }: { result: PostedResult; isNew?: boolean }
       </div>
       <div className="flex flex-col gap-2 p-4">
         {result.threadSlug ? (
-          <a href={`/threads/${result.threadSlug}`} target="_blank" rel="noopener noreferrer"
-            className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400">
-            Open Thread ↗
-          </a>
+          <>
+            <a href={`/threads/${result.threadSlug}`} target="_blank" rel="noopener noreferrer"
+              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-[17px] font-bold text-black transition-colors hover:bg-emerald-400">
+              Open Thread ↗
+            </a>
+            <div className="rounded-xl border border-white/8 bg-white/[0.025] px-3 py-2">
+              <p className="mb-0.5 text-[10px] uppercase tracking-[0.20em] text-slate-600">Thread URL</p>
+              <p className="break-all font-mono text-[12px] text-slate-400">/threads/{result.threadSlug}</p>
+            </div>
+          </>
         ) : (
           <div className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-[14px] text-amber-300">
-            Thread created — check /threads for the new post.
+            Thread created — slug missing, check /threads for the new post.
           </div>
         )}
         <button

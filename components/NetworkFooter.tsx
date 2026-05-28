@@ -65,6 +65,11 @@ export function NetworkFooter() {
           the archive is public · the signal is free · someone is always watching
         </div>
 
+        {/* Build marker — confirms deployed version; remove after deploy verified */}
+        <div className="mt-3 text-center font-mono text-[9px] uppercase tracking-[0.18em] text-crt/15 select-none">
+          SWIM build: public-polish-v1
+        </div>
+
       </div>
     </div>
   );

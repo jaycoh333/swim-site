@@ -37,6 +37,7 @@ import {
   type CreateScannerSourceInput,
   type UpdateScannerSourceInput,
 } from '@/lib/supabase/repository';
+import { revalidatePath } from 'next/cache';
 import type { FetchedCandidate, SignalDuplicate, SessionSourceResult, DiscoveredLink, RejectedPost, SourceDiagnostic, EndpointResult } from '@/lib/scanner-fetch-types';
 import type { DbScannerSource } from '@/lib/supabase/types';
 import {
@@ -4716,7 +4717,12 @@ export async function batchFetchDiscoveredLinksAction(
 export async function rebirthSignalAsThreadAction(
   input: RebirthSignalInput,
 ): Promise<{ threadSlug: string } | { error: string }> {
-  return rebirthSignalAsThread(input);
+  const result = await rebirthSignalAsThread(input);
+  if (!('error' in result)) {
+    revalidatePath('/threads');
+    revalidatePath(`/threads/${result.threadSlug}`);
+  }
+  return result;
 }
 
 // Curator action — publish a recovered signal as a SWIM thread.

@@ -543,14 +543,17 @@ function RebirthSuccessPanel({ result }: { result: PublishResult }) {
             The signal is now a public SWIM thread.
           </p>
         </div>
-        <Link
-          href={`/threads/${result.threadSlug}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex min-h-[56px] items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.12)] px-6 text-xl font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.20)]"
-        >
-          Open Thread ↗
-        </Link>
+        <div className="flex flex-col gap-2">
+          <Link
+            href={`/threads/${result.threadSlug}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex min-h-[56px] items-center gap-2 border-2 border-[#86d46e]/55 bg-[rgba(134,212,110,0.12)] px-6 text-xl font-bold text-[#86d46e] transition-colors hover:bg-[rgba(134,212,110,0.20)]"
+          >
+            Open Thread ↗
+          </Link>
+          <p className="break-all font-mono text-[11px] text-crt/30">/threads/{result.threadSlug}</p>
+        </div>
       </div>
 
       {/* Step 5 label */}

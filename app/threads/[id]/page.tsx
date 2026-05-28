@@ -7,10 +7,11 @@ import { parseThreadMeta } from '@/lib/thread-meta';
 import type { ThreadLineageData } from '@/lib/thread-meta';
 
 /**
- * Allow on-demand SSR for thread slugs not in the initial seed.
- * Static pages for the 16 seed threads are still pre-built at deploy time.
- * New threads created via Supabase get a server-rendered page on first visit.
+ * Force dynamic rendering so newly published threads are always fetched fresh
+ * and a failed first render (e.g. Supabase not reachable) is never cached as
+ * a static "not found" page.
  */
+export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
 
 export function generateStaticParams() {
