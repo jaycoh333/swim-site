@@ -810,6 +810,8 @@ export function ScannerConsoleClient({
   const [diagnostics,      setDiagnostics]      = useState<SourceDiagnostic[]>([]);
   const [showDiagnostics,  setShowDiagnostics]  = useState(false);
   const [showRejected,     setShowRejected]     = useState(false);
+  const [isPartialScan,    setIsPartialScan]    = useState(false);
+  const [scanStartMs,      setScanStartMs]      = useState<number>(0);
   // Preset state
   const [activePreset,      setActivePreset]      = useState<string>(PRESET_DEEP_TRUTH);
   const [lowQualityOpen,    setLowQualityOpen]    = useState<boolean>(false);
@@ -1155,6 +1157,8 @@ export function ScannerConsoleClient({
     setLowQualityOpen(false);
     setShowDiagnostics(false);
     setShowAllResults(false);
+    setIsPartialScan(false);
+    setScanStartMs(Date.now());
     // Phase AJ TASK 8: clear stale approved/edit cards from previous scan session.
     setReadySignals([]);
 
@@ -1172,6 +1176,33 @@ export function ScannerConsoleClient({
     const allResults: SessionSourceResult[]   = [];
     const allDiagnostics: SourceDiagnostic[]  = [];
     const excludeUrls = [...seenUrlsThisSession];
+    let batchPartial = false;
+
+    // Phase AR: sort helpers hoisted so we can flush results incrementally after each batch.
+    const isDTSSort = activePreset === PRESET_DEEP_TRUTH;
+    const SRC_TAX_BONUS: Record<string, number> = { bbs: 10, wayback: 8, archive_forum: 6, archive: 4, mediawiki: 3 };
+    function dtsCandidateScore(c: FetchedCandidate): number {
+      return (c.archiveSignalScore  ?? 0) * 3.0
+           + (c.oldIntrigueScore    ?? 0) * 2.5
+           + (c.archiveYear != null ? Math.max(0, 2020 - c.archiveYear) * 0.3 : 0)
+           + (c.documentSignalScore ?? 0) * 1.5
+           + (SRC_TAX_BONUS[c.sourceType ?? ''] ?? 0);
+    }
+    function liveCandidateScore(c: FetchedCandidate): number {
+      return (c.archiveSignalScore  ?? 0) * 1.5
+           + (c.originPriorityScore ?? 0) * 1.2
+           + (c.finalPriorityScore  ?? 0)
+           + (c.storyScore          ?? 0) * 0.5;
+    }
+    function sortResults(arr: SessionSourceResult[]): SessionSourceResult[] {
+      return [...arr].sort((a, b) => {
+        if (a.status === 'error') return 1;
+        if (b.status === 'error') return -1;
+        const scoreA = isDTSSort ? dtsCandidateScore(a.candidate) : liveCandidateScore(a.candidate);
+        const scoreB = isDTSSort ? dtsCandidateScore(b.candidate) : liveCandidateScore(b.candidate);
+        return scoreB - scoreA;
+      });
+    }
 
     for (let bi = 0; bi < batches.length; bi++) {
       const batch = batches[bi];
@@ -1196,39 +1227,22 @@ export function ScannerConsoleClient({
         for (const id of batch) {
           allResults.push({ sourceId: id, sourceName: id, status: 'error', error: res.error });
         }
-        continue;
+      } else {
+        allResults.push(...res.results);
+        allDiagnostics.push(...(res.diagnostics ?? []));
+        if (res.partialScan) batchPartial = true;
       }
 
-      allResults.push(...res.results);
-      allDiagnostics.push(...(res.diagnostics ?? []));
+      // Phase AR TASK 6: flush results after every batch so the UI shows progress live.
+      const intermediate = sortResults(allResults);
+      setScanResults(intermediate);
+      setDiagnostics([...allDiagnostics]);
     }
 
     setBatchProgress(null);
+    setIsPartialScan(batchPartial);
 
-    // Sort merged results by combined score so highest-value items are first.
-    // Phase AP TASK 4: DTS strict archive sort — archiveSignalScore → oldIntrigueScore → year (older first) → documentSignalScore → taxonomy depth.
-    const isDTSSort = activePreset === PRESET_DEEP_TRUTH;
-    const SRC_TAX_BONUS: Record<string, number> = { bbs: 10, wayback: 8, archive_forum: 6, archive: 4, mediawiki: 3 };
-    function dtsCandidateScore(c: FetchedCandidate): number {
-      return (c.archiveSignalScore  ?? 0) * 3.0
-           + (c.oldIntrigueScore    ?? 0) * 2.5
-           + (c.archiveYear != null ? Math.max(0, 2020 - c.archiveYear) * 0.3 : 0)
-           + (c.documentSignalScore ?? 0) * 1.5
-           + (SRC_TAX_BONUS[c.sourceType ?? ''] ?? 0);
-    }
-    function liveCandidateScore(c: FetchedCandidate): number {
-      return (c.archiveSignalScore  ?? 0) * 1.5
-           + (c.originPriorityScore ?? 0) * 1.2
-           + (c.finalPriorityScore  ?? 0)
-           + (c.storyScore          ?? 0) * 0.5;
-    }
-    const sortedResults = [...allResults].sort((a, b) => {
-      if (a.status === 'error') return 1;
-      if (b.status === 'error') return -1;
-      const scoreA = isDTSSort ? dtsCandidateScore(a.candidate) : liveCandidateScore(a.candidate);
-      const scoreB = isDTSSort ? dtsCandidateScore(b.candidate) : liveCandidateScore(b.candidate);
-      return scoreB - scoreA;
-    });
+    const sortedResults = sortResults(allResults);
 
     setScanResults(sortedResults);
     setScanId((n) => n + 1);
@@ -3554,6 +3568,15 @@ export function ScannerConsoleClient({
                     </div>
                   )}
 
+                  {/* ── Partial scan warning ── */}
+                  {isPartialScan && (
+                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/6 px-4 py-3 text-[13px] text-amber-400/90">
+                      <span className="mr-2 font-bold">⚠ PARTIAL SCAN COMPLETED</span>
+                      45s session timeout was reached — remaining sources were skipped. Results shown are from sources that finished. Re-scan to continue.
+                      {scanStartMs > 0 && <span className="ml-3 text-amber-400/55 font-mono">{Math.round((Date.now() - scanStartMs) / 1000)}s runtime</span>}
+                    </div>
+                  )}
+
                   {/* ── Scan Diagnostics ── */}
                   {diagnostics.length > 0 && (
                     <div className="rounded-xl border border-white/6 bg-white/[0.018]">
@@ -3563,6 +3586,7 @@ export function ScannerConsoleClient({
                       >
                         <span className="text-[13px] font-semibold uppercase tracking-widest text-slate-600">
                           Scan Diagnostics · {diagnostics.length} sources
+                          {diagnostics.filter(d => d.timedOut).length > 0 && <span className="ml-2 text-amber-500/70">· {diagnostics.filter(d => d.timedOut).length} timed out</span>}
                         </span>
                         <span className="text-[12px] text-slate-700">{showDiagnostics ? '▲ hide' : '▼ show'}</span>
                       </button>
@@ -3587,6 +3611,9 @@ export function ScannerConsoleClient({
                                   <span className="rounded border border-white/8 px-1.5 py-0.5 text-[12px] font-mono text-slate-600">{d.routeUsed}</span>
                                   {d.subreddit && <span className="text-[12px] text-slate-600">r/{d.subreddit}</span>}
                                   {d.searchQuery && <span className="text-[12px] text-slate-600">q: &quot;{d.searchQuery}&quot;</span>}
+                                  {d.timedOut && <span className="rounded border border-amber-500/25 bg-amber-500/8 px-2 py-0.5 text-[12px] text-amber-400">timed out</span>}
+                                  {d.stalled  && <span className="rounded border border-orange-500/25 bg-orange-500/8 px-2 py-0.5 text-[12px] text-orange-400">stalled</span>}
+                                  {d.runtimeMs != null && <span className="text-[11px] font-mono text-slate-700">{(d.runtimeMs / 1000).toFixed(1)}s</span>}
                                   {d.errorMessage && <span className="rounded border border-red-500/20 bg-red-500/8 px-2 py-0.5 text-[12px] text-red-400">error</span>}
                                 </div>
                                 <div className="mb-2 grid grid-cols-4 gap-1 text-center">

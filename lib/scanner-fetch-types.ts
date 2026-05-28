@@ -151,6 +151,10 @@ export interface SourceDiagnostic {
   yearWindowFrom?:     number;    // CDX era window start year used for this scan
   yearWindowTo?:       number;    // CDX era window end year used for this scan
   cdxQueryUrl?:        string;    // raw CDX API URL requested (for replay)
+  // Phase AR: runtime stabilization
+  timedOut?:           boolean;   // true when per-source wall-clock deadline was exceeded
+  stalled?:            boolean;   // true when source made no progress for PER_SOURCE_TIMEOUT_MS
+  runtimeMs?:          number;    // actual wall-clock time spent on this source
 }
 
 // ---------------------------------------------------------------------------

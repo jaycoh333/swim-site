@@ -770,7 +770,7 @@ async function fetchRedditCommentCorroboration(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'application/json',
       },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { corroborationScore: 0, corroborationNotes: [] };
     data = await res.json();
@@ -832,7 +832,7 @@ async function fetchRedditSourcePreview(
           'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
           'Accept':     'application/json',
         },
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!res.ok) continue;
       data = await res.json();
@@ -1018,7 +1018,7 @@ async function fetchRedditMultipleCandidates(
           'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
           'Accept':     'application/json',
         },
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       epResult.status = res.status;
 
@@ -1028,7 +1028,7 @@ async function fetchRedditMultipleCandidates(
           const retry = await fetch(endpoint, {
             cache:   'no-store',
             headers: { 'User-Agent': 'SWIMArchiveBot/1.0', 'Accept': 'application/json' },
-            signal:  AbortSignal.timeout(10_000),
+            signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
           });
           if (retry.ok) { res = retry; epResult.status = retry.status; }
         } catch { /* keep original response */ }
@@ -1067,7 +1067,7 @@ async function fetchRedditMultipleCandidates(
       const p2Res = await fetch(page2Url, {
         cache:   'no-store',
         headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)', 'Accept': 'application/json' },
-        signal:  AbortSignal.timeout(12_000),
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (p2Res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1090,7 +1090,7 @@ async function fetchRedditMultipleCandidates(
       const rssRes = await fetch(rssUrl, {
         cache:   'no-store',
         headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0', 'Accept': 'application/rss+xml,application/atom+xml,text/xml' },
-        signal:  AbortSignal.timeout(10_000),
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (rssRes.ok) {
         const xml = await rssRes.text();
@@ -1577,7 +1577,7 @@ export async function fetchScannerSourcePreviewAction(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!response.ok) {
       const isBlocked = response.status === 403 || response.status === 401 || response.status === 429;
@@ -1846,8 +1846,11 @@ export async function disableHighRiskSourcesAction(): Promise<{ disabled: string
 //   - Per-source timeout: 10 seconds
 // ---------------------------------------------------------------------------
 
-const PER_SOURCE_CANDIDATE_CAP    = 5;  // max candidates returned per source
-const SESSION_TOTAL_CANDIDATE_CAP = 50; // max total per action call (10 sources × 5 each)
+const PER_SOURCE_CANDIDATE_CAP    = 5;     // max candidates returned per source
+const SESSION_TOTAL_CANDIDATE_CAP = 50;    // max total per action call (10 sources × 5 each)
+const SESSION_TIMEOUT_MS          = 45_000; // global scan deadline — partial results returned if hit
+const PER_SOURCE_TIMEOUT_MS       = 8_000;  // per-source wall-clock deadline
+const FETCH_TIMEOUT_MS            = 4_000;  // max for any individual HTTP fetch
 
 export type ScanMode = 'fresh' | 'deep-archive' | 'chaos' | 'unseen-only';
 
@@ -1868,7 +1871,7 @@ export async function runFetchSessionAction(
     /** Phase AD: deep truth scanner — hard archive-only mode, rejects Reddit/modern content */
     isDeepTruth?: boolean;
   },
-): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[] } | { error: string }> {
+): Promise<{ results: SessionSourceResult[]; diagnostics: SourceDiagnostic[]; partialScan?: boolean } | { error: string }> {
   if (!sourceIds.length) return { error: 'no source IDs provided' };
   if (sourceIds.length > 50) return { error: 'max 50 sources per batch call — client should batch in groups of 10' };
 
@@ -1928,6 +1931,11 @@ export async function runFetchSessionAction(
   const results: SessionSourceResult[] = [];
   const diagnostics: SourceDiagnostic[] = [];
 
+  // Phase AR: global session deadline — returns partialScan:true if hit.
+  const sessionStartMs  = Date.now();
+  let partialScan       = false;
+  const isSessionExpired = () => Date.now() - sessionStartMs >= SESSION_TIMEOUT_MS;
+
   // Helper: check freshness before attempting checkSignalDuplicates.
   function isAlreadyArchived(url: string): boolean {
     const norm = normalizeUrl(url);
@@ -1960,6 +1968,7 @@ export async function runFetchSessionAction(
     srcId:            string,
     liveFailReason:   string,
     trigger:          'live-blocked' | 'live-weak-index',
+    sourceDeadlineMs?: number,
   ): Promise<{ passed: number; snapshots: number }> {
     let fbPassed = 0, fbRejected = 0;
     try {
@@ -1978,9 +1987,10 @@ export async function runFetchSessionAction(
         return { passed: 0, snapshots: 0 };
       }
       const snaps    = wbDisc.links.length;
-      const linkCap  = effectiveDeepTruth ? 20 : 12;
+      const linkCap  = effectiveDeepTruth ? 8 : 5;
       for (const link of wbDisc.links.slice(0, linkCap)) {
         if ((perSourceCount.get(srcId) ?? 0) >= effectivePerSourceCap) break;
+        if (sourceDeadlineMs && Date.now() > sourceDeadlineMs) break;
         const fr = await fetchWaybackPagePreview(src, link.url, link.topicGroup, link.topicGroupName);
         if ('error' in fr) { fbRejected++; continue; }
         const fbCand: FetchedCandidate = {
@@ -2001,6 +2011,7 @@ export async function runFetchSessionAction(
             trackResult(srcId, { sourceId: srcId, sourceName: src.name, status: 'preview', candidate: fbCand });
             fbPassed++;
           }
+          break; // Phase AR: abort fallback after first successful artifact recovery
         }
       }
       const routeSuffix = fbPassed > 0 ? '' : ' (0 usable snapshots)';
@@ -2026,6 +2037,9 @@ export async function runFetchSessionAction(
   }
 
   for (const sourceId of sourceIds) {
+    // Phase AR: stop if global session deadline is hit — return partial results.
+    if (isSessionExpired()) { partialScan = true; break; }
+
     // Stop fetching if we have hit the session total candidate cap.
     if (totalCandidates() >= SESSION_TOTAL_CANDIDATE_CAP) break;
 
@@ -2046,6 +2060,10 @@ export async function runFetchSessionAction(
       results.push({ sourceId, sourceName: source.name, status: 'error', error: 'no base URL configured' });
       continue;
     }
+
+    // Phase AR: per-source deadline — limits total wall-clock time for this source.
+    const sourceStartMs    = Date.now();
+    const sourceDeadlineMs = sourceStartMs + PER_SOURCE_TIMEOUT_MS;
 
     // Erowid — auto-discover individual experience reports and fetch each one
     if (isErowidSource(source)) {
@@ -2241,7 +2259,7 @@ export async function runFetchSessionAction(
                 const apiRes = await fetch(apiUrl, {
                   cache:   'no-store',
                   headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
-                  signal:  AbortSignal.timeout(12_000),
+                  signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
                 });
                 if (apiRes.ok) {
                   const json = await apiRes.json() as {
@@ -2308,7 +2326,7 @@ export async function runFetchSessionAction(
                 const apiRes = await fetch(collApiUrl, {
                   cache:   'no-store',
                   headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
-                  signal:  AbortSignal.timeout(12_000),
+                  signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
                 });
                 if (apiRes.ok) {
                   const json = await apiRes.json() as {
@@ -2371,7 +2389,7 @@ export async function runFetchSessionAction(
     // Phase AN TASK 3+4: Fringe/occult archive sources (sacred-texts, bibliotecapleyades,
     // rexresearch, keelynet, etc.) — treat index pages as discovery, follow child doc links.
     if (isFringeArchiveSource(source)) {
-      const fringeResult = await fetchOccultArchiveCandidates(source, effectiveDeepTruth);
+      const fringeResult = await fetchOccultArchiveCandidates(source, effectiveDeepTruth, sourceDeadlineMs);
       if (fringeResult.error && fringeResult.candidates.length === 0) {
         diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'occult-archive-deepcrawl', linksDiscovered: fringeResult.debugInfo.linksFound, pagesFetched: fringeResult.debugInfo.pagesFetched, candidatesPassed: 0, candidatesRejected: fringeResult.debugInfo.pagesRejected, rejectReasons: fringeResult.debugInfo.rejectReasons.slice(0, 6), errorMessage: fringeResult.error });
         results.push({ sourceId, sourceName: source.name, status: 'error', error: fringeResult.error });
@@ -2401,7 +2419,7 @@ export async function runFetchSessionAction(
     // Phase AM TASK 5: old_web taxonomy — geocities/angelfire/tripod pages are defunct.
     // Skip the live fetch and go directly to Wayback CDX archive recovery.
     if (sourceTax === 'old_web') {
-      const fb = await runWaybackFallback(source, sourceId, 'old-web source — domain defunct, skip live fetch', 'live-blocked');
+      const fb = await runWaybackFallback(source, sourceId, 'old-web source — domain defunct, skip live fetch', 'live-blocked', sourceDeadlineMs);
       if (fb.passed === 0) {
         results.push({ sourceId, sourceName: source.name, status: 'error', error: 'Old web source — no usable Wayback snapshots found' });
       }
@@ -2424,13 +2442,13 @@ export async function runFetchSessionAction(
           'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
           'Accept':     'text/html,application/xhtml+xml;q=0.9',
         },
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {
         const isBlocked = response.status === 403 || response.status === 401 || response.status === 429;
         const liveFailReason = isBlocked ? blockedFetchError(response.status) : `HTTP ${response.status} — ${response.statusText}`;
         // Phase AL TASK 1: blocked live source → try Wayback CDX fallback
-        const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked');
+        const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked', sourceDeadlineMs);
         if (fb.passed === 0) {
           const suffix = fb.snapshots > 0 ? ` (Wayback: ${fb.snapshots} snapshots found, none usable)` : ' (Wayback fallback also found nothing)';
           results.push({ sourceId, sourceName: source.name, status: 'error', error: `${liveFailReason}${suffix}` });
@@ -2447,7 +2465,7 @@ export async function runFetchSessionAction(
       const msg = err instanceof Error ? err.message : String(err);
       // Phase AL TASK 1: network failure → try Wayback CDX fallback
       const liveFailReason = `network — ${msg}`;
-      const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked');
+      const fb = await runWaybackFallback(source, sourceId, liveFailReason, 'live-blocked', sourceDeadlineMs);
       if (fb.passed === 0) {
         results.push({ sourceId, sourceName: source.name, status: 'error', error: liveFailReason });
       }
@@ -2496,7 +2514,7 @@ export async function runFetchSessionAction(
     // Phase AL TASK 2: weak index fallback — for DTS/Origin scan, try Wayback CDX when
     // no story links were extracted from the index page (index-only or stub site).
     if (storyLinks.length === 0 && (effectiveDeepTruth || effectiveOriginScan)) {
-      const fb = await runWaybackFallback(source, sourceId, 'live index page — no story links extracted', 'live-weak-index');
+      const fb = await runWaybackFallback(source, sourceId, 'live index page — no story links extracted', 'live-weak-index', sourceDeadlineMs);
       if (fb.passed > 0) continue;  // Wayback found candidates — skip index page fallback
       // else: fall through to single index-page metadata candidate
     }
@@ -2556,7 +2574,7 @@ export async function runFetchSessionAction(
               'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
               'Accept':     'text/html,application/xhtml+xml;q=0.9',
             },
-            signal: AbortSignal.timeout(10_000),
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           });
           if (!res.ok) continue;
           const ct = res.headers.get('content-type') ?? '';
@@ -2810,7 +2828,7 @@ export async function runFetchSessionAction(
   // Persist all URLs seen this session so future scans skip them automatically.
   try { recordSeenUrls(seenThisSession, 'seen'); } catch { /* never block */ }
 
-  return { results, diagnostics };
+  return { results, diagnostics, ...(partialScan ? { partialScan: true } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -2922,7 +2940,7 @@ async function discoverRedditPosts(
           'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
           'Accept':     'application/json',
         },
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!res.ok) continue;
       data = await res.json();
@@ -2981,7 +2999,7 @@ async function fetchRedditPostPreview(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'application/json',
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { error: `Reddit post JSON HTTP ${res.status}` };
     data = await res.json();
@@ -3560,7 +3578,7 @@ async function fetchWaybackPagePreview(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { error: `Wayback fetch HTTP ${res.status}` };
     const ct = res.headers.get('content-type') ?? '';
@@ -3855,7 +3873,7 @@ async function fetchTextfilesMultipleCandidates(
       const res = await fetch(dirUrl, {
         cache:   'no-store',
         headers: { ...UA_HDR, Accept: 'text/html,application/xhtml+xml;q=0.9' },
-        signal:  AbortSignal.timeout(10_000),
+        signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!res.ok) return [];
       dirHtml = await res.text();
@@ -3889,7 +3907,7 @@ async function fetchTextfilesMultipleCandidates(
         const subRes = await fetch(subdir, {
           cache:   'no-store',
           headers: { ...UA_HDR, Accept: 'text/html,application/xhtml+xml;q=0.9' },
-          signal:  AbortSignal.timeout(8_000),
+          signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!subRes.ok) continue;
         const subHtml = await subRes.text();
@@ -3938,7 +3956,7 @@ async function fetchTextfilesMultipleCandidates(
         const res = await fetch(txtUrl, {
           cache:   'no-store',
           headers: UA_HDR,
-          signal:  AbortSignal.timeout(12_000),
+          signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) continue;
         rawText = await res.text();
@@ -4114,6 +4132,7 @@ function isFringeArchiveSource(source: DbScannerSource): boolean {
 async function fetchOccultArchiveCandidates(
   source: DbScannerSource,
   isDeepTruth: boolean,
+  sourceDeadlineMs?: number,
 ): Promise<{
   candidates:  FetchedCandidate[];
   error?:      string;
@@ -4132,7 +4151,7 @@ async function fetchOccultArchiveCandidates(
   if (!source.base_url) return { candidates, error: 'no base URL', debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
   let indexHtml: string;
   try {
-    const res = await fetch(source.base_url, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(14_000) });
+    const res = await fetch(source.base_url, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) return { candidates, error: `HTTP ${res.status}`, debugInfo: { linksFound, pagesFetched, pagesRejected, rejectReasons } };
     indexHtml = await res.text();
   } catch (err) {
@@ -4182,14 +4201,15 @@ async function fetchOccultArchiveCandidates(
     [childLinks[i], childLinks[j]] = [childLinks[j], childLinks[i]];
   }
 
-  const cap = isDeepTruth ? 8 : 5;
+  const cap = 5; // Phase AR: cap both modes at 5 child fetches
 
-  for (const childUrl of childLinks.slice(0, cap * 2)) {
-    if (candidates.length >= cap) break;
+  for (const childUrl of childLinks.slice(0, cap)) {
+    if (candidates.length >= 2) break; // Phase AR: stop after 2 valid artifacts
+    if (sourceDeadlineMs && Date.now() > sourceDeadlineMs) break;
 
     let html: string;
     try {
-      const res = await fetch(childUrl, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(12_000) });
+      const res = await fetch(childUrl, { cache: 'no-store', headers: UA_HDR, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) { pagesRejected++; rejectReasons.push(`HTTP ${res.status} — ${childUrl.slice(-50)}`); continue; }
       const ct = res.headers.get('content-type') ?? '';
       if (!ct.includes('text/html') && !ct.includes('xhtml')) { pagesRejected++; rejectReasons.push(`non-html: ${ct.split(';')[0]}`); continue; }
@@ -4271,7 +4291,7 @@ async function discoverErowidExperienceLinks(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { error: `Erowid fetch HTTP ${res.status} — ${res.statusText}` };
     const ct = res.headers.get('content-type') ?? '';
@@ -4344,7 +4364,7 @@ async function fetchErowidExperiencePreview(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { error: `Erowid report fetch HTTP ${res.status}` };
     const ct = res.headers.get('content-type') ?? '';
@@ -4490,7 +4510,7 @@ export async function discoverSourceLinksAction(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return { error: `HTTP ${response.status} — ${response.statusText}` };
     const ct = response.headers.get('content-type') ?? '';
@@ -4604,7 +4624,7 @@ export async function fetchDiscoveredLinkPreviewAction(
         'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)',
         'Accept':     'text/html,application/xhtml+xml;q=0.9',
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return { error: `HTTP ${response.status} — ${response.statusText}` };
     const ct = response.headers.get('content-type') ?? '';
