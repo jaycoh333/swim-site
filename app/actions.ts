@@ -2219,77 +2219,159 @@ export async function runFetchSessionAction(
       continue;
     }
 
-    // Phase AJ TASK 4: Internet Archive search API — for DTS mode, use IA Advanced Search
-    // instead of HTML scraping for archive.org/search?query=... sources.
-    if (effectiveDeepTruth) {
+    // Phase AM TASK 5: source taxonomy — drives routing decisions below.
+    const sourceTax = classifySourceTaxonomy(source.source_type ?? '', source.name);
+
+    // Phase AJ TASK 4 / Phase AM TASK 2: Internet Archive API — runs in DTS mode, or when
+    // taxonomy is document_archive. Handles /search?query= and /details/{collection} formats.
+    if (effectiveDeepTruth || sourceTax === 'document_archive') {
       try {
         const parsedIaUrl = new URL(source.base_url);
-        if (parsedIaUrl.hostname === 'archive.org' && parsedIaUrl.pathname === '/search') {
-          const iaQuery = parsedIaUrl.searchParams.get('query') ?? '';
-          if (iaQuery) {
-            const apiUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(iaQuery)}&fl[]=identifier,title,description,subject,date,creator&rows=8&output=json&page=1`;
-            let iaHandled = false;
-            try {
-              const apiRes = await fetch(apiUrl, {
-                cache:   'no-store',
-                headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
-                signal:  AbortSignal.timeout(12_000),
-              });
-              if (apiRes.ok) {
-                const json = await apiRes.json() as {
-                  response?: { docs?: Array<{ identifier?: string; title?: string; description?: string; subject?: string | string[]; date?: string; creator?: string }> };
-                };
-                const docs = json?.response?.docs ?? [];
-                let iaPassed = 0;
-                for (const doc of docs) {
-                  if (!doc.identifier || !doc.title) continue;
-                  if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
-                  const itemUrl = `https://archive.org/details/${doc.identifier}`;
-                  if (isAlreadyArchived(itemUrl)) continue;
-                  const title   = cleanTitle(doc.title) || source.name;
-                  const subjArr = Array.isArray(doc.subject) ? doc.subject : (doc.subject ? [doc.subject] : []);
-                  const summary = [doc.description, subjArr.join(', ')].filter(Boolean).join(' — ').trim().slice(0, 2000)
-                                  || 'Internet Archive item — no description available.';
-                  if (!dtsArchivePassesMinimum(itemUrl, title, summary).pass) continue;
-                  const archiveYear = doc.date ? (parseInt(doc.date.slice(0, 4), 10) || undefined) : undefined;
-                  const heur = scoreStoryHeuristics(`${title} ${summary}`);
-                  const conf = scoreExtractionConfidence(title, summary);
-                  const iaCand: FetchedCandidate = {
-                    title:                title.slice(0, 200),
-                    summary,
-                    sourceUrl:            itemUrl,
-                    category:             source.category_focus[0] ?? 'Internet Lore',
-                    tags:                 ['scanner-source', 'archive', 'internet-archive', 'dts-artifact'],
-                    anomalyScore:         6,
-                    archiveYear,
-                    isArchived:           true,
-                    attributionText:      `Internet Archive · ${source.name}`,
-                    captureNotes:         `IA Advanced Search: "${iaQuery}". Item: ${doc.identifier}`,
-                    categoryNote:         buildCategoryNote(source.category_focus, title, doc.description ?? ''),
-                    extractionConfidence: conf.confidence,
-                    extractionWarning:    conf.warning ?? undefined,
-                    storyScore:           heur.storyScore,
-                    storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
-                    finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: false }),
-                    sourceTaxonomy:       classifySourceTaxonomy('archive', source.name),
-                    documentSignalScore:  detectDocumentSignals(`${title} ${summary}`) || undefined,
+        if (parsedIaUrl.hostname === 'archive.org') {
+          // Sub-case A: /search?query=... — IA full-text search API
+          if (parsedIaUrl.pathname === '/search') {
+            const iaQuery = parsedIaUrl.searchParams.get('query') ?? '';
+            if (iaQuery) {
+              const apiUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(iaQuery)}&fl[]=identifier,title,description,subject,date,creator&rows=8&output=json&page=1`;
+              let iaHandled = false;
+              try {
+                const apiRes = await fetch(apiUrl, {
+                  cache:   'no-store',
+                  headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
+                  signal:  AbortSignal.timeout(12_000),
+                });
+                if (apiRes.ok) {
+                  const json = await apiRes.json() as {
+                    response?: { docs?: Array<{ identifier?: string; title?: string; description?: string; subject?: string | string[]; date?: string; creator?: string }> };
                   };
-                  const dupes = await checkSignalDuplicates(itemUrl, iaCand.title);
-                  if (dupes.length > 0) {
-                    trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: iaCand, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
-                  } else {
-                    trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: iaCand });
-                    iaPassed++;
+                  const docs = json?.response?.docs ?? [];
+                  let iaPassed = 0;
+                  for (const doc of docs) {
+                    if (!doc.identifier || !doc.title) continue;
+                    if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
+                    const itemUrl = `https://archive.org/details/${doc.identifier}`;
+                    if (isAlreadyArchived(itemUrl)) continue;
+                    const title   = cleanTitle(doc.title) || source.name;
+                    const subjArr = Array.isArray(doc.subject) ? doc.subject : (doc.subject ? [doc.subject] : []);
+                    const summary = [doc.description, subjArr.join(', ')].filter(Boolean).join(' — ').trim().slice(0, 2000)
+                                    || 'Internet Archive item — no description available.';
+                    if (!dtsArchivePassesMinimum(itemUrl, title, summary).pass) continue;
+                    const archiveYear = doc.date ? (parseInt(doc.date.slice(0, 4), 10) || undefined) : undefined;
+                    const heur = scoreStoryHeuristics(`${title} ${summary}`);
+                    const conf = scoreExtractionConfidence(title, summary);
+                    const iaCand: FetchedCandidate = {
+                      title:                title.slice(0, 200),
+                      summary,
+                      sourceUrl:            itemUrl,
+                      category:             source.category_focus[0] ?? 'Internet Lore',
+                      tags:                 ['scanner-source', 'archive', 'internet-archive', 'dts-artifact'],
+                      anomalyScore:         6,
+                      archiveYear,
+                      isArchived:           true,
+                      attributionText:      `Internet Archive · ${source.name}`,
+                      captureNotes:         `IA Advanced Search: "${iaQuery}". Item: ${doc.identifier}`,
+                      categoryNote:         buildCategoryNote(source.category_focus, title, doc.description ?? ''),
+                      extractionConfidence: conf.confidence,
+                      extractionWarning:    conf.warning ?? undefined,
+                      storyScore:           heur.storyScore,
+                      storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+                      finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: false }),
+                      sourceTaxonomy:       sourceTax,
+                      documentSignalScore:  detectDocumentSignals(`${title} ${summary}`) || undefined,
+                    };
+                    const dupes = await checkSignalDuplicates(itemUrl, iaCand.title);
+                    if (dupes.length > 0) {
+                      trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: iaCand, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+                    } else {
+                      trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: iaCand });
+                      iaPassed++;
+                    }
                   }
+                  diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'ia-advanced-search', linksDiscovered: docs.length, pagesFetched: 1, candidatesPassed: iaPassed, candidatesRejected: docs.length - iaPassed, rejectReasons: [] });
+                  iaHandled = true;
                 }
-                diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: 'ia-advanced-search', linksDiscovered: docs.length, pagesFetched: 1, candidatesPassed: iaPassed, candidatesRejected: docs.length - iaPassed, rejectReasons: [] });
-                iaHandled = true;
-              }
-            } catch { /* fall through to generic HTML */ }
-            if (iaHandled) continue;
+              } catch { /* fall through to generic HTML */ }
+              if (iaHandled) continue;
+            }
+          }
+          // Phase AM TASK 2: Sub-case B: /details/{collection} — enumerate collection items
+          else if (parsedIaUrl.pathname.startsWith('/details/')) {
+            const collectionId = parsedIaUrl.pathname.split('/').filter(Boolean)[1] ?? '';
+            if (collectionId) {
+              const collApiUrl = `https://archive.org/advancedsearch.php?q=collection%3A${encodeURIComponent(collectionId)}&fl%5B%5D=identifier,title,description,subject,date,creator&sort%5B%5D=date+asc&rows=8&output=json`;
+              let iaColHandled = false;
+              try {
+                const apiRes = await fetch(collApiUrl, {
+                  cache:   'no-store',
+                  headers: { 'User-Agent': 'SWIM-Archive-Scout/1.0 (human-curator-supervised; research archive)' },
+                  signal:  AbortSignal.timeout(12_000),
+                });
+                if (apiRes.ok) {
+                  const json = await apiRes.json() as {
+                    response?: { docs?: Array<{ identifier?: string; title?: string; description?: string; subject?: string | string[]; date?: string; creator?: string }> };
+                  };
+                  const docs = (json?.response?.docs ?? []).filter((d) => d.identifier !== collectionId);
+                  let iaPassed = 0;
+                  for (const doc of docs) {
+                    if (!doc.identifier || !doc.title) continue;
+                    if ((perSourceCount.get(sourceId) ?? 0) >= effectivePerSourceCap) break;
+                    const itemUrl = `https://archive.org/details/${doc.identifier}`;
+                    if (isAlreadyArchived(itemUrl)) continue;
+                    const title   = cleanTitle(doc.title) || source.name;
+                    const subjArr = Array.isArray(doc.subject) ? doc.subject : (doc.subject ? [doc.subject] : []);
+                    const summary = [doc.description, subjArr.join(', ')].filter(Boolean).join(' — ').trim().slice(0, 2000)
+                                    || 'Internet Archive item — no description available.';
+                    if (!dtsArchivePassesMinimum(itemUrl, title, summary).pass) continue;
+                    const archiveYear = doc.date ? (parseInt(doc.date.slice(0, 4), 10) || undefined) : undefined;
+                    const heur = scoreStoryHeuristics(`${title} ${summary}`);
+                    const conf = scoreExtractionConfidence(title, summary);
+                    const iaCand: FetchedCandidate = {
+                      title:                title.slice(0, 200),
+                      summary,
+                      sourceUrl:            itemUrl,
+                      category:             source.category_focus[0] ?? 'Internet Lore',
+                      tags:                 ['scanner-source', 'archive', 'internet-archive', 'ia-collection'],
+                      anomalyScore:         6,
+                      archiveYear,
+                      isArchived:           true,
+                      attributionText:      `Internet Archive · ${source.name}`,
+                      captureNotes:         `IA Collection: ${collectionId}. Item: ${doc.identifier}`,
+                      categoryNote:         buildCategoryNote(source.category_focus, title, doc.description ?? ''),
+                      extractionConfidence: conf.confidence,
+                      extractionWarning:    conf.warning ?? undefined,
+                      storyScore:           heur.storyScore,
+                      storySignals:         heur.storySignals.length > 0 ? heur.storySignals : undefined,
+                      finalPriorityScore:   computeFinalPriorityScore(heur.storyScore, { isBadCandidate: false }),
+                      sourceTaxonomy:       sourceTax,
+                      documentSignalScore:  detectDocumentSignals(`${title} ${summary}`) || undefined,
+                    };
+                    const dupes = await checkSignalDuplicates(itemUrl, iaCand.title);
+                    if (dupes.length > 0) {
+                      trackResult(sourceId, { sourceId, sourceName: source.name, status: 'duplicate', candidate: iaCand, duplicates: dupes.map((d) => ({ id: d.id, title: d.title, sourceUrl: d.source_url, status: d.status })) });
+                    } else {
+                      trackResult(sourceId, { sourceId, sourceName: source.name, status: 'preview', candidate: iaCand });
+                      iaPassed++;
+                    }
+                  }
+                  diagnostics.push({ sourceId, sourceName: source.name, sourceType: source.source_type, enabled: true, baseUrl: source.base_url, routeUsed: `ia-collection:${collectionId}`, linksDiscovered: docs.length, pagesFetched: 1, candidatesPassed: iaPassed, candidatesRejected: docs.length - iaPassed, rejectReasons: [] });
+                  iaColHandled = true;
+                }
+              } catch { /* fall through to generic HTML */ }
+              if (iaColHandled) continue;
+            }
           }
         }
-      } catch { /* not a valid URL or not IA search — fall through */ }
+      } catch { /* not a valid URL or not IA — fall through */ }
+    }
+
+    // Phase AM TASK 5: old_web taxonomy — geocities/angelfire/tripod pages are defunct.
+    // Skip the live fetch and go directly to Wayback CDX archive recovery.
+    if (sourceTax === 'old_web') {
+      const fb = await runWaybackFallback(source, sourceId, 'old-web source — domain defunct, skip live fetch', 'live-blocked');
+      if (fb.passed === 0) {
+        results.push({ sourceId, sourceName: source.name, status: 'error', error: 'Old web source — no usable Wayback snapshots found' });
+      }
+      continue;
     }
 
     // Generic HTML sources — discovery-first: extract story links from index, fetch each
@@ -2350,13 +2432,17 @@ export async function runFetchSessionAction(
       seenLinks.add(href);
       if (SKIP_EXTENSIONS.test(href)) continue;
       try { if (new URL(href).hostname !== baseHostname) continue; } catch { continue; }
-      if (!discoveryKeywordMatch(href, text)) continue;
+      // Phase AM TASK 5: ufo_database uses report/case path hints instead of generic keywords
+      if (sourceTax === 'ufo_database') {
+        if (!UFO_DB_PATH_HINTS.some((h) => href.toLowerCase().includes(h))) continue;
+      } else if (!discoveryKeywordMatch(href, text)) continue;
       storyLinks.push(href);
     }
 
-    // Phase AJ TASK 3: Archive stub recovery — DTS second-pass with broader path hints
-    // when keyword scan found nothing. Captures archive sites with opaque URL slugs.
-    if (effectiveDeepTruth && storyLinks.length === 0) {
+    // Phase AJ TASK 3 / Phase AM TASK 5: Archive stub recovery — DTS second-pass with
+    // broader path hints when keyword scan found nothing. Also applies for document_archive
+    // and occult_archive taxonomy (sacred-texts, FOIA collections, etc.)
+    if ((effectiveDeepTruth || sourceTax === 'document_archive' || sourceTax === 'occult_archive') && storyLinks.length === 0) {
       for (const { href } of pageAnchors) {
         if (storyLinks.length >= 5) break;
         if (seenLinks.has(href)) continue;
@@ -2445,8 +2531,10 @@ export async function runFetchSessionAction(
         const extracted  = extractPageData(linkHtml, linkUrl);
         const title      = cleanTitle(extracted.title) || source.name;
         const summary    = buildSummary(extracted.description, extracted.snippet);
-        // Phase AJ TASK 6: DTS uses a lower bar — title + 80-char excerpt is enough.
-        const quality    = effectiveDeepTruth
+        // Phase AJ TASK 6 / Phase AM TASK 5: DTS uses a lower bar — title + 80-char excerpt
+        // is enough. Also apply for document_archive, ufo_database, and occult_archive sources.
+        const useDtsQualityBar = effectiveDeepTruth || sourceTax === 'document_archive' || sourceTax === 'ufo_database' || sourceTax === 'occult_archive';
+        const quality    = useDtsQualityBar
           ? dtsArchivePassesMinimum(linkUrl, title, summary)
           : candidatePassesQuality(linkUrl, title, summary);
         if (!quality.pass) continue;
@@ -2713,6 +2801,16 @@ const DTS_ARCHIVE_LINK_HINTS = [
   '/testimony', '/transcript', '/newsletter', '/thread', '/forum', '/post/',
   '/story', '/stories', '/essay', '/essays', '/library', '/archive/',
   '.htm', '.html', '.txt',
+];
+
+// Phase AM TASK 5: UFO database path hints — used instead of generic discoveryKeywordMatch
+// for sources with ufo_database taxonomy (NUFORC, NICAP, MUFON, CUFON, etc.)
+const UFO_DB_PATH_HINTS = [
+  '/report', '/reports/', '/case', '/cases/', '/sighting', '/sightings/',
+  '/incident', '/incidents/', '/encounter', '/encounters/',
+  '/database', '/db/', '/ndx', '/webreport', '/reportview',
+  'id=', 'ID=', 'caseid', 'report_id', 'incident_id',
+  '/ufo/', '/uap/', '/index_', '/entry/', '/event/',
 ];
 
 function extractAnchors(html: string, baseUrl: string): Array<{ href: string; text: string }> {
