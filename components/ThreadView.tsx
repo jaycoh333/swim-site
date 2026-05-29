@@ -12,6 +12,7 @@ import { createReplyAction } from '@/app/actions';
 import { ShareBar } from '@/components/ShareBar';
 import { parseThreadMeta, getEraClass } from '@/lib/thread-meta';
 import type { ThreadMeta, ThreadLineageData } from '@/lib/thread-meta';
+import { ArtifactHeroCard } from '@/components/ArtifactHeroCard';
 
 const SITE_BASE = 'https://www.sw1m.me';
 
@@ -664,6 +665,26 @@ export function ThreadView({
               />
             </div>
           </div>
+
+          {/* Phase AX: Artifact hero card — visual centerpiece for recovered threads */}
+          {meta.isRecoveredSignal && (
+            <div className="mx-4 mb-0 mt-5 sm:mx-5">
+              <ArtifactHeroCard
+                artifactId={thread.id}
+                title={thread.title}
+                excerpt={meta.excerpt || undefined}
+                sourceType={meta.sourceType}
+                sourceName={meta.sourceName}
+                sourceUrl={meta.sourceUrl}
+                originalDomain={meta.originalDomain}
+                archiveYear={meta.archiveYear}
+                sourceEra={meta.sourceEra}
+                category={thread.category}
+                recoveredAt={thread.createdAt}
+                authorHandle={thread.authorHandle}
+              />
+            </div>
+          )}
 
           {/* TASK 3: Source era hero — prominent metadata row */}
           {meta.isRecoveredSignal && (

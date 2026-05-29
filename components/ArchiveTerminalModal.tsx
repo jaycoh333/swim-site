@@ -1,25 +1,30 @@
 'use client';
 
 import { useEffect, useCallback, useState } from 'react';
+import { ArtifactHeroCard } from '@/components/ArtifactHeroCard';
 
 // ---------------------------------------------------------------------------
 // Public data type — populated from TerminalEntry or SignalEntry
 // ---------------------------------------------------------------------------
 
 export interface ArchiveModalData {
-  type?:          string;    // 'SIGNAL RECOVERED' | 'THREAD REBORN' etc.
-  title:          string;
-  excerpt?:       string;    // summary / body text
-  source:         string;    // source name
-  sourceType?:    string;    // 'reddit' | 'wayback' | 'bbs' etc.
-  category:       string;
-  categoryColor?: string;
-  timestamp?:     string;    // ISO date
-  threadUrl?:     string;    // /threads/<slug>  → Open Thread button
-  sourceUrl?:     string;    // external URL     → View Source button
-  isReborn?:      boolean;
-  tags?:          string[];
-  severity?:      string;
+  type?:           string;    // 'SIGNAL RECOVERED' | 'THREAD REBORN' etc.
+  title:           string;
+  excerpt?:        string;    // summary / body text
+  source:          string;    // source name
+  sourceType?:     string;    // 'reddit' | 'wayback' | 'bbs' etc.
+  category:        string;
+  categoryColor?:  string;
+  timestamp?:      string;    // ISO date
+  threadUrl?:      string;    // /threads/<slug>  → Open Thread button
+  sourceUrl?:      string;    // external URL     → View Source button
+  isReborn?:       boolean;
+  tags?:           string[];
+  severity?:       string;
+  // Phase AX: richer artifact data (populated when opening from thread metadata)
+  originalDomain?: string;
+  archiveYear?:    string;
+  sourceEra?:      string;
 }
 
 interface Props {
@@ -221,50 +226,21 @@ export function ArchiveTerminalModal({ data, onClose }: Props) {
             </h2>
           </div>
 
-          {/* Excerpt */}
-          {data.excerpt && (
-            <div
-              className="border-b px-5 py-5"
-              style={{ borderColor: 'rgba(134,212,110,0.08)', background: 'rgba(134,212,110,0.009)' }}
-            >
-              <div
-                className="border-l-2 pl-4"
-                style={{ borderColor: `${catColor}35` }}
-              >
-                <p className="text-[15px] leading-relaxed tracking-[0.022em] text-crt/70 sm:text-[16px]">
-                  {data.excerpt}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Source metadata */}
-          <div
-            className="border-b px-5 py-4"
-            style={{ borderColor: 'rgba(134,212,110,0.08)' }}
-          >
-            <div className="flex flex-wrap gap-x-10 gap-y-4">
-              <div>
-                <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.26em] text-crt/30">source</div>
-                <p className="font-mono text-[13px] text-crt/62">↳ {data.source}</p>
-              </div>
-              {data.tags && data.tags.length > 0 && (
-                <div>
-                  <div className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.26em] text-crt/30">tags</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {data.tags.slice(0, 6).map((t) => (
-                      <span
-                        key={t}
-                        className="rounded border px-2 py-0.5 font-mono text-[10px] text-crt/40"
-                        style={{ borderColor: 'rgba(134,212,110,0.18)', background: 'rgba(134,212,110,0.04)' }}
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* Artifact hero card (compact) */}
+          <div className="border-b" style={{ borderColor: 'rgba(134,212,110,0.08)' }}>
+            <ArtifactHeroCard
+              compact
+              artifactId={data.threadUrl ?? data.title}
+              excerpt={data.excerpt}
+              sourceType={data.sourceType}
+              sourceName={data.source}
+              sourceUrl={data.sourceUrl}
+              originalDomain={data.originalDomain}
+              archiveYear={data.archiveYear}
+              sourceEra={data.sourceEra}
+              category={data.category}
+              recoveredAt={data.timestamp}
+            />
           </div>
 
           {/* Action buttons */}
