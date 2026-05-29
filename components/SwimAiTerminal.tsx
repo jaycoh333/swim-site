@@ -369,7 +369,7 @@ export function SwimAiTerminal({
               return (
                 <div
                   key={entry.id}
-                  className="border-b border-crt/[0.055] px-4 py-4 transition-all duration-300 sm:px-5 sm:py-5 cursor-pointer"
+                  className="swim-feed-entry border-b border-crt/[0.055] px-4 py-4 transition-all duration-200 sm:px-5 sm:py-5 cursor-pointer"
                   style={{
                     borderLeft: `3px solid ${style.border}`,
                     background: style.bg,
@@ -430,6 +430,10 @@ export function SwimAiTerminal({
                   {/* Source */}
                   <p className="text-[12px] tracking-[0.05em] text-crt/30">
                     ↳ {entry.source}
+                  </p>
+                  {/* Open terminal hint — visible on hover */}
+                  <p className="swim-feed-hint mt-1.5 font-mono text-[10px] uppercase tracking-[0.20em] text-crt/35">
+                    ◈ open terminal ›
                   </p>
                 </div>
               );

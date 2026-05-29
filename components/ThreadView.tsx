@@ -579,6 +579,8 @@ export function ThreadView({
   return (
     <div className="relative min-h-screen overflow-hidden pb-[72px] pt-[80px] md:pb-8 md:pt-[100px]">
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-15" />
+      {/* Thread page workstation atmosphere */}
+      <div aria-hidden className="aq-thread-atmosphere" />
 
       <div className="relative z-10 mx-auto max-w-4xl px-4 py-5 md:px-6 md:py-8">
 

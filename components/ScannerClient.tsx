@@ -578,6 +578,8 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
       <AmbientGrid className="pointer-events-none absolute inset-0 opacity-20" />
       {/* Archive depth atmospheric layer — falls back gracefully when image absent */}
       <div aria-hidden className="aq-archive-bg" />
+      {/* Scanner page CSS atmosphere layer — always visible */}
+      <div aria-hidden className="aq-scanner-atmosphere" />
 
       <div className="relative z-10 mx-auto max-w-4xl px-4 py-4 md:px-6 md:py-6">
         <div className="forum-shell overflow-hidden">
@@ -604,11 +606,13 @@ export function ScannerClient({ approvedSignals, stats, isLive = false }: Scanne
 
           {/* ── SWIM AI Terminal ── */}
           <div className="aq-scan-sweep relative border-b border-crt/10 px-6 py-8 md:px-10">
+            {/* Homepage terminal section atmosphere */}
+            <div aria-hidden className="aq-homepage-terminal-bg" />
             {/* Radar rings behind terminal */}
             <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
-              <div className="aq-radar-ring   absolute h-[340px] w-[340px] rounded-full border border-crt/[0.035]" />
-              <div className="aq-radar-ring-2 absolute h-[520px] w-[520px] rounded-full border border-crt/[0.025]" />
-              <div className="aq-radar-ring-3 absolute h-[700px] w-[700px] rounded-full border border-crt/[0.015]" />
+              <div className="aq-radar-ring   absolute h-[340px] w-[340px] rounded-full border border-crt/[0.05]" />
+              <div className="aq-radar-ring-2 absolute h-[520px] w-[520px] rounded-full border border-crt/[0.035]" />
+              <div className="aq-radar-ring-3 absolute h-[700px] w-[700px] rounded-full border border-crt/[0.022]" />
             </div>
             <div className="relative z-10">
               <div className="mb-5 flex items-center gap-3">

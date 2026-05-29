@@ -2652,8 +2652,9 @@ body::after {
 
 .source-evidence-panel {
   margin: 14px 20px 0;
-  border: 1px solid rgba(134, 212, 110, 0.09);
-  background: rgba(134, 212, 110, 0.008);
+  border: 1px solid rgba(134, 212, 110, 0.20);
+  background: rgba(134, 212, 110, 0.012);
+  box-shadow: 0 0 20px rgba(134,212,110,0.05), inset 0 0 16px rgba(134,212,110,0.014);
 }
 
 @media (min-width: 640px) {
@@ -2663,11 +2664,12 @@ body::after {
 }
 
 .source-evidence-summary {
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.24em;
   text-transform: uppercase;
-  color: rgba(134, 212, 110, 0.44);
+  color: rgba(134, 212, 110, 0.58);
   cursor: pointer;
   user-select: none;
   list-style: none;
@@ -3237,9 +3239,10 @@ body::after {
 
 /* ── Terminal card enhanced hover glow ─────────────────────── */
 .terminal-card:hover {
-  box-shadow: 0 0 32px rgba(134,212,110,0.08),
-              0 0 0 1px rgba(134,212,110,0.052),
-              inset 0 0 24px rgba(134,212,110,0.022) !important;
+  border-color: rgba(134,212,110,0.42) !important;
+  box-shadow: 0 0 0 1px rgba(134,212,110,0.10),
+              0 0 40px rgba(134,212,110,0.12),
+              inset 0 0 30px rgba(134,212,110,0.030) !important;
 }
 
 /* ── Archive-depth atmospheric background layer ────────────── */
@@ -3260,26 +3263,28 @@ body::after {
 
 /* ── Terminal window frame (thread artifact block) ─────────── */
 .aq-terminal-window {
-  border: 1px solid rgba(134,212,110,0.16);
-  background: rgba(2,5,3,0.97);
-  box-shadow: 0 0 0 1px rgba(134,212,110,0.032),
-              inset 0 0 28px rgba(134,212,110,0.016);
+  border: 2px solid rgba(134,212,110,0.30);
+  background: rgba(2,5,3,0.98);
+  box-shadow: 0 0 0 1px rgba(134,212,110,0.08),
+              0 0 40px rgba(134,212,110,0.10),
+              inset 0 0 40px rgba(134,212,110,0.022);
 }
 .aq-terminal-titlebar {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 14px;
-  background: rgba(134,212,110,0.030);
-  border-bottom: 1px solid rgba(134,212,110,0.09);
+  gap: 8px;
+  padding: 9px 16px;
+  background: rgba(134,212,110,0.050);
+  border-bottom: 1px solid rgba(134,212,110,0.16);
   font-size: 10px;
+  font-weight: 600;
   letter-spacing: 0.26em;
   text-transform: uppercase;
-  color: rgba(134,212,110,0.35);
+  color: rgba(134,212,110,0.58);
 }
 .aq-terminal-dot {
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -3370,4 +3375,77 @@ body::after {
   letter-spacing: 0.03em;
   color: rgba(134,212,110,0.52);
 }
+
+/* ── Phase AW: Feed entry hover + open-terminal hint ────────── */
+.swim-feed-entry {
+  position: relative;
+}
+.swim-feed-entry::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.18s;
+}
+.swim-feed-entry:hover::after {
+  background: rgba(134,212,110,0.038);
+}
+.swim-feed-hint {
+  display: none;
+}
+.swim-feed-entry:hover .swim-feed-hint {
+  display: block;
+}
+
+/* ── Phase AW: Homepage terminal section atmosphere ────────── */
+.aq-homepage-terminal-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(134,212,110,0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 40% at 50% 0%,   rgba(134,212,110,0.04) 0%, transparent 65%),
+    radial-gradient(ellipse 100% 80% at 50% 50%,  rgba(109,168,255,0.02) 0%, transparent 80%);
+}
+
+/* ── Phase AW: Scanner page atmospheric layer ──────────────── */
+.aq-scanner-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 0%,   rgba(134,212,110,0.05) 0%, transparent 65%),
+    radial-gradient(ellipse 50% 30% at 20% 80%,  rgba(109,168,255,0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 30% at 80% 80%,  rgba(134,212,110,0.03) 0%, transparent 60%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      transparent 48px,
+      rgba(134,212,110,0.008) 48px,
+      rgba(134,212,110,0.008) 49px
+    );
+}
+
+/* ── Phase AW: Thread page workstation atmosphere ──────────── */
+.aq-thread-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 90% 40% at 50% 100%, rgba(134,212,110,0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 25% at 50% 0%,   rgba(134,212,110,0.03) 0%, transparent 60%),
+    linear-gradient(180deg, rgba(2,6,3,0.0) 0%, rgba(2,6,3,0.06) 100%);
+}
+
+/* ── Phase AW: artifact block borders — stronger ───────────── */
+.artifact-block--reddit   { border-width: 1px; border-color: rgba(255,100,30,0.28); }
+.artifact-block--wayback  { border-width: 1px; border-color: rgba(120,90,200,0.32); }
+.artifact-block--bbs      { border-width: 1px; border-color: rgba(180,130,60,0.36); }
+.artifact-block--mediawiki{ border-width: 1px; border-color: rgba(80,140,220,0.30); }
+.artifact-block--forum    { border-width: 1px; border-color: rgba(134,212,110,0.24); }
+
 

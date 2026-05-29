@@ -67,7 +67,7 @@ export function NetworkFooter() {
 
         {/* Build marker — confirms deployed version; remove after deploy verified */}
         <div className="mt-3 text-center font-mono text-[9px] uppercase tracking-[0.18em] text-crt/15 select-none">
-          SWIM build: public-polish-v1
+          SWIM build: terminal-ui-v1
         </div>
 
       </div>
